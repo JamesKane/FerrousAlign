@@ -174,4 +174,76 @@ for i in 0..5 {
 - ❌ CIGAR still shows 148I (should be 148M with 1 mismatch)
 - ❌ SMEMs still show "NO PERFECT MATCH FOUND" when checking reference
 
-**Next Steps**: Investigate SA reconstruction or .pac reading - SMEMs are generated correctly but don't verify against reference
+**Next Steps**: ~~Investigate SA reconstruction or .pac reading - SMEMs are generated correctly but don't verify against reference~~
+**Special Directive**: Prefer a side by side log output strategy with the local BWA-MEM2's log streams when simple analysis doesn't yield obvious solutions.  Modify both applications to capture logs that can be compared for the same step when necessary.
+
+### CRITICAL BUG FIXED (Session 2025-11-16 continued) - SMEM Duplication
+
+**Root Cause**: Rust was outputting the same SMEM at EVERY position in the outer loop!
+- **Problem**: Used `for x in 0..query_len` which processes ALL positions sequentially
+- **C++ Algorithm**: Uses work queue that SKIPS AHEAD after each SMEM (like x=0→96→115→147)
+- **Impact**: Rust generated 370 SMEMs (with 96 duplicates of the first SMEM), C++ generated 4 SMEMs
+
+**The Algorithm (C++ FMI_search.cpp:514-679)**:
+```c
+for(i = 0; i < numReads; i++) {  // Work queue (called multiple times per read)
+    int x = query_pos_array[i];  // Current position in read
+    int next_x = x + 1;
+
+    // Phase 1: Forward extension (updates next_x)
+    for(j = x + 1; j < readlength; j++) {
+        next_x = j + 1;  // Track how far we extended
+        // ... forward extension ...
+    }
+
+    // Phase 2: Backward extension
+    // ... backward extension and SMEM output ...
+
+    query_pos_array[i] = next_x;  // SKIP to next uncovered position!
+}
+```
+
+**The Fix** (src/align.rs:716-902):
+```rust
+// BEFORE (WRONG):
+for x in 0..query_len {  // Process ALL positions
+    // ... generate SMEM ...
+    all_smems.push(smem);  // Outputs at EVERY x!
+}
+
+// AFTER (CORRECT):
+let mut x = 0;
+while x < query_len {
+    let mut next_x = x + 1;
+
+    // Phase 1: Forward extension
+    for j in (x + 1)..query_len {
+        next_x = j + 1;  // Track extension
+        // ... forward extension ...
+    }
+
+    // Phase 2: Backward extension and output
+    // ... backward extension ...
+    all_smems.push(smem);  // Output once per SMEM
+
+    x = next_x;  // SKIP AHEAD to next uncovered position!
+}
+```
+
+**Results After Fix**:
+- ✅ Forward strand: 4 SMEMs (was 370) - **MATCHES C++ EXACTLY**
+- ✅ SMEM positions match: m=0-95, 96-114, 92-110, 97-147
+- ✅ SMEM k values match C++ exactly
+- ⚠️ Total 7 SMEMs (4 forward + 3 reverse complement)
+- ❌ Alignment position: chr7:67600444 (expected chr7:67600394, 50bp off)
+- ❌ CIGAR: 148I (expected 148M) - **COMPLETELY WRONG**
+
+**Current Problem**: Smith-Waterman extension or CIGAR generation is broken
+- SMEMs are correct (seeding phase ✓)
+- Position is close (chaining phase ✓)
+- CIGAR is all insertions (extension phase ✗)
+
+**Next Investigation**: Investigate Smith-Waterman alignment and CIGAR generation
+- Check if seeds are being extended correctly
+- Check if CIGAR string is being computed correctly from traceback
+- Verify reference sequence extraction for extension

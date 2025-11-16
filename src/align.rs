@@ -713,11 +713,15 @@ fn generate_seeds_with_mode(
                 query_name, min_seed_len, min_intv, query_len);
 
     // Process each starting position in the query
-    for x in 0..query_len {
+    // CRITICAL FIX: Use while loop and skip ahead after each SMEM (like C++)
+    // This prevents outputting the same SMEM at every position x!
+    let mut x = 0;
+    while x < query_len {
         let a = encoded_query[x];
 
         if a >= 4 {
             // Skip 'N' bases
+            x += 1;
             continue;
         }
 
@@ -741,9 +745,12 @@ fn generate_seeds_with_mode(
 
         // Phase 1: Forward extension (C++ lines 537-581)
         let mut prev_array: Vec<SMEM> = Vec::new();
+        let mut next_x = x + 1; // Track next uncovered position (C++ line 518, 541)
 
         for j in (x + 1)..query_len {
             let a = encoded_query[j];
+
+            next_x = j + 1; // Update next position (C++ line 541)
 
             if a >= 4 {
                 // Hit 'N' base - stop forward extension
@@ -751,6 +758,7 @@ fn generate_seeds_with_mode(
                     log::debug!("{}: x={}, forward extension stopped at j={} due to N base",
                                 query_name, x, j);
                 }
+                next_x = j; // Don't skip the 'N', let next iteration handle it
                 break;
             }
 
@@ -879,8 +887,8 @@ fn generate_seeds_with_mode(
             let len = smem.n - smem.m + 1;
             if len >= min_seed_len {
                 let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                log::debug!("{}: Position x={}, OUTPUT SMEM (line 852): m={}, n={}, len={}, s={}, l-k={}, match={}",
-                            query_name, x, smem.m, smem.n, len, smem.s, s_from_lk, smem.s == s_from_lk);
+                log::debug!("{}: Position x={}, OUTPUT SMEM (line 852): m={}, n={}, len={}, s={}, l-k={}, match={}, next_x={}",
+                            query_name, x, smem.m, smem.n, len, smem.s, s_from_lk, smem.s == s_from_lk, next_x);
                 all_smems.push(smem);
             } else if len > 15 {
                 // Log SMEMs that are close to the threshold
@@ -888,14 +896,21 @@ fn generate_seeds_with_mode(
                             query_name, x, smem.m, smem.n, len, smem.s, min_seed_len);
             }
         }
+
+        // CRITICAL: Skip ahead to next uncovered position (C++ line 679)
+        // This prevents processing the same SMEM multiple times!
+        x = next_x;
     }
 
     // --- Process Reverse Complement Strand ---
     // Same two-phase algorithm on reverse complement
-    for x in 0..query_len {
+    // CRITICAL FIX: Use while loop and skip ahead (same as forward strand)
+    let mut x = 0;
+    while x < query_len {
         let a = encoded_query_rc[x];
 
         if a >= 4 {
+            x += 1;
             continue;
         }
 
@@ -910,11 +925,15 @@ fn generate_seeds_with_mode(
         };
 
         let mut prev_array: Vec<SMEM> = Vec::new();
+        let mut next_x = x + 1; // Track next uncovered position
 
         for j in (x + 1)..query_len {
             let a = encoded_query_rc[j];
 
+            next_x = j + 1; // Update next position
+
             if a >= 4 {
+                next_x = j; // Don't skip the 'N'
                 break;
             }
 
@@ -986,6 +1005,9 @@ fn generate_seeds_with_mode(
                 all_smems.push(smem);
             }
         }
+
+        // CRITICAL: Skip ahead to next uncovered position (same as forward strand)
+        x = next_x;
     }
 
     // eprintln!("all_smems: {:?}", all_smems);
