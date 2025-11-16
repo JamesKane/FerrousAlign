@@ -211,10 +211,12 @@ pub unsafe fn simd_banded_swa_batch64(
     let _tlen_vec = <Engine as crate::simd_abstraction::SimdEngine>::loadu_si128(tlen.as_ptr() as *const <Engine as crate::simd_abstraction::SimdEngine>::Vec8);
     let mut max_score_vec = <Engine as crate::simd_abstraction::SimdEngine>::loadu_si128(h0.as_ptr() as *const <Engine as crate::simd_abstraction::SimdEngine>::Vec8);
 
+    let mut final_row = max_tlen as usize;  // Track where we exited
     for i in 0..max_tlen as usize {
         // Early batch completion: Exit when majority of lanes (>50%) have terminated
         // This reduces wasted computation for stragglers while ensuring most work is done
         if terminated_count > batch_size / 2 {
+            final_row = i;
             break;
         }
 
@@ -389,6 +391,21 @@ pub unsafe fn simd_banded_swa_batch64(
             max_scores[lane] = max_score_vals[lane];
         }
     }
+
+    // Log early termination statistics (DEBUG level for detailed analysis)
+    let early_exit = final_row < max_tlen as usize;
+    let rows_saved = max_tlen as usize - final_row;
+    let percent_saved = (rows_saved as f64 / max_tlen as f64) * 100.0;
+
+    log::debug!(
+        "AVX-512 batch completion: {}/{} lanes terminated, exit_row={}/{} ({:.1}% saved), early_exit={}",
+        terminated_count,
+        batch_size,
+        final_row,
+        max_tlen,
+        percent_saved,
+        early_exit
+    );
 
     // ==================================================================
     // Step 7: Result Extraction

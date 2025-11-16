@@ -425,11 +425,29 @@ pub(crate) fn execute_adaptive_alignments(sw_params: &BandedPairWiseSW, jobs: &[
     // Partition jobs by estimated divergence
     let (low_div_jobs, high_div_jobs) = partition_jobs_by_divergence(jobs);
 
+    // Calculate average divergence for logging
+    let avg_divergence: f64 = jobs
+        .iter()
+        .map(|job| estimate_divergence_score(job.query.len(), job.target.len()))
+        .sum::<f64>() / jobs.len() as f64;
+
+    // Log routing statistics (INFO level - shows in default verbosity)
+    log::info!(
+        "Adaptive routing: {} total jobs, {} scalar ({:.1}%), {} SIMD ({:.1}%), avg_divergence={:.3}",
+        jobs.len(),
+        high_div_jobs.len(),
+        high_div_jobs.len() as f64 / jobs.len() as f64 * 100.0,
+        low_div_jobs.len(),
+        low_div_jobs.len() as f64 / jobs.len() as f64 * 100.0,
+        avg_divergence
+    );
+
     // Create result vector with correct size
     let mut all_cigars = vec![Vec::new(); jobs.len()];
 
     // Process high-divergence jobs with scalar (more efficient for divergent sequences)
     let high_div_cigars = if !high_div_jobs.is_empty() {
+        log::debug!("Processing {} high-divergence jobs with scalar", high_div_jobs.len());
         execute_scalar_alignments(sw_params, &high_div_jobs)
     } else {
         Vec::new()
@@ -438,6 +456,11 @@ pub(crate) fn execute_adaptive_alignments(sw_params: &BandedPairWiseSW, jobs: &[
     // Process low-divergence jobs with adaptive batched SIMD
     let low_div_cigars = if !low_div_jobs.is_empty() {
         let optimal_batch_size = determine_optimal_batch_size(&low_div_jobs);
+        log::debug!(
+            "Processing {} low-divergence jobs with SIMD (batch_size={})",
+            low_div_jobs.len(),
+            optimal_batch_size
+        );
         execute_batched_alignments_with_size(sw_params, &low_div_jobs, optimal_batch_size)
     } else {
         Vec::new()
@@ -709,10 +732,18 @@ fn generate_seeds_with_mode(
 
     for (idx, smem) in useful_smems.iter().enumerate() {
         let smem = *smem;
-        let ref_pos = get_sa_entry(bwa_idx, smem.k);
+        let mut ref_pos = get_sa_entry(bwa_idx, smem.k);
+        let mut is_rev = smem.is_rev_comp;
+
+        // Convert positions in reverse complement region to forward strand
+        // BWT contains both forward [0, l_pac) and reverse [l_pac, 2*l_pac)
+        if ref_pos >= bwa_idx.bns.l_pac {
+            ref_pos = (bwa_idx.bns.l_pac << 1) - 1 - ref_pos;
+            is_rev = !is_rev; // Flip strand orientation
+        }
 
         // Adjust query_pos for reverse complement seeds
-        let query_pos = if smem.is_rev_comp {
+        let query_pos = if is_rev {
             (query_len as i32 - 1) - smem.n // Adjust to original query coordinates
         } else {
             smem.m
@@ -722,7 +753,7 @@ fn generate_seeds_with_mode(
             query_pos,
             ref_pos,
             len: smem.n - smem.m + 1,
-            is_rev: smem.is_rev_comp,
+            is_rev,
         };
 
         // --- Prepare Seed Extension Job ---
