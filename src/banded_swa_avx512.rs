@@ -27,7 +27,7 @@ use crate::simd_abstraction::SimdEngine512 as Engine;
 /// - Query/target sequences: `seq[position][lane]` (interleaved)
 /// - DP matrices (H, E, F): `matrix[position * 32 + lane]`
 /// - Query profiles: `profile[target_base][query_pos * 32 + lane]`
-#[target_feature(enable = "avx512")]
+#[target_feature(enable = "avx512bw")]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn simd_banded_swa_batch64(
     batch: &[(i32, &[u8], i32, &[u8], i32, i32)], // (qlen, query, tlen, target, w, h0)

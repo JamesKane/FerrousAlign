@@ -1,3 +1,7 @@
+// Enable unstable features for AVX-512 support (requires nightly Rust)
+#![cfg_attr(feature = "avx512", feature(stdarch_x86_avx512))]
+#![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
+
 pub mod bwt;
 pub mod bntseq;
 pub mod kseq;  // Used for FASTA reference reading during index building
