@@ -1,5 +1,7 @@
 # FerrousAlign
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.md)
+
 A Rust port of [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2), the next-generation Burrows-Wheeler Aligner for aligning DNA sequencing reads against large reference genomes.
 
 ## Overview
@@ -364,10 +366,6 @@ Vasimuddin Md, Sanchit Misra, Heng Li, Srinivas Aluru.
 **Efficient Architecture-Aware Acceleration of BWA-MEM for Multicore Systems.**
 *IEEE Parallel and Distributed Processing Symposium (IPDPS), 2019.*
 [10.1109/IPDPS.2019.00041](https://doi.org/10.1109/IPDPS.2019.00041)
-
-## License
-
-This project is distributed under the MIT License, consistent with the original bwa-mem2.
 
 ## Contributing
 
