@@ -138,6 +138,13 @@ pub fn get_occ(bwa_idx: &BwaIndex, k: i64, c: u8) -> i64 {
 ///
 /// C++ reference: FMI_search.cpp lines 1025-1052
 pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
+    let debug_enabled = log::log_enabled!(log::Level::Trace);
+
+    if debug_enabled {
+        log::trace!("backward_ext: input smem(k={}, l={}, s={}), a={}",
+                    smem.k, smem.l, smem.s, a);
+    }
+
     let mut k = [0i64; 4];
     let mut l = [0i64; 4];
     let mut s = [0i64; 4];
@@ -152,6 +159,11 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
 
         k[b as usize] = bwa_idx.bwt.l2[b as usize] as i64 + occ_sp;
         s[b as usize] = occ_ep - occ_sp;
+
+        if debug_enabled && b == a {
+            log::trace!("backward_ext: base {}: sp={}, ep={}, occ_sp={}, occ_ep={}, k={}, s={}",
+                        b, sp, ep, occ_sp, occ_ep, k[b as usize], s[b as usize]);
+        }
     }
 
     // Sentinel handling (matching C++ lines 1041-1042)
@@ -162,6 +174,11 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
         0i64
     };
 
+    if debug_enabled {
+        log::trace!("backward_ext: sentinel_offset={}, sentinel_index={}",
+                    sentinel_offset, bwa_idx.sentinel_index);
+    }
+
     // CRITICAL: Cumulative sum computation for l[] (matching C++ lines 1043-1046)
     // This is NOT l[b] = k[b] + s[b]!
     // Instead: l[3] = smem.l + offset, then l[2] = l[3] + s[3], etc.
@@ -170,10 +187,24 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     l[1] = l[2] + s[2];
     l[0] = l[1] + s[1];
 
+    if debug_enabled {
+        log::trace!("backward_ext: cumulative l[] = [{}, {}, {}, {}]",
+                    l[0], l[1], l[2], l[3]);
+        log::trace!("backward_ext: k[] = [{}, {}, {}, {}]",
+                    k[0], k[1], k[2], k[3]);
+        log::trace!("backward_ext: s[] = [{}, {}, {}, {}]",
+                    s[0], s[1], s[2], s[3]);
+    }
+
     // Update SMEM with results for base 'a' (matching C++ lines 1048-1050)
     smem.k = k[a as usize] as u64;
     smem.l = l[a as usize] as u64;
     smem.s = s[a as usize] as u64;
+
+    if debug_enabled {
+        log::trace!("backward_ext: output smem(k={}, l={}, s={}) for base {}",
+                    smem.k, smem.l, smem.s, a);
+    }
 
     smem
 }
@@ -733,6 +764,11 @@ fn generate_seeds_with_mode(
 
             // If interval size changed, save previous SMEM (C++ lines 556-559)
             if new_smem.s != smem.s {
+                if x < 3 {
+                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+                    log::debug!("{}: x={}, j={}, pushing smem to prev_array: s={}, l-k={}, match={}",
+                                query_name, x, j, smem.s, s_from_lk, smem.s == s_from_lk);
+                }
                 prev_array.push(smem);
             }
 
@@ -795,6 +831,9 @@ fn generate_seeds_with_mode(
 
                 // Check if we should output this SMEM (C++ lines 613-619)
                 if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
+                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+                    log::debug!("{}: x={}, j={}, PUSH TO ALL_SMEMS: smem(m={},n={},k={},l={},s={}), l-k={}, match={}",
+                                query_name, x, j, smem.m, smem.n, smem.k, smem.l, smem.s, s_from_lk, smem.s == s_from_lk);
                     all_smems.push(*smem);
                     break; // C++ breaks after first output in this position
                 }
@@ -839,8 +878,9 @@ fn generate_seeds_with_mode(
             let smem = prev_array[0];
             let len = smem.n - smem.m + 1;
             if len >= min_seed_len {
-                log::debug!("{}: Position x={}, OUTPUT SMEM: m={}, n={}, len={}, s={}",
-                            query_name, x, smem.m, smem.n, len, smem.s);
+                let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+                log::debug!("{}: Position x={}, OUTPUT SMEM (line 852): m={}, n={}, len={}, s={}, l-k={}, match={}",
+                            query_name, x, smem.m, smem.n, len, smem.s, s_from_lk, smem.s == s_from_lk);
                 all_smems.push(smem);
             } else if len > 15 {
                 // Log SMEMs that are close to the threshold
@@ -1081,7 +1121,7 @@ fn generate_seeds_with_mode(
 
         // Get SA position and log the reconstruction process
         log::debug!("{}: SMEM {}: BWT interval [k={}, l={}, s={}], query range [m={}, n={}], is_rev_comp={}",
-                    query_name, idx, smem.k, smem.l, smem.l - smem.k, smem.m, smem.n, smem.is_rev_comp);
+                    query_name, idx, smem.k, smem.l, smem.s, smem.m, smem.n, smem.is_rev_comp);
 
         // Try multiple positions in the BWT interval to find which one is correct
         let ref_pos_at_k = get_sa_entry(bwa_idx, smem.k);

@@ -75,6 +75,12 @@ impl BwaIndex {
             bwt.l2[i] = i64::from_le_bytes(buf_i64) as u64;
         }
 
+        // CRITICAL: Match C++ bwa-mem2 behavior - add 1 to all count values
+        // See FMI_search.cpp:435 - this is required for correct SMEM generation
+        for i in 0..5 {
+            bwt.l2[i] += 1;
+        }
+
         // 3. Read cp_occ array
         let cp_occ_size = (bwt.seq_len >> CP_SHIFT) + 1;
         let mut cp_occ: Vec<CpOcc> = Vec::with_capacity(cp_occ_size as usize);

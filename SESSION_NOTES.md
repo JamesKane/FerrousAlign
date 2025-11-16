@@ -124,4 +124,54 @@ Contains single 148bp read from HG002 whole-genome sequencing dataset.
 - Generated: 950 SMEMs → filtered to 566 unique (was 0 before!)
 - Using 10 seeds for alignment
 - Chaining: produces 1 chain
-- **Next**: Debug why SAM output is not being produced (chain → SAM conversion issue)
+- SAM output IS produced (with `-T 0`) but alignment is WRONG
+
+### Investigation Session 2025-11-16 (continued) - Reference Data Validation
+
+**CRITICAL FINDING**: All SMEMs have s != l - k (verified via C++ comparison)
+- C++ bwa-mem2 SMEM 0: k=1499663434, l=5175475687, **s=1** (l-k=3675812253)
+- Rust SMEM 0 (before use): k=1847695904, l=4159962409, **s=1** (l-k=2312266505)
+- The `l` field does NOT represent interval endpoint; it encodes reverse complement BWT info
+- The `s` field is the TRUE occurrence count from BWT occ tables
+- Fixed logging bug at align.rs:1093 that was displaying `l - k` instead of `smem.s`
+
+**Current Problem**: Wrong alignment despite correct SMEM generation
+- Expected (C++ bwa-mem2): chr7:67600394, CIGAR=148M, AS=143, NM=1
+- Actual (Rust): chr6:148708668, CIGAR=148I, score too low to pass -T 30 threshold
+- All 10 SMEMs show "NO PERFECT MATCH FOUND" when checking reference
+- SMEM BWT intervals are correct (s values match C++ - all have s=1)
+- **Hypothesis**: Suffix array reconstruction or .pac file reading is corrupted
+
+**Verified Correct**:
+- ✅ .ann file parsing (chr7 offset = 1232004303, len = 159345973)
+- ✅ SMEM generation algorithm (two-phase bidirectional search)
+- ✅ SMEM filtering (uses smem.s, not l - k)
+
+### CRITICAL BUG FIXED (Session 2025-11-16 continued) - l2 Array Off-By-One
+
+**Root Cause Found**: Step-by-step comparison of Rust vs C++ extension traces revealed off-by-one error
+
+**The Bug**:
+- Rust was loading l2[] array directly from index file without adjustment
+- C++ adds +1 to all count[] values after loading (FMI_search.cpp:435)
+- This caused initial SMEM k/l values to differ by 1:
+  - Rust: k=0, l=4381983819 → after swap → k=4381983819, l=0
+  - C++:  k=1, l=4381983820 → after swap → k=4381983820, l=1
+
+**The Fix** (src/mem.rs:78-82):
+```rust
+// CRITICAL: Match C++ bwa-mem2 behavior - add 1 to all count values
+// See FMI_search.cpp:435 - this is required for correct SMEM generation
+for i in 0..5 {
+    bwt.l2[i] += 1;
+}
+```
+
+**Results After Fix**:
+- ✅ Extension traces now match C++ EXACTLY
+- ✅ Generated 370 SMEMs → filtered to 8 unique (was 4740 → 81 before)
+- ✅ Read maps to **chr7:67600444** (expected chr7:67600394, within 50bp!)
+- ❌ CIGAR still shows 148I (should be 148M with 1 mismatch)
+- ❌ SMEMs still show "NO PERFECT MATCH FOUND" when checking reference
+
+**Next Steps**: Investigate SA reconstruction or .pac reading - SMEMs are generated correctly but don't verify against reference

@@ -277,13 +277,14 @@ fn main() {
             threads,
         } => {
             // Initialize logger based on verbosity level
-            // Map bwa-mem2 verbosity (1=error, 2=warning, 3=message, 4+=debugging)
+            // Map bwa-mem2 verbosity (1=error, 2=warning, 3=message, 4=debug, 5+=trace)
             // to Rust log levels
             let log_level = match verbosity {
                 v if v <= 1 => log::LevelFilter::Error,
                 2 => log::LevelFilter::Warn,
                 3 => log::LevelFilter::Info,
-                _ => log::LevelFilter::Debug, // 4+ = debug
+                4 => log::LevelFilter::Debug,
+                _ => log::LevelFilter::Trace, // 5+ = trace
             };
 
             env_logger::Builder::from_default_env()
