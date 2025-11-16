@@ -1,287 +1,216 @@
-# Session Notes - Real-World Data Investigation
+# Session Notes - Index Compatibility Investigation
 
-## Date: 2025-11-16
+## Date: 2025-11-16 (Continuation)
 
 ### Session Summary
 
-This session focused on investigating and fixing issues discovered when testing with real-world WGS data (GIAB HG002 on GRCh38 reference) for the first time.
+This session focused on debugging why SMEMs generated from the C++ bwa-mem2 GRCh38 index don't match the reference, while synthetic indices work perfectly.
 
 ---
 
 ## Issues Fixed
 
-### 1. ✅ Critical BWT Interval Calculation Bug (FIXED - Commit 1ed3bb7)
+### 1. ✅ SA Length Calculation (FIXED)
 
-**Problem**: The `backward_ext()` function was calculating BWT interval ends (`l_arr`) incorrectly, producing invalid intervals where `k > l`. This caused integer underflow when computing occurrence counts, filtering out ALL SMEMs.
+**Problem**: Our SA length calculation differed from C++ bwa-mem2 by 1 element.
 
-**Root Cause**: Original code used cumulative sum based on old `smem.l`:
+**Root Cause**:
+- C++: `sa_len = (ref_seq_len >> SA_COMPX) + 1` where SA_COMPX = 3
+- Rust (old): `sa_len = (bwt.seq_len + sa_intv - 1) / sa_intv`
+
+These formulas are off by 1:
+- C++: `(seq_len / 8) + 1`
+- Rust: `(seq_len + 7) / 8`
+
+**Fix Applied** (src/mem.rs:103):
 ```rust
-l_arr[3] = smem.l + sentinel_offset;  // Wrong - uses OLD l value
-l_arr[2] = l_arr[3] + s_arr[3];
-l_arr[1] = l_arr[2] + s_arr[2];
-l_arr[0] = l_arr[1] + s_arr[1];
+// C++ uses: ((ref_seq_len >> SA_COMPX) + 1)
+// which equals: (ref_seq_len / 8) + 1
+let sa_len = (bwt.seq_len >> sa_compx) + 1;
 ```
 
-**Fix Applied**: Changed to straightforward calculation:
+**Result**: SA array now loads with correct size matching C++ format.
+
+---
+
+### 2. ✅ ONE_HOT_MASK_ARRAY Initialization (FIXED)
+
+**Problem**: Mask array initialization differed slightly from C++ implementation.
+
+**Root Cause**:
+- Our loop: `for i in 1..=64` (65 elements, calculated array[1])
+- C++: 64 elements, explicitly sets `array[1] = base`, then loops from i=2
+
+**Fix Applied** (src/align.rs:61-69):
 ```rust
-for b in 0..4 {
-    l_arr[b] = k_arr[b] + s_arr[b];  // l = k + s
+lazy_static::lazy_static! {
+    static ref ONE_HOT_MASK_ARRAY: Vec<u64> = {
+        let mut array = vec![0u64; 64]; // Size 64 to match C++
+        let base = 0x8000000000000000u64;
+        array[1] = base;  // Explicitly set like C++ does
+        for i in 2..64 {
+            array[i] = (array[i - 1] >> 1) | base;
+        }
+        array
+    };
 }
 ```
 
-**Result**:
-- Before: 0 unique SMEMs (all filtered)
-- After: 81 unique SMEMs from 4,740 total ✅
+**Result**: Mask array now exactly matches C++ initialization pattern.
 
-### 2. ✅ Chromosome Position Calculation (FIXED)
+---
 
-**Problem**: Alignments were reporting global concatenated reference positions instead of chromosome-relative positions, causing invalid coordinates (e.g., chr1:1,209,906,992 when chr1 is only 248MB).
+### 3. ✅ Reverse Complement SMEM Query Base Selection (CRITICAL FIX)
 
-**Root Cause**: Code was:
-- Always using first chromosome name: `bwa_idx.bns.anns[0].name`
-- Using global position without converting to chromosome-relative coordinates
+**Problem**: When comparing RC SMEMs with reference, we were using FORWARD strand query bases instead of reverse complement bases.
 
-**Fix Applied** (src/align.rs:958-970):
+**Root Cause**: SMEMs generated from reverse complement search (`is_rev_comp: true`) have query positions [m, n] referring to the RC query, but we were always extracting bases from the forward strand query.
+
+**Fix Applied** (src/align.rs:856-890):
 ```rust
-// Convert global position to chromosome-specific position
-let global_pos = first_chain.ref_start as i64;
-let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(global_pos);
-let rid = bwa_idx.bns.bns_pos2rid(pos_f);
+// Prepare reverse complement for RC SMEMs
+let mut query_segment_encoded_rc: Vec<u8> = query_segment_encoded.iter()
+    .map(|&b| b ^ 3)  // A<->T (0<->3), C<->G (1<->2)
+    .collect();
+query_segment_encoded_rc.reverse();
 
-let (ref_name, ref_id, chr_pos) = if rid >= 0 && (rid as usize) < bwa_idx.bns.anns.len() {
-    let ann = &bwa_idx.bns.anns[rid as usize];
-    let chr_relative_pos = pos_f - ann.offset as i64;
-    (ann.name.clone(), rid as usize, chr_relative_pos as u64)
+// In SMEM loop:
+// CRITICAL FIX: Use correct query orientation based on is_rev_comp flag
+let query_for_smem = if smem.is_rev_comp {
+    &query_segment_encoded_rc
 } else {
-    log::warn!("{}: Invalid reference ID {} for position {}", query_name, rid, global_pos);
-    ("unknown_ref".to_string(), 0, first_chain.ref_start)
+    &query_segment_encoded
 };
+let smem_query_bases = &query_for_smem[smem.m as usize..=(smem.n as usize).min(query_for_smem.len()-1)];
 ```
 
-**Result**: Now correctly reports valid chromosome coordinates (e.g., chr6:148,708,668) ✅
+**Result**: RC SMEMs now correctly compare against RC query bases. Match quality improved from ~50% to ~55%.
 
 ---
 
-## Issues Identified (Not Yet Fully Resolved)
+## Validation Results
 
-### 3. ⚠️ SMEM-to-Reference Position Mapping
+### Synthetic Test (400bp reference)
+- ✅ **Rust-built index**: 100% perfect SMEM matches
+- ✅ **C++ bwa-mem2 index**: 100% perfect SMEM matches
+- **Conclusion**: Index loader is fully compatible with C++ bwa-mem2 format
 
-**Problem**: Query sequences don't match reference sequences at positions indicated by SMEMs, even though SMEMs represent exact matches.
-
-**Evidence**:
-```
-SMEM 0: m=19, n=39 (query positions 19-39, length 21)
-- Query bases at [19..]:  [1, 0, 0, 0, 2, 2, 2, 0, 0, 0]
-- Ref at SA position:     [0, 2, 0, 0, 0, 0, 0, 2, 2, 2]
-                          ❌ First base doesn't match!
-```
-
-**Impact**: Smith-Waterman aligner can't find matches, producing CIGARs like "148I" (all insertions).
-
-**Current Alignment Results**:
-- Position: chr6:148,708,668 (valid ✅)
-- CIGAR: 148I (incorrect ❌)
-- Score: < 30 (filtered by default)
-
-**With 1000 reads, -T 0**:
-- 998/1000 alignments produced (99.8%)
-- Quality unknown due to CIGAR issues
+### GRCh38 Test (3GB reference)
+- ❌ **Still failing**: Best match 11/20 bases (55%) vs expected 20/20 (100%)
+- **Index source**: Confirmed built with C++ bwa-mem2 (not our Rust indexer)
+- **C++ bwa-mem2 alignment**: Successfully aligns to chr7:67600394 with `148M` CIGAR
+- **Our alignment**: Fails with chr6:148708668 and `148I` CIGAR (all insertions)
 
 ---
 
-## C++ bwa-mem2 Comparison
+## Current Hypothesis
 
-### Key Findings from Reference Implementation
+The bug is **scale-dependent** - it only manifests with large, complex genomes:
 
-**Location**: `/home/jkane/Applications/bwa-mem2/src/`
+### Evidence
+1. ✅ Small synthetic genomes (400bp) work perfectly
+2. ✅ C++ indices work on synthetic data
+3. ✅ SA values load correctly (verified: SA[0]=6,199,845,082 for GRCh38)
+4. ✅ File format is compatible
+5. ❌ Large real genome (3GB) fails
 
-1. **backward_ext() Implementation** (FMI_search.cpp:1025-1052):
-   - C++ uses cumulative l_arr calculation: `l[3] = smem.l + sentinel_offset; l[2] = l[3] + s[3]; ...`
-   - BUT they also do k/l swapping for forward extension (lines 545-546, 551-552)
-   - Comment indicates: "Forward extension is backward extension with the BWT of reverse complement"
-   - This explains why their cumulative approach works - it's for combined forward/backward
-
-2. **SMEM Initialization Difference**:
-   - C++: `smem.l = count[3 - a];` (uses complement base count)
-   - Rust: `l: bwa_idx.bwt.l2[(current_base_code + 1) as usize]`
-   - This is a fundamental difference, possibly related to their k/l swapping scheme
-
-3. **get_sa_entry() Implementation** (FMI_search.cpp:1103-1172):
-   - Matches our Rust implementation for SA reconstruction
-   - Walks BWT when position not sampled, returns `sa_entry + offset`
-   - Our implementation is correct ✅
-
-4. **Seed to Alignment Flow** (bwamem.cpp:870-920, 2145-2370):
-   - C++ calculates reference range for entire CHAIN, not individual seeds:
-     ```cpp
-     b = t->rbeg - (t->qbeg + cal_max_gap(opt, t->qbeg));
-     rmax[0] = min of all b's across chain seeds
-     ```
-   - Fetches ONE reference segment for whole chain
-   - Does left/right extension from chained seeds
-
-   **Key Difference**: Our Rust code tries to align each SMEM individually before chaining. The C++ code chains first, then aligns based on the chain boundaries.
-
-### Why Our Simple Formula Works
-
-Our `l = k + s` formula is correct for pure backward extension:
-- New interval [k, l) has size s
-- Therefore: l = k + s
-
-The C++ cumulative approach appears designed for their specific forward/backward combined extension scheme with k/l swapping. Since we're doing straightforward backward extension only, the simple formula is both correct and clearer.
-
----
-
-## Current Status
-
-### Working ✅
-- BWT interval generation (SMEMs produced with valid k, l, s)
-- Chromosome position calculation
-- Basic alignment pipeline (seeds → chains → alignments)
-- Multi-threading (24 threads, Rayon work-stealing)
-- Logging framework (professional output)
-
-### Not Working ❌
-- SMEM query bases don't match reference at SA positions
-- CIGARs show all insertions instead of matches
-- Alignment scores too low (< threshold)
-
-### Root Cause Hypotheses
-
-1. **SA Position Semantics**: `get_sa_entry()` may return positions with different meaning than expected (end vs start of match, or off-by-one)
-
-2. **Chain-Based vs Seed-Based Alignment**: C++ aligns based on chains (computing rmax boundaries across all seeds), while we try to align individual seeds. This architectural difference may require redesign.
-
-3. **SMEM m/n Interpretation**: Query positions m and n may represent different coordinates than assumed (e.g., end positions vs start positions due to backward search)
-
-4. **Reference Segment Extraction**: Our current approach extracts reference at `ref_pos - query_pos`, but C++ uses more complex chain-aware calculation
+### Possible Remaining Causes
+1. **BWT character reconstruction** - Issue with `get_bwt_base_from_cp_occ()` at large positions
+2. **Checkpoint boundary handling** - Edge case at CP_BLOCK_SIZE boundaries
+3. **Reference sequence reading** - `.pac` file reading issue for large files
+4. **Integer overflow/precision** - Subtle arithmetic issue with large position values
+5. **Occurrence counting** - Bug in `get_occ()` or `popcount64()` with large bitmasks
 
 ---
 
 ## Files Modified
 
-### Main Changes
-- **src/align.rs**:
-  - Lines 155-178: BWT interval calculation fix (l = k + s)
-  - Lines 859-862: SMEM debug logging
-  - Lines 889-908: Reference segment position adjustment (partial fix)
-  - Lines 958-970: Chromosome position calculation fix
+### Core Fixes
+- **src/mem.rs:103** - SA length calculation
+- **src/align.rs:61-69** - ONE_HOT_MASK_ARRAY initialization
+- **src/align.rs:856-890** - RC SMEM query base selection
 
-### Debug/Documentation
-- **DEBUG_SMEM.md**: Detailed bug investigation and resolution
-- **ALIGNMENT_ISSUES.md**: Real-world data issue tracking
-- **SESSION_NOTES.md**: This file
+### Debug Logging Added
+- **src/mem.rs:131-138** - SA value verification on load
+- **src/align.rs:866** - Added is_rev_comp to SMEM debug output
 
 ---
 
-## Test Data
+## Next Session Priorities
 
-**Reference**: GRCh38 (`/home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna`)
-- Size: ~3.1 GB
-- Sequences: 195 (chromosomes + contigs)
+### Immediate
+1. **Trace BWT character reconstruction** - Add detailed logging to `get_bwt_base_from_cp_occ()`
+2. **Verify occurrence counting** - Check `get_occ()` and `popcount64()` with real data
+3. **Compare with C++ at specific position** - Pick one failing SMEM and trace through C++ vs Rust step-by-step
 
-**Reads**: GIAB HG002 (`/home/jkane/Genomics/HG002/`)
-- test_1read.fq: Single 148bp read
-- test_1k.fq: 1,000 reads (148 KB)
-- test_10k.fq: 10,000 reads (3.4 MB)
-- test_100k_R1.fq / test_100k_R2.fq: Paired-end data
-
----
-
-## Next Steps (For New Session)
-
-### Immediate Priority
-1. **Investigate SA Position Semantics**
-   - Add logging to show SA values before/after reconstruction
-   - Create minimal test case with known synthetic pattern
-   - Verify if SA positions need +1/-1 or other adjustment
-
-2. **Compare with Working BWA-MEM**
-   - Run same test read through original BWA-MEM
-   - Compare SMEM positions, SA coordinates, and CIGARs
-   - Identify exact point of divergence
-
-3. **Chain-Based Alignment Redesign** (if needed)
-   - Implement C++-style rmax calculation across chain
-   - Fetch single reference segment for entire chain
-   - Do proper left/right extension from chain boundaries
-
-### Testing Strategy
-1. Create synthetic reference with known patterns (e.g., repeating "AAAA", "CCCC")
-2. Generate query that exactly matches a region
-3. Verify SMEM generation produces correct positions
-4. Verify SA lookup returns correct reference positions
-5. Verify alignment produces correct CIGAR
-
-### Validation
-- Once fixed, test with 10K HG002 reads
-- Compare alignment rate and quality with C++ bwa-mem2
-- Benchmark performance
-
----
-
-## Build Commands
-
-```bash
-# Build
-cargo build --release
-
-# Test with single read (debug output)
-./target/release/ferrous-align mem -T 0 -v 4 \
-  /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
-  /home/jkane/Genomics/HG002/test_1read.fq \
-  2>&1 | grep "SMEM\|Seed"
-
-# Test with 1K reads
-./target/release/ferrous-align mem -T 0 \
-  /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
-  /home/jkane/Genomics/HG002/test_1k.fq \
-  2>/dev/null | grep -v "^@" | wc -l
-
-# Run tests
-cargo test --lib
-```
-
----
-
-## Performance Notes
-
-- **SMEM Generation**: Fast, produces ~4700 SMEMs per read
-- **Filtering**: Reduces to ~80 unique SMEMs (good selectivity)
-- **Throughput**: 0.10 sec for 1000 reads (preliminary, with broken CIGARs)
-- **Threading**: Scales well with 24 threads (Rayon work-stealing)
-
----
-
-## References
-
-- C++ bwa-mem2: `/home/jkane/Applications/bwa-mem2/src/`
-  - FMI_search.cpp: SMEM generation, backward_ext
-  - bwamem.cpp: Seed to alignment conversion, chain-based alignment
-  - bandedSWA.cpp: Banded Smith-Waterman implementation
-
-- Previous commits:
-  - b93c550: Initial SMEM debugging (pre-fix)
-  - ceee0c2: Suffix array position bug fix
-  - 1ed3bb7: BWT interval calculation fix (this session)
+### If Above Fails
+4. **Test intermediate genome sizes** - Try 100MB, 500MB, 1GB references to find scale threshold
+5. **Hex dump comparison** - Compare cp_occ blocks between synthetic and GRCh38 indices
+6. **Reference (.pac) validation** - Verify reference bases are read correctly at SMEM positions
 
 ---
 
 ## Key Insights
 
-1. **Real-world data reveals bugs**: Synthetic tests passed, but real WGS data exposed fundamental issues
-2. **C++ implementation complexity**: bwa-mem2 uses sophisticated tricks (k/l swapping, combined forward/backward) that aren't immediately obvious
-3. **Architecture matters**: Seed-based vs chain-based alignment is a fundamental design choice with significant implications
-4. **Debug logging essential**: Without extensive logging, these bugs would be nearly impossible to find
+1. **Index format compatibility is confirmed** - Our loader correctly reads C++ bwa-mem2 indices
+2. **Small differences matter** - Off-by-one in SA length or wrong query strand breaks everything
+3. **Scale reveals bugs** - Synthetic tests passed but real data exposed the RC query bug
+4. **Debugging strategy** - Building incremental tests (synthetic → real) was essential for isolating issues
+
+---
+
+## Performance Notes
+
+- **Synthetic alignment**: < 0.01 sec (works correctly)
+- **GRCh38 alignment**: ~0.10 sec for 1 read (produces incorrect results)
+- **Index loading**: ~2-3 seconds for GRCh38 (3GB index)
+
+---
+
+## Test Commands
+
+### Synthetic Test (Validates Fixes)
+```bash
+# Build synthetic index with C++ bwa-mem2
+/home/jkane/Applications/bwa-mem2/bwa-mem2 index test_cpp_ref.fasta
+
+# Test alignment
+./target/release/ferrous-align mem -T 0 -v 4 test_cpp_ref.fasta test_query_cpp.fastq
+```
+
+### GRCh38 Test (Shows Remaining Issue)
+```bash
+./target/release/ferrous-align mem -T 0 -v 4 \
+  /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  /home/jkane/Genomics/HG002/test_1read.fq \
+  > output.sam 2> debug.log
+
+# Check for perfect matches
+grep "PERFECT MATCH" debug.log
+```
+
+---
+
+## References
+
+### C++ bwa-mem2 Code Locations
+- **SA length**: FMI_search.cpp:258-276 (`(ref_seq_len >> SA_COMPX) + 1`)
+- **Mask array**: FMI_search.cpp:load_index() (64 elements)
+- **BWT reconstruction**: FMI_search.cpp:1134-1143 (get_bwt character extraction)
+- **Occurrence counting**: FMI_search.h:72 (GET_OCC macro)
+
+### Session History
+- **Session 1 (2025-11-16 morning)**: Fixed BWT interval bug, chromosome position bug
+- **Session 2 (2025-11-16 afternoon)**: Index compatibility investigation, SA/mask/RC fixes
 
 ---
 
 ## Session Metrics
 
-- **Duration**: ~3 hours
-- **Commits**: 1 (BWT interval fix)
-- **Issues Fixed**: 2 critical bugs
-- **Issues Identified**: 1 major (SMEM position mapping)
-- **Lines of Code Changed**: ~150
-- **Debug Lines Added**: ~50
-- **Documentation Created**: 3 files
+- **Duration**: ~4 hours
+- **Commits**: Pending (3 critical fixes ready)
+- **Issues Fixed**: 3 (SA length, mask array, RC query bases)
+- **Issues Remaining**: 1 (scale-dependent SMEM mismatch)
+- **Lines Changed**: ~50
+- **Debug Lines Added**: ~30
+- **Test Cases Created**: 2 (synthetic reference tests)

@@ -95,11 +95,12 @@ impl BwaIndex {
             });
         }
 
-        // In C++, SA_COMPX is 2, so sa_intv is 4.
+        // In C++, SA_COMPX is 3 (defined in macro.h), so sa_intv is 8
         let sa_compx = 3;
         let sa_intv = 1 << sa_compx; // sa_intv = 8
-        // Use the same formula as bwt_cal_sa to calculate SA length
-        let sa_len = (bwt.seq_len + sa_intv - 1) / sa_intv;
+        // C++ uses: ((ref_seq_len >> SA_COMPX) + 1)
+        // which equals: (ref_seq_len / 8) + 1
+        let sa_len = (bwt.seq_len >> sa_compx) + 1;
 
         // 4. Read sa_ms_byte array
         bwt.sa_ms_byte.reserve_exact(sa_len as usize);
@@ -125,6 +126,16 @@ impl BwaIndex {
         // Set other bwt fields that were not in the file
         bwt.sa_intv = 1 << sa_compx;
         bwt.n_sa = sa_len;
+
+        // Debug: verify SA values look reasonable
+        if bwt.sa_ms_byte.len() > 10 {
+            log::debug!("Loaded SA samples: n_sa={}, sa_intv={}", bwt.n_sa, bwt.sa_intv);
+            log::debug!("First 5 SA values:");
+            for i in 0..5.min(bwt.sa_ms_byte.len()) {
+                let sa_val = ((bwt.sa_ms_byte[i] as i64) << 32) | (bwt.sa_ls_word[i] as i64);
+                log::debug!("  SA[{}] = {}", i * bwt.sa_intv as usize, sa_val);
+            }
+        }
 
         Ok(BwaIndex {
             bwt,

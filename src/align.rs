@@ -56,12 +56,15 @@ pub const DEFAULT_SCORING_MATRIX: [i8; 25] = [
 ];
 
 // Global one_hot_mask_array (initialized once)
+// Matches C++ bwa-mem2: one_hot_mask_array[i] has the top i bits set
 lazy_static::lazy_static! {
     static ref ONE_HOT_MASK_ARRAY: Vec<u64> = {
-        let mut array = vec![0u64; 65]; // Size 65 for 0 to 64 bits
+        let mut array = vec![0u64; 64]; // Size 64 to match C++ (indices 0-63)
         // array[0] is already 0
-        for i in 1..=64 {
-            array[i] = (array[i - 1] >> 1) | 0x8000000000000000u64;
+        let base = 0x8000000000000000u64;
+        array[1] = base;  // Explicitly set like C++ does
+        for i in 2..64 {
+            array[i] = (array[i - 1] >> 1) | base;
         }
         array
     };
@@ -850,14 +853,44 @@ fn generate_seeds_with_mode(
     // Prepare query segment once - use the FULL query for alignment
     let query_segment_encoded: Vec<u8> = query_seq.iter().map(|&b| base_to_code(b)).collect();
 
+    // Also prepare reverse complement for RC SMEMs
+    let mut query_segment_encoded_rc: Vec<u8> = query_segment_encoded.iter()
+        .map(|&b| b ^ 3)  // A<->T (0<->3), C<->G (1<->2)
+        .collect();
+    query_segment_encoded_rc.reverse();
+
     for (idx, smem) in useful_smems.iter().enumerate() {
         let smem = *smem;
-        let mut ref_pos = get_sa_entry(bwa_idx, smem.k);
+
+        // Get SA position and log the reconstruction process
+        log::debug!("{}: SMEM {}: BWT interval [k={}, l={}, s={}], query range [m={}, n={}], is_rev_comp={}",
+                    query_name, idx, smem.k, smem.l, smem.l - smem.k, smem.m, smem.n, smem.is_rev_comp);
+
+        // Try multiple positions in the BWT interval to find which one is correct
+        let ref_pos_at_k = get_sa_entry(bwa_idx, smem.k);
+        let ref_pos_at_l_minus_1 = if smem.l > 0 {
+            get_sa_entry(bwa_idx, smem.l - 1)
+        } else {
+            ref_pos_at_k
+        };
+        log::debug!("{}: SMEM {}: SA at k={} -> ref_pos {}, SA at l-1={} -> ref_pos {}",
+                    query_name, idx, smem.k, ref_pos_at_k, smem.l - 1, ref_pos_at_l_minus_1);
+
+        let mut ref_pos = ref_pos_at_k;
+
         let mut is_rev = smem.is_rev_comp;
 
-        let smem_query_bases = &query_segment_encoded[smem.m as usize..=(smem.n as usize).min(query_segment_encoded.len()-1)];
-        log::debug!("{}: SMEM {}: k={}, l={}, m={}, n={}, len={}, raw_ref_pos={}, l_pac={}, smem_bases={:?}",
-                    query_name, idx, smem.k, smem.l, smem.m, smem.n, smem.n - smem.m + 1, ref_pos, bwa_idx.bns.l_pac,
+        // CRITICAL FIX: Use correct query orientation based on is_rev_comp flag
+        // If SMEM is from RC search, use RC query bases for comparison
+        let query_for_smem = if smem.is_rev_comp {
+            &query_segment_encoded_rc
+        } else {
+            &query_segment_encoded
+        };
+        let smem_query_bases = &query_for_smem[smem.m as usize..=(smem.n as usize).min(query_for_smem.len()-1)];
+        let smem_len = smem.n - smem.m + 1;
+        log::debug!("{}: SMEM {}: Query bases at [{}..{}] (len={}): {:?}",
+                    query_name, idx, smem.m, smem.n, smem_len,
                     &smem_query_bases[..10.min(smem_query_bases.len())]);
 
         // Convert positions in reverse complement region to forward strand
@@ -865,8 +898,57 @@ fn generate_seeds_with_mode(
         if ref_pos >= bwa_idx.bns.l_pac {
             ref_pos = (bwa_idx.bns.l_pac << 1) - 1 - ref_pos;
             is_rev = !is_rev; // Flip strand orientation
-            log::debug!("{}: SMEM {} was in RC region, converted ref_pos to {}, is_rev={}",
+            log::debug!("{}: SMEM {}: Was in RC region, converted ref_pos to {}, is_rev={}",
                         query_name, idx, ref_pos, is_rev);
+        }
+
+        // CRITICAL DEBUG: Try different reference positions to find the correct mapping
+        // Test: ref_pos - 1, ref_pos, ref_pos + 1, ref_pos - smem_len + 1 (points to end instead of start)
+        let test_positions = vec![
+            ("ref_pos", ref_pos),
+            ("ref_pos+1", ref_pos.saturating_add(1)),
+            ("ref_pos-1", ref_pos.saturating_sub(1)),
+            ("ref_pos-(len-1)", ref_pos.saturating_sub(smem_len as u64 - 1)),
+        ];
+
+        let mut best_matches = 0;
+        let mut best_pos_label = "";
+
+        for (label, test_pos) in test_positions.iter() {
+            let ref_fetch_len = (smem_len as u64).min(30).min(bwa_idx.bns.l_pac.saturating_sub(*test_pos));
+            if ref_fetch_len == 0 {
+                continue;
+            }
+
+            if let Ok(ref_bases) = bwa_idx.bns.get_reference_segment(*test_pos, ref_fetch_len) {
+                let comparison_len = smem_query_bases.len().min(ref_bases.len());
+                let mut matches = 0;
+                for i in 0..comparison_len {
+                    if smem_query_bases[i] == ref_bases[i] {
+                        matches += 1;
+                    }
+                }
+
+                if matches > best_matches {
+                    best_matches = matches;
+                    best_pos_label = label;
+                }
+
+                if matches == comparison_len {
+                    log::info!("{}: SMEM {}: ✅ PERFECT MATCH at {} (pos={}): {} matches!",
+                               query_name, idx, label, test_pos, matches);
+                } else if matches >= comparison_len / 2 {
+                    log::debug!("{}: SMEM {}: Partial match at {} (pos={}): {}/{} matches",
+                                query_name, idx, label, test_pos, matches, comparison_len);
+                }
+            }
+        }
+
+        if best_matches < smem_len as usize {
+            log::warn!("{}: SMEM {}: ⚠️ NO PERFECT MATCH FOUND! Best: {} at {} ({}/{} bases)",
+                       query_name, idx, best_pos_label, best_matches, best_matches, smem_len);
+            log::warn!("{}: SMEM {}:   Query: {:?}", query_name, idx,
+                       &smem_query_bases[..5.min(smem_query_bases.len())]);
         }
 
         // Adjust query_pos for reverse complement seeds
