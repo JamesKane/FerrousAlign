@@ -39,6 +39,9 @@ pub trait SimdEngine: Sized {
     /// Create a vector with all elements set to zero
     unsafe fn setzero_vec8() -> Self::Vec8;
 
+    /// Create a vector with all 8-bit elements set to zero
+    unsafe fn setzero_epi8() -> Self::Vec8;
+
     /// Create a vector with all 8-bit elements set to the same value
     unsafe fn set1_epi8(a: i8) -> Self::Vec8;
 
@@ -65,6 +68,9 @@ pub trait SimdEngine: Sized {
     /// Saturating add packed signed 8-bit integers
     unsafe fn adds_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
 
+    /// Saturating add packed unsigned 8-bit integers
+    unsafe fn adds_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+
     /// Maximum of packed signed 8-bit integers
     unsafe fn max_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
 
@@ -82,11 +88,20 @@ pub trait SimdEngine: Sized {
     /// Subtract packed 16-bit integers
     unsafe fn sub_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
 
+    /// Saturating add packed signed 16-bit integers
+    unsafe fn adds_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
+
     /// Saturating subtract packed unsigned 16-bit integers
     unsafe fn subs_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
 
+    /// Saturating subtract packed signed 16-bit integers
+    unsafe fn subs_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
+
     /// Maximum of packed signed 16-bit integers
     unsafe fn max_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
+
+    /// Minimum of packed signed 16-bit integers
+    unsafe fn min_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
 
     /// Maximum of packed unsigned 16-bit integers
     unsafe fn max_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
@@ -102,6 +117,9 @@ pub trait SimdEngine: Sized {
     /// Compare packed 16-bit integers for equality
     unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
 
+    /// Compare packed 16-bit integers for greater-than
+    unsafe fn cmpgt_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
+
     // ===== Blend/Select Operations =====
 
     /// Blend packed 8-bit integers based on mask
@@ -112,6 +130,23 @@ pub trait SimdEngine: Sized {
 
     /// Bitwise AND
     unsafe fn and_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+
+    /// Bitwise OR
+    unsafe fn or_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+
+    /// Bitwise AND NOT
+    unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+
+    // ===== Shift Operations =====
+
+    /// Shift 16-bit integers left by immediate value
+    unsafe fn slli_epi16(a: Self::Vec16, imm8: i32) -> Self::Vec16;
+
+    /// Shift 128-bit vector right by 2 bytes (fixed)
+    unsafe fn srli_si128_fixed(a: Self::Vec8) -> Self::Vec8;
+
+    /// Concatenate and shift right by 1 byte
+    unsafe fn alignr_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
 
     // ===== Memory Operations =====
 
@@ -481,6 +516,151 @@ pub unsafe fn _mm_adds_epi8(a: __m128i, b: __m128i) -> __m128i {
     }
 }
 
+#[inline(always)]
+pub unsafe fn _mm_adds_epu8(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_adds_epu8(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            __m128i(simd_arch::vqaddq_u8(a.0, b.0))
+        }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn _mm_adds_epi16(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_adds_epi16(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            __m128i::from_s16(simd_arch::vqaddq_s16(a.as_s16(), b.as_s16()))
+        }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn _mm_subs_epi16(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_subs_epi16(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            __m128i::from_s16(simd_arch::vqsubq_s16(a.as_s16(), b.as_s16()))
+        }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn _mm_min_epi16(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_min_epi16(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            __m128i::from_s16(simd_arch::vminq_s16(a.as_s16(), b.as_s16()))
+        }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn _mm_cmpgt_epi16(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_cmpgt_epi16(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            __m128i::from_u16(simd_arch::vcgtq_s16(a.as_s16(), b.as_s16()))
+        }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn _mm_or_si128(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_or_si128(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe { __m128i(simd_arch::vorrq_u8(a.0, b.0)) }
+    }
+}
+
+#[inline(always)]
+pub unsafe fn _mm_andnot_si128(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_andnot_si128(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe { __m128i(simd_arch::vbicq_u8(b.0, a.0)) }
+    }
+}
+
+// Note: For x86 intrinsics, shift amounts must be compile-time constants.
+// We provide wrapper macros for variable shift amounts, but the trait methods
+// use fixed values that match the C++ bwa-mem2 implementation.
+
+macro_rules! mm_slli_epi16 {
+    ($a:expr, $imm8:expr) => {{
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            simd_arch::_mm_slli_epi16($a, $imm8)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            __m128i::from_s16(simd_arch::vshlq_n_s16($a.as_s16(), $imm8))
+        }
+    }};
+}
+
+macro_rules! mm_srli_si128 {
+    ($a:expr, $imm8:expr) => {{
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            simd_arch::_mm_srli_si128($a, $imm8)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            if $imm8 >= 16 {
+                _mm_setzero_si128()
+            } else {
+                __m128i(simd_arch::vextq_u8($a.0, simd_arch::vdupq_n_u8(0), $imm8))
+            }
+        }
+    }};
+}
+
+macro_rules! mm_alignr_epi8 {
+    ($a:expr, $b:expr, $imm8:expr) => {{
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            simd_arch::_mm_alignr_epi8($a, $b, $imm8)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            if $imm8 >= 16 {
+                mm_srli_si128!($a, $imm8 - 16)
+            } else {
+                __m128i(simd_arch::vextq_u8($b.0, $a.0, $imm8))
+            }
+        }
+    }};
+}
+
 /// Bitwise AND of two 128-bit vectors
 #[inline(always)]
 pub unsafe fn _mm_and_si128(a: __m128i, b: __m128i) -> __m128i {
@@ -547,6 +727,11 @@ impl SimdEngine for SimdEngine128 {
     }
 
     #[inline(always)]
+    unsafe fn setzero_epi8() -> Self::Vec8 {
+        unsafe { _mm_setzero_si128() }
+    }
+
+    #[inline(always)]
     unsafe fn set1_epi8(a: i8) -> Self::Vec8 {
         unsafe { _mm_set1_epi8(a) }
     }
@@ -589,6 +774,11 @@ impl SimdEngine for SimdEngine128 {
     }
 
     #[inline(always)]
+    unsafe fn adds_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { _mm_adds_epu8(a, b) }
+    }
+
+    #[inline(always)]
     unsafe fn max_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { _mm_max_epi8(a, b) }
     }
@@ -616,13 +806,28 @@ impl SimdEngine for SimdEngine128 {
     }
 
     #[inline(always)]
+    unsafe fn adds_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { _mm_adds_epi16(a, b) }
+    }
+
+    #[inline(always)]
     unsafe fn subs_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { _mm_subs_epu16(a, b) }
     }
 
     #[inline(always)]
+    unsafe fn subs_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { _mm_subs_epi16(a, b) }
+    }
+
+    #[inline(always)]
     unsafe fn max_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { _mm_max_epi16(a, b) }
+    }
+
+    #[inline(always)]
+    unsafe fn min_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { _mm_min_epi16(a, b) }
     }
 
     #[inline(always)]
@@ -647,6 +852,11 @@ impl SimdEngine for SimdEngine128 {
         unsafe { _mm_cmpeq_epi16(a, b) }
     }
 
+    #[inline(always)]
+    unsafe fn cmpgt_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { _mm_cmpgt_epi16(a, b) }
+    }
+
     // ===== Blend/Select Operations =====
 
     #[inline(always)]
@@ -659,6 +869,46 @@ impl SimdEngine for SimdEngine128 {
     #[inline(always)]
     unsafe fn and_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { _mm_and_si128(a, b) }
+    }
+
+    #[inline(always)]
+    unsafe fn or_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { _mm_or_si128(a, b) }
+    }
+
+    #[inline(always)]
+    unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { _mm_andnot_si128(a, b) }
+    }
+
+    // ===== Shift Operations =====
+
+    #[inline(always)]
+    unsafe fn slli_epi16(a: Self::Vec16, imm8: i32) -> Self::Vec16 {
+        // For runtime variable shift amounts, we need to use a match or lookup table
+        // This is a limitation of x86 intrinsics requiring compile-time constants
+        match imm8 {
+            0 => a,
+            1 => mm_slli_epi16!(a, 1),
+            2 => mm_slli_epi16!(a, 2),
+            3 => mm_slli_epi16!(a, 3),
+            4 => mm_slli_epi16!(a, 4),
+            5 => mm_slli_epi16!(a, 5),
+            6 => mm_slli_epi16!(a, 6),
+            7 => mm_slli_epi16!(a, 7),
+            8 => mm_slli_epi16!(a, 8),
+            _ => mm_slli_epi16!(a, 0), // Fallback for out of range
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn srli_si128_fixed(a: Self::Vec8) -> Self::Vec8 {
+        mm_srli_si128!(a, 2)
+    }
+
+    #[inline(always)]
+    unsafe fn alignr_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        mm_alignr_epi8!(a, b, 1)
     }
 
     // ===== Memory Operations =====
@@ -707,25 +957,26 @@ impl SimdEngine for SimdEngine256 {
 
     // ===== Creation and Initialization =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn setzero_vec8() -> Self::Vec8 {
         unsafe { simd_arch::_mm256_setzero_si256() }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx2")]
+    unsafe fn setzero_epi8() -> Self::Vec8 {
+        unsafe { simd_arch::_mm256_setzero_si256() }
+    }
+
     #[target_feature(enable = "avx2")]
     unsafe fn set1_epi8(a: i8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_set1_epi8(a) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn set1_epi16(a: i16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_set1_epi16(a) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn set1_epi32(a: i32) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_set1_epi32(a) }
@@ -733,49 +984,46 @@ impl SimdEngine for SimdEngine256 {
 
     // ===== 8-bit Integer Arithmetic =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn add_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_add_epi8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn sub_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_sub_epi8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn subs_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_subs_epu8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn subs_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_subs_epi8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn adds_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_adds_epi8(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx2")]
+    unsafe fn adds_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm256_adds_epu8(a, b) }
+    }
+
     #[target_feature(enable = "avx2")]
     unsafe fn max_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_max_epi8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn max_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_max_epu8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn min_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_min_epu8(a, b) }
@@ -783,31 +1031,41 @@ impl SimdEngine for SimdEngine256 {
 
     // ===== 16-bit Integer Arithmetic =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn add_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_add_epi16(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn sub_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_sub_epi16(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx2")]
+    unsafe fn adds_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm256_adds_epi16(a, b) }
+    }
+
     #[target_feature(enable = "avx2")]
     unsafe fn subs_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_subs_epu16(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx2")]
+    unsafe fn subs_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm256_subs_epi16(a, b) }
+    }
+
     #[target_feature(enable = "avx2")]
     unsafe fn max_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_max_epi16(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx2")]
+    unsafe fn min_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm256_min_epi16(a, b) }
+    }
+
     #[target_feature(enable = "avx2")]
     unsafe fn max_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_max_epu16(a, b) }
@@ -815,27 +1073,28 @@ impl SimdEngine for SimdEngine256 {
 
     // ===== Comparison Operations =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn cmpeq_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_cmpeq_epi8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn cmpgt_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_cmpgt_epi8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm256_cmpeq_epi16(a, b) }
     }
 
+    #[target_feature(enable = "avx2")]
+    unsafe fn cmpgt_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm256_cmpgt_epi16(a, b) }
+    }
+
     // ===== Blend/Select Operations =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn blendv_epi8(a: Self::Vec8, b: Self::Vec8, mask: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_blendv_epi8(a, b, mask) }
@@ -843,33 +1102,67 @@ impl SimdEngine for SimdEngine256 {
 
     // ===== Bitwise Operations =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn and_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_and_si256(a, b) }
     }
 
+    #[target_feature(enable = "avx2")]
+    unsafe fn or_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm256_or_si256(a, b) }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm256_andnot_si256(a, b) }
+    }
+
+    // ===== Shift Operations =====
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn slli_epi16(a: Self::Vec16, imm8: i32) -> Self::Vec16 {
+        // For runtime variable shift amounts, we need to use a match or lookup table
+        match imm8 {
+            0 => a,
+            1 => unsafe { simd_arch::_mm256_slli_epi16(a, 1) },
+            2 => unsafe { simd_arch::_mm256_slli_epi16(a, 2) },
+            3 => unsafe { simd_arch::_mm256_slli_epi16(a, 3) },
+            4 => unsafe { simd_arch::_mm256_slli_epi16(a, 4) },
+            5 => unsafe { simd_arch::_mm256_slli_epi16(a, 5) },
+            6 => unsafe { simd_arch::_mm256_slli_epi16(a, 6) },
+            7 => unsafe { simd_arch::_mm256_slli_epi16(a, 7) },
+            8 => unsafe { simd_arch::_mm256_slli_epi16(a, 8) },
+            _ => unsafe { simd_arch::_mm256_slli_epi16(a, 0) },
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn srli_si128_fixed(a: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm256_srli_si256(a, 2) }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn alignr_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm256_alignr_epi8(a, b, 1) }
+    }
+
     // ===== Memory Operations =====
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn load_si128(p: *const Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_load_si256(p) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn store_si128(p: *mut Self::Vec8, a: Self::Vec8) {
         unsafe { simd_arch::_mm256_store_si256(p, a) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn loadu_si128(p: *const Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm256_loadu_si256(p) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx2")]
     unsafe fn storeu_si128(p: *mut Self::Vec8, a: Self::Vec8) {
         unsafe { simd_arch::_mm256_storeu_si256(p, a) }
@@ -880,10 +1173,10 @@ impl SimdEngine for SimdEngine256 {
 // SimdEngine512: AVX-512 Implementation (64-way parallelism)
 // ============================================================================
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 pub struct SimdEngine512;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 impl SimdEngine for SimdEngine512 {
     const WIDTH_8: usize = 64;  // 64 lanes for 8-bit operations (4x SSE)
     const WIDTH_16: usize = 32; // 32 lanes for 16-bit operations (4x SSE)
@@ -891,97 +1184,116 @@ impl SimdEngine for SimdEngine512 {
     type Vec8 = simd_arch::__m512i;
     type Vec16 = simd_arch::__m512i;
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn setzero_vec8() -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_setzero_si512() }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn setzero_epi8() -> Self::Vec8 {
         unsafe { simd_arch::_mm512_setzero_si512() }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn set1_epi8(a: i8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_set1_epi8(a) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn set1_epi16(a: i16) -> Self::Vec16 {
         unsafe { simd_arch::_mm512_set1_epi16(a) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn set1_epi32(a: i32) -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_set1_epi32(a) }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn add_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_add_epi8(a, b) }
     }
 
-    #[inline(always)]
-    #[target_feature(enable = "avx512bw")]
-    unsafe fn add_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
-        unsafe { simd_arch::_mm512_add_epi16(a, b) }
-    }
-
-    #[inline(always)]
-    #[target_feature(enable = "avx512bw")]
-    unsafe fn adds_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
-        unsafe { simd_arch::_mm512_adds_epu8(a, b) }
-    }
-
-    #[inline(always)]
-    #[target_feature(enable = "avx512bw")]
-    unsafe fn adds_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
-        unsafe { simd_arch::_mm512_adds_epi16(a, b) }
-    }
-
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn sub_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_sub_epi8(a, b) }
     }
 
-    #[inline(always)]
-    #[target_feature(enable = "avx512bw")]
-    unsafe fn sub_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
-        unsafe { simd_arch::_mm512_sub_epi16(a, b) }
-    }
-
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn subs_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_subs_epu8(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
-    unsafe fn subs_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
-        unsafe { simd_arch::_mm512_subs_epi16(a, b) }
+    unsafe fn subs_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_subs_epi8(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn adds_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_adds_epi8(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn adds_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_adds_epu8(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn max_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_max_epi8(a, b) }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn max_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_max_epu8(a, b) }
     }
 
-    #[inline(always)]
-    #[target_feature(enable = "avx512bw")]
-    unsafe fn max_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
-        unsafe { simd_arch::_mm512_max_epi16(a, b) }
-    }
-
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn min_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_min_epu8(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn add_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_add_epi16(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn sub_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_sub_epi16(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn adds_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_adds_epi16(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn subs_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_subs_epu16(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn subs_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_subs_epi16(a, b) }
+    }
+
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn max_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_max_epi16(a, b) }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn min_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { simd_arch::_mm512_min_epi16(a, b) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn max_epu16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe { simd_arch::_mm512_max_epu16(a, b) }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn cmpeq_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe {
@@ -990,7 +1302,6 @@ impl SimdEngine for SimdEngine512 {
         }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn cmpgt_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe {
@@ -999,7 +1310,14 @@ impl SimdEngine for SimdEngine512 {
         }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
+        unsafe {
+            let mask = simd_arch::_mm512_cmpeq_epi16_mask(a, b);
+            simd_arch::_mm512_maskz_set1_epi16(mask, -1i16)
+        }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn cmpgt_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe {
@@ -1008,59 +1326,72 @@ impl SimdEngine for SimdEngine512 {
         }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn blendv_epi8(a: Self::Vec8, b: Self::Vec8, mask: Self::Vec8) -> Self::Vec8 {
+        unsafe {
+            // Convert mask to kmask (AVX-512 uses mask registers)
+            let kmask = simd_arch::_mm512_movepi8_mask(mask);
+            simd_arch::_mm512_mask_blend_epi8(kmask, a, b)
+        }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn and_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_and_si512(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn or_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_or_si512(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_andnot_si512(a, b) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn slli_epi16(a: Self::Vec16, imm8: i32) -> Self::Vec16 {
-        unsafe { simd_arch::_mm512_slli_epi16(a, imm8 as u32) }
+        // For runtime variable shift amounts, we need to use a match or lookup table
+        match imm8 {
+            0 => a,
+            1 => unsafe { simd_arch::_mm512_slli_epi16(a, 1) },
+            2 => unsafe { simd_arch::_mm512_slli_epi16(a, 2) },
+            3 => unsafe { simd_arch::_mm512_slli_epi16(a, 3) },
+            4 => unsafe { simd_arch::_mm512_slli_epi16(a, 4) },
+            5 => unsafe { simd_arch::_mm512_slli_epi16(a, 5) },
+            6 => unsafe { simd_arch::_mm512_slli_epi16(a, 6) },
+            7 => unsafe { simd_arch::_mm512_slli_epi16(a, 7) },
+            8 => unsafe { simd_arch::_mm512_slli_epi16(a, 8) },
+            _ => unsafe { simd_arch::_mm512_slli_epi16(a, 0) },
+        }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn srli_si128_fixed(a: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_bsrli_epi128(a, 2) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn alignr_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_alignr_epi8(a, b, 1) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
-    unsafe fn blendv_epi8(mask: Self::Vec8, a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
-        unsafe {
-            // Convert mask to kmask (AVX-512 uses mask registers)
-            let kmask = simd_arch::_mm512_movepi8_mask(mask);
-            simd_arch::_mm512_mask_blend_epi8(kmask, b, a)
-        }
+    unsafe fn load_si128(p: *const Self::Vec8) -> Self::Vec8 {
+        unsafe { simd_arch::_mm512_load_si512(p) }
     }
 
-    #[inline(always)]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn store_si128(p: *mut Self::Vec8, a: Self::Vec8) {
+        unsafe { simd_arch::_mm512_store_si512(p, a) }
+    }
+
     #[target_feature(enable = "avx512bw")]
     unsafe fn loadu_si128(p: *const Self::Vec8) -> Self::Vec8 {
         unsafe { simd_arch::_mm512_loadu_si512(p) }
     }
 
-    #[inline(always)]
     #[target_feature(enable = "avx512bw")]
     unsafe fn storeu_si128(p: *mut Self::Vec8, a: Self::Vec8) {
         unsafe { simd_arch::_mm512_storeu_si512(p, a) }
@@ -1079,8 +1410,8 @@ pub enum SimdEngineType {
     /// 256-bit SIMD (AVX2) - x86_64 only
     #[cfg(target_arch = "x86_64")]
     Engine256,
-    /// 512-bit SIMD (AVX-512) - x86_64 only (not yet implemented)
-    #[cfg(target_arch = "x86_64")]
+    /// 512-bit SIMD (AVX-512) - x86_64 only (requires avx512 feature flag)
+    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
     Engine512,
 }
 
@@ -1088,10 +1419,13 @@ pub enum SimdEngineType {
 pub fn detect_optimal_simd_engine() -> SimdEngineType {
     #[cfg(target_arch = "x86_64")]
     {
-        // Check for AVX-512 support
+        // Check for AVX-512 support (only if feature is enabled)
         // AVX-512BW (Byte/Word) is required for 8-bit/16-bit operations
-        if is_x86_feature_detected!("avx512bw") {
-            return SimdEngineType::Engine512;
+        #[cfg(feature = "avx512")]
+        {
+            if is_x86_feature_detected!("avx512bw") {
+                return SimdEngineType::Engine512;
+            }
         }
 
         // Check for AVX2 support
@@ -1121,7 +1455,7 @@ pub fn simd_engine_description(engine: SimdEngineType) -> &'static str {
         }
         #[cfg(target_arch = "x86_64")]
         SimdEngineType::Engine256 => "AVX2 (256-bit, 32-way parallelism)",
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
         SimdEngineType::Engine512 => "AVX-512 (512-bit, 64-way parallelism)",
     }
 }

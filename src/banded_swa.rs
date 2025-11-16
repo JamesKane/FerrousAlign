@@ -866,7 +866,7 @@ impl BandedPairWiseSW {
                     )
                 }
             }
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
             SimdEngineType::Engine512 => {
                 // Use AVX-512 kernel (64-way parallelism)
                 // Implementation in src/banded_swa_avx512.rs
@@ -910,7 +910,7 @@ impl BandedPairWiseSW {
                 // AVX2 would only help if we implement SIMD scoring + scalar CIGAR
                 self.simd_banded_swa_batch16_with_cigar(batch)
             }
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
             SimdEngineType::Engine512 => {
                 // TODO(AVX-512): Same as AVX2 notes above
                 self.simd_banded_swa_batch16_with_cigar(batch)
