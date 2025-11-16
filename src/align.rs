@@ -1305,11 +1305,14 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     let sa_ls_word = bwa_idx.bwt.sa_ls_word[sa_index] as u64;
     let sa_val = (sa_ms_byte << 32) | sa_ls_word;
 
-    // If SA value points to the sentinel (seq_len - 1 because seq_len includes sentinel),
-    // the reference position wraps to the beginning
-    let ref_len = bwa_idx.bwt.seq_len - 1; // Exclude sentinel from reference length
-    let adjusted_sa_val = if sa_val >= ref_len {
-        // SA points to sentinel - wrap to beginning
+    // Handle sentinel: SA values can point to the sentinel position (seq_len)
+    // The sentinel represents the end-of-string marker, which wraps to position 0
+    // seq_len = (l_pac << 1) + 1 (forward + RC + sentinel)
+    // So sentinel position is seq_len - 1 = (l_pac << 1)
+    let sentinel_pos = (bwa_idx.bns.l_pac << 1);
+    let adjusted_sa_val = if sa_val >= sentinel_pos {
+        // SA points to or past sentinel - wrap to beginning (position 0)
+        log::debug!("SA value {} is at/past sentinel {} - wrapping to 0", sa_val, sentinel_pos);
         0
     } else {
         sa_val
@@ -1317,8 +1320,8 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
     let result = adjusted_sa_val + count;
 
-    // eprintln!("get_sa_entry: original_pos={}, final_pos={}, count={}, sa_index={}, sa_val={}, adjusted={}, result={}",
-    //           original_pos, pos, count, sa_index, sa_val, adjusted_sa_val, result);
+    log::debug!("get_sa_entry: original_pos={}, final_pos={}, count={}, sa_index={}, sa_val={}, adjusted={}, result={}",
+               original_pos, pos, count, sa_index, sa_val, adjusted_sa_val, result);
     result
 }
 
