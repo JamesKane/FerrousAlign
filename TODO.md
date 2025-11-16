@@ -87,8 +87,8 @@
 ### 🔗 Documentation
 - **CLAUDE.md**: Project overview and architecture
 - **PERFORMANCE.md**: SIMD optimization details and benchmarks
-- **IMPLEMENTATION_STATUS.md**: Feature implementation tracking
-- **PARAMETERS.md**: Command-line parameter documentation
+- **ALGORITHM_REFINEMENTS.md**: Parsed-but-not-implemented feature tracking
+- **AVX2_KERNEL_PORTING.md**: AVX2 kernel implementation guide
 
 ---
 
