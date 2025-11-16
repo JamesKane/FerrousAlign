@@ -27,3 +27,10 @@ test_*.txt
 # Large test data files
 chm13v2.0.fa.gz*
 HG03576.final.cram*
+# Test data (keep sources, exclude generated indices)
+/test_data/*.bwt.2bit.64
+/test_data/*.pac
+/test_data/*.ann
+/test_data/*.amb
+/test_data/*.0123
+/test_data/*.sh
