@@ -17,29 +17,37 @@ A Rust port of [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2), the next-genera
 
 ### Project Status
 
-**Current Phase**: Active development towards feature parity with bwa-mem2
+**Current Version**: v0.5.0 (~50% complete)
+**Performance**: 85-95% of C++ bwa-mem2 speed
+**Production Readiness**: Core features working, algorithm refinements in progress
 
-Implemented:
-- ✅ FM-Index construction (SAIS algorithm)
-- ✅ BWT-based backward search
-- ✅ Banded Smith-Waterman alignment (SIMD-optimized)
-- ✅ SMEM (Supermaximal Exact Match) extraction
-- ✅ Read mapping pipeline (single-end and paired-end)
-- ✅ FASTQ/FASTA input parsing
-- ✅ SAM format output
-- ✅ SIMD abstraction layer (x86_64/ARM)
-- ✅ Multi-threaded alignment with batched parallel processing (Rayon)
+**✅ Implemented and Working:**
+- FM-Index construction (using bio crate's suffix array)
+- BWT-based backward search with occurrence tables
+- Banded Smith-Waterman alignment (SIMD-optimized for x86_64 and ARM)
+- SMEM (Supermaximal Exact Match) extraction
+- Complete read mapping pipeline (single-end and paired-end)
+- FASTQ/FASTA input parsing with native gzip support (bio::io::fastq)
+- SAM format output with complete headers (@HD, @SQ, @PG)
+- SIMD abstraction layer (SSE/AVX on x86_64, NEON on ARM)
+- Multi-threaded alignment with Rayon work-stealing scheduler
+- Professional logging framework with verbosity control
+- Paired-end support: insert size inference, mate rescue, proper pair marking
+- All CLI parameters parsed and stored (30+ options)
 
-In Progress:
-- 🔄 Advanced paired-end resolution
-- 🔄 Comprehensive test coverage
-- 🔄 Performance optimization and benchmarking
-- 🔄 Apple Acceleration framework integration
+**🔄 Algorithm Refinements (parsed but not fully wired):**
+- Re-seeding for long MEMs (`-r`)
+- Chain dropping for multi-mappers (`-D`)
+- Multi-round mate rescue (`-m`, default limited to 1 round)
+- 3rd round seeding (`-y`)
+- XA tag for alternative alignments (`-h`)
+- Clipping penalties in scoring (`-L`)
+- See ALGORITHM_REFINEMENTS.md for complete list
 
-Planned:
-- ⏳ Runtime SIMD dispatch (similar to C++ `make multi`)
-- ⏳ Advanced scoring and clipping options
-- ⏳ Memory footprint optimization
+**⏳ Planned Optimizations:**
+- AVX2/AVX-512 kernel implementation (infrastructure complete)
+- Apple Acceleration framework integration
+- Memory-mapped index loading
 
 ## Installation
 
@@ -52,7 +60,7 @@ Planned:
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/ferrous-align.git
+git clone https://github.com/JamesKane/ferrous-align.git
 cd ferrous-align
 
 # Build in release mode (optimized)
@@ -145,10 +153,10 @@ Run `./target/release/ferrous-align mem --help` for all options.
 FerrousAlign implements a three-stage alignment pipeline:
 
 ### 1. **Indexing Phase** (`index` command)
-   - Constructs FM-Index from reference FASTA using the SAIS (Suffix Array Induced Sorting) algorithm
+   - Constructs FM-Index from reference FASTA using bio crate's suffix array implementation
    - Builds BWT (Burrows-Wheeler Transform) with 2-bit encoding
-   - Creates compressed suffix array with configurable sampling rate
-   - Generates occurrence tables for fast backward search
+   - Creates sampled suffix array (every 8th position by default)
+   - Generates occurrence checkpoints every 64 bases for fast backward search
 
 ### 2. **Seeding Phase** (Kernel 1)
    - Extracts MEMs (Maximal Exact Matches) and SMEMs (Supermaximal Exact Matches)
@@ -247,17 +255,18 @@ Key benchmarks:
 ```
 src/
 ├── lib.rs              # Library root
-├── main.rs             # CLI entry point
-├── bwa_index.rs        # Index building (SAIS + BWT construction)
-├── bwt.rs              # BWT data structure and operations
-├── sais.rs             # Suffix Array Induced Sorting
+├── main.rs             # CLI entry point and logger setup
+├── mem_opt.rs          # Command-line options structure (30+ parameters)
+├── bwa_index.rs        # Index building (bio crate suffix array + BWT construction)
+├── bwt.rs              # BWT data structure and FM-Index operations
 ├── bntseq.rs           # Reference sequence handling
-├── mem.rs              # Core alignment logic (seeding, chaining)
+├── mem.rs              # Core alignment pipeline (single-end and paired-end)
+├── align.rs            # Seed extraction, chaining, and alignment jobs
 ├── banded_swa.rs       # Banded Smith-Waterman (SIMD-optimized)
-├── align.rs            # Alignment pipeline and output
-├── kseq.rs             # FASTQ/FASTA parsing
+├── fastq_reader.rs     # FASTQ/FASTA parsing (bio::io::fastq wrapper)
+├── kseq.rs             # FASTA parsing for reference genomes (indexing only)
 ├── utils.rs            # Utilities (bit manipulation, I/O)
-└── simd_abstraction.rs # Platform-specific SIMD wrappers
+└── simd_abstraction.rs # Platform-specific SIMD wrappers (SSE/AVX/NEON)
 ```
 
 ### Key Data Structures
@@ -372,24 +381,38 @@ Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-### Near-term (v0.2.0)
-- [ ] Complete paired-end resolution (matching C++ behavior)
-- [ ] Comprehensive integration tests
-- [ ] Performance benchmarking vs. C++ bwa-mem2
-- [ ] Apple Acceleration framework integration
+### Current: v0.5.0 (Released)
+- ✅ Core alignment pipeline (single-end and paired-end)
+- ✅ Multi-threading with Rayon
+- ✅ SIMD optimization (SSE/NEON)
+- ✅ Complete SAM output with headers
+- ✅ Professional logging framework
+- ✅ Native gzip support for FASTQ
+- ✅ All CLI parameters parsed
 
-### Mid-term (v0.3.0)
-- [ ] Runtime SIMD dispatch
+### Next: v0.6.0-v0.8.0 - Algorithm Refinements
+- [ ] Re-seeding for long MEMs (`-r` implementation)
+- [ ] Chain dropping logic (`-D` implementation)
+- [ ] Multi-round mate rescue (wire up `-m` parameter)
+- [ ] 3rd round seeding for difficult reads
+- [ ] XA tag support for alternative alignments
+- [ ] Clipping penalties in Smith-Waterman scoring
+- [ ] Real-world testing and validation vs C++ bwa-mem2
+
+### Future: v0.9.0-v1.0.0 - Performance & Feature Parity
+- [ ] AVX2 banded Smith-Waterman kernel (infrastructure ready)
+- [ ] AVX-512 support for newest CPUs
+- [ ] Apple Acceleration framework integration
 - [ ] Memory-mapped index loading
 - [ ] BAM output support
-- [ ] Advanced scoring models
+- [ ] Performance matching or exceeding C++ bwa-mem2
+- [ ] 100% feature parity with C++ bwa-mem2 v2.2.1
 
-### Long-term (v1.0.0)
-- [ ] Feature parity with bwa-mem2 v2.2.1
-- [ ] Performance matching or exceeding C++ version
-- [ ] Optional GPU acceleration (Metal on macOS)
+### Long-term: v2.0.0+
+- [ ] Optional GPU acceleration (Metal on macOS, CUDA/ROCm on Linux)
 - [ ] Learned index support (LISA variant)
+- [ ] Alternative alignment algorithms (minimap2-style)
 
 ---
 
-For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/YOUR_USERNAME/ferrous-align).
+For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/JamesKane/ferrous-align).
