@@ -4,6 +4,18 @@
 
 A Rust port of [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2), the next-generation Burrows-Wheeler Aligner for aligning DNA sequencing reads against large reference genomes.
 
+## ⚠️ Experimental Software - Not Production Ready
+
+**WARNING: This is pre-1.0 experimental software under active development.**
+
+- **Do NOT use in production environments** or for clinical/diagnostic purposes
+- **Alignment algorithms may contain bugs** and produce incorrect results
+- **Output has not been fully validated** against bwa-mem2 reference implementation
+- **API and command-line interface may change** without notice
+- **Intended for research, development, and testing purposes only**
+
+For production workloads, please use the stable [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2) C++ implementation until FerrousAlign reaches v1.0.
+
 ## Overview
 
 **FerrousAlign** (`ferrous-align`) is a high-performance reimplementation of the BWA-MEM2 algorithm in Rust, targeting performance parity with the original C/C++ version while providing the safety and maintainability benefits of Rust. This implementation produces alignment output identical to bwa-mem2 and the original bwa-mem (v0.7.17).
