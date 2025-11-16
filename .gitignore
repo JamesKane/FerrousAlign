@@ -1,0 +1,17 @@
+/target/
+Cargo.lock
+*.bwt.2bit.64
+*.pac
+*.ann
+*.amb
+*.0123
+/test_data/paired_end/ref.*
+test_integration_*
+test_pe_*
+test_50bp_*
+test_100bp_*
+.DS_Store
+
+# Large test data files
+chm13v2.0.fa.gz*
+HG03576.final.cram*
