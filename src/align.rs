@@ -687,6 +687,10 @@ fn generate_seeds_with_mode(
 
     // 2. Remove duplicates and filter by minimum length and max occurrences
     let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
+    let mut filtered_too_short = 0;
+    let mut filtered_too_many_occ = 0;
+    let mut duplicates = 0;
+
             if let Some(mut prev_smem) = all_smems.first().cloned() {
                 let seed_len = prev_smem.n - prev_smem.m + 1;
                 let occurrences = prev_smem.l - prev_smem.k;
@@ -694,6 +698,9 @@ fn generate_seeds_with_mode(
                 // Filter by min_seed_len (-k) and max_occ (-c)
                 if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
                     unique_filtered_smems.push(prev_smem);
+                } else {
+                    if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
+                    if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
                 }
 
                 for i in 1..all_smems.len() {
@@ -705,24 +712,46 @@ fn generate_seeds_with_mode(
                         // Filter by min_seed_len (-k) and max_occ (-c)
                         if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
                             unique_filtered_smems.push(current_smem);
+                        } else {
+                            if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
+                            if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
                         }
+                    } else {
+                        duplicates += 1;
                     }
                     prev_smem = current_smem;
                 }
             }
+
+    if unique_filtered_smems.is_empty() && all_smems.len() > 0 {
+        log::debug!("{}: All SMEMs filtered out - too_short={}, too_many_occ={}, duplicates={}, min_len={}, max_occ={}",
+            query_name, filtered_too_short, filtered_too_many_occ, duplicates, _opt.min_seed_len, _opt.max_occ);
+
+        // Sample first few SMEMs to see actual values
+        for (i, smem) in all_smems.iter().take(5).enumerate() {
+            let len = smem.n - smem.m + 1;
+            let occ = smem.l - smem.k;
+            log::debug!("{}: Sample SMEM {}: len={}, occ={}, m={}, n={}, k={}, l={}",
+                query_name, i, len, occ, smem.m, smem.n, smem.k, smem.l);
+        }
+    }
     // eprintln!("unique_filtered_smems: {:?}", unique_filtered_smems);
     // --- End Filtering SMEMs ---
 
 
+    log::debug!("{}: Generated {} SMEMs, filtered to {} unique", query_name, all_smems.len(), unique_filtered_smems.len());
+
     // Convert SMEMs to Seed structs and perform seed extension
-    // For now, only process the longest seeds to avoid too many alignments
+    // TODO FIXME: This was limited to 1 seed for development - needs to process ALL seeds
     let mut sorted_smems = unique_filtered_smems;
     sorted_smems.sort_by_key(|smem| -(smem.n - smem.m + 1)); // Sort by length, descending
 
-    // Take only the single longest seed for now (simplified)
-    let useful_smems: Vec<_> = sorted_smems.into_iter().take(1).collect();
+    // TEMPORARY LIMITATION: Take only top seeds (should be ALL seeds in production)
+    let smem_count = sorted_smems.len();
+    let max_seeds = std::cmp::min(smem_count, 10); // Increased from 1 to 10
+    let useful_smems: Vec<_> = sorted_smems.into_iter().take(max_seeds).collect();
 
-    // eprintln!("Processing {} longest SMEMs", useful_smems.len());
+    log::debug!("{}: Using {} of {} filtered SMEMs for alignment", query_name, useful_smems.len(), smem_count);
 
     let mut seeds = Vec::new();
     let mut alignment_jobs = Vec::new(); // Collect alignment jobs for batching
@@ -780,6 +809,8 @@ fn generate_seeds_with_mode(
         seeds.push(seed);
     }
 
+    log::debug!("{}: Found {} seeds, {} alignment jobs", query_name, seeds.len(), alignment_jobs.len());
+
     // --- Execute Alignments (Adaptive Strategy) ---
     // Use adaptive routing strategy that combines:
     // 1. Divergence-based routing (high divergence → scalar, low → SIMD)
@@ -794,11 +825,11 @@ fn generate_seeds_with_mode(
         execute_scalar_alignments(&sw_params, &alignment_jobs)
     };
 
-    // eprintln!("Seed extension complete. {} seeds generated. Starting chaining...", seeds.len());
+    log::debug!("{}: Extended {} seeds, {} CIGARs produced", query_name, seeds.len(), extended_cigars.len());
 
     // --- Seed Chaining ---
     let chained_results = chain_seeds(seeds, _opt);
-    // eprintln!("Chaining complete. {} chains generated.", chained_results.len());
+    log::debug!("{}: Chaining produced {} chains", query_name, chained_results.len());
     // --- End Seed Chaining ---
 
     // For now, let's create a dummy alignment from the first chain
