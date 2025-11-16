@@ -116,9 +116,21 @@ The improvement is much smaller than expected because:
 ### Recommendations
 
 **Short-term** (incremental improvements):
-1. **Adaptive batch sizing**: Use smaller batches for high-divergence sequences
-2. **Hybrid approach**: Route divergent sequences to scalar path automatically
-3. **Early batch completion**: Exit when >50% of lanes terminate (requires careful implementation)
+1. ✅ **Adaptive batch sizing**: Use smaller batches for high-divergence sequences
+   - **Status**: Implemented (Session 32)
+   - **Verification**: Not empirically validated (requires real data with length variation)
+   - **Code**: `src/align.rs::determine_optimal_batch_size()`
+2. ✅ **Hybrid approach**: Route divergent sequences to scalar path automatically
+   - **Status**: Implemented (Session 32)
+   - **Verification**: Not empirically validated (requires real data with length variation)
+   - **Code**: `src/align.rs::execute_adaptive_alignments()`
+3. ✅ **Early batch completion**: Exit when >50% of lanes terminate (requires careful implementation)
+   - **Status**: Implemented (Session 33)
+   - **Implementation**: Maintain running count of terminated lanes, exit when count > batch_size/2
+   - **Optimization**: O(1) termination check (was O(n) per iteration)
+   - **Code**: `src/banded_swa_avx2.rs:217`, `src/banded_swa_avx512.rs:217`
+   - **Actual Impact**: Minimal overhead, potential benefit for high-divergence batches
+   - **Note**: Requires real data with varying termination patterns to validate benefit
 
 **Long-term** (major optimizations):
 1. **Dynamic lane reassignment**: As lanes terminate, assign new alignments to freed lanes

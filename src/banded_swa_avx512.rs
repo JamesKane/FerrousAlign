@@ -199,6 +199,7 @@ pub unsafe fn simd_banded_swa_batch64(
     let mut beg = vec![0i8; SIMD_WIDTH];  // Current band start for each lane
     let mut end = vec![0i8; SIMD_WIDTH];  // Current band end for each lane
     let mut terminated = vec![false; SIMD_WIDTH];  // Track which lanes have terminated early via Z-drop
+    let mut terminated_count = 0usize;  // Running count of terminated lanes for early exit
 
     for lane in 0..SIMD_WIDTH {
         beg[lane] = 0;
@@ -211,8 +212,9 @@ pub unsafe fn simd_banded_swa_batch64(
     let mut max_score_vec = <Engine as crate::simd_abstraction::SimdEngine>::loadu_si128(h0.as_ptr() as *const <Engine as crate::simd_abstraction::SimdEngine>::Vec8);
 
     for i in 0..max_tlen as usize {
-        // Early exit if all lanes are terminated
-        if terminated.iter().all(|&t| t) {
+        // Early batch completion: Exit when majority of lanes (>50%) have terminated
+        // This reduces wasted computation for stragglers while ensuring most work is done
+        if terminated_count > batch_size / 2 {
             break;
         }
 
@@ -366,6 +368,7 @@ pub unsafe fn simd_banded_swa_batch64(
                     // Early termination condition 1: row max drops to 0
                     if row_max == 0 {
                         terminated[lane] = true;
+                        terminated_count += 1;
                         continue;
                     }
 
@@ -375,6 +378,7 @@ pub unsafe fn simd_banded_swa_batch64(
 
                     if score_drop > zdrop {
                         terminated[lane] = true;
+                        terminated_count += 1;
                     }
                 }
             }
