@@ -100,7 +100,10 @@ impl BntSeq {
                     if pac_data.len() <= last_byte_idx {
                         pac_data.resize(last_byte_idx + 1, 0);
                     }
-                    pac_data[last_byte_idx] |= nt4 << ((packed_base_count % 4) << 1);
+                    // CRITICAL: Match C++ bwa-mem2 bit packing order
+                    // Same formula as extraction: ((~pos & 3) << 1)
+                    let shift = ((!(packed_base_count % 4)) & 3) << 1;
+                    pac_data[last_byte_idx] |= nt4 << shift;
                     packed_base_count += 1;
                     pac_len += 1; // Still increment total pac_len for ambiguous base tracking
                 } else {
@@ -359,7 +362,10 @@ impl BntSeq {
             for i in 0..len {
                 let k = start + i;
                 let byte_idx_in_segment = (k / 4 - start_byte_offset) as usize;
-                let base_in_byte_offset = ((k & 3) * 2) as u32;
+                // CRITICAL: Match C++ bwa-mem2 bit order
+                // C++ uses: ((pac)[(l)>>2]>>((~(l)&3)<<1)&3)
+                // Bit shifts are: l=0->6, l=1->4, l=2->2, l=3->0 (MSB to LSB)
+                let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
                 let base = (pac_bytes[byte_idx_in_segment] >> base_in_byte_offset) & 0x3;
                 segment.push(base);
             }

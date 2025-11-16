@@ -131,7 +131,9 @@ AGCT
         pac_file.read_to_end(&mut pac_data)?;
 
         assert_eq!(pac_data.len(), 1);
-        assert_eq!(pac_data[0], 0b00111000); // For AGT (A=0, G=2, T=3)
+        // C++ bwa-mem2 packing: MSB to LSB (reversed bit order)
+        // Position 0 (A=0) at bits 6-7, Position 1 (G=2) at bits 4-5, Position 2 (T=3) at bits 2-3
+        assert_eq!(pac_data[0], 0b00101100); // For AGT with C++ bit order (44 decimal)
 
         cleanup_test_files(&test_dir);
         Ok(())

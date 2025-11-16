@@ -37,7 +37,8 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     let mut text_for_sais: Vec<u8> = Vec::with_capacity((bns.l_pac + 1) as usize);
     for i in 0..bns.l_pac {
         let byte_idx = (i / 4) as usize;
-        let bit_offset = (i % 4) * 2;
+        // CRITICAL: Match C++ bwa-mem2 bit order (same as extraction in bntseq.rs)
+        let bit_offset = ((!(i % 4)) & 3) * 2;
         let base = (pac_data[byte_idx] >> bit_offset) & 0x03;
         text_for_sais.push((base + 1) as u8); // Shift: A=1, C=2, G=3, T=4
     }
