@@ -83,10 +83,11 @@ AGCTAGCT
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Expected SAM output (simplified)
+    // Expected SAM output (with @PG header added in Session 26)
     let expected_sam_output_lines = vec![
         "@HD\tVN:1.0\tSO:unsorted",
         "@SQ\tSN:chr1\tLN:16",
+        "@PG\tID:ferrous-align", // Partial match - full line includes PN, VN, CL
         "read1\t0\tchr1\t1\t60\t8M\t*\t0\t0\tAGCTAGCT\t########",
     ];
     let expected_sam_output = expected_sam_output_lines.join("\n");

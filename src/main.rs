@@ -143,7 +143,8 @@ enum Commands {
         min_score: i32,
 
         /// If there are <INT hits with score >80% of the max score, output all in XA [5,200]
-        #[arg(short = 'h', long, value_name = "INT[,INT]", default_value = "5,200")]
+        /// Note: bwa-mem2 uses -h, but we use --max-xa-hits to avoid conflict with --help
+        #[arg(long, value_name = "INT[,INT]", default_value = "5,200")]
         max_xa_hits: String,
 
         /// Output all alignments for SE or unpaired PE

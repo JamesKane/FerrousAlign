@@ -70,7 +70,7 @@ fn test_paired_end_fr_orientation() -> io::Result<()> {
     // Build the index if it doesn't exist
     if !ref_prefix.with_extension("bwt.2bit.64").exists() {
         eprintln!("Building index for {}", ref_fasta_path.display());
-        bwa_mem2_rust::bwa_index::bwa_index(&ref_fasta_path, &ref_prefix)?;
+        ferrous_align::bwa_index::bwa_index(&ref_fasta_path, &ref_prefix)?;
         eprintln!("Index building complete.");
     }
 
@@ -174,7 +174,7 @@ TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
     create_fasta_file(&temp_dir, "ref.fa", ref_fasta_content)?;
 
     // 2. Build the index
-    bwa_mem2_rust::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
+    ferrous_align::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
 
     // 3. Create paired-end reads mapping to different chromosomes
     // Read1 matches chr1 (ATCG pattern)
@@ -249,7 +249,7 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCT
     create_fasta_file(&temp_dir, "ref.fa", ref_fasta_content)?;
 
     // 2. Build the index
-    bwa_mem2_rust::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
+    ferrous_align::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
 
     // 3. Create paired reads where read2 doesn't match well
     let read1_fastq = "@pair1/1
@@ -324,7 +324,7 @@ fn test_paired_end_insert_size_stats() -> io::Result<()> {
     create_fasta_file(&temp_dir, "ref.fa", &ref_fasta_content)?;
 
     // 2. Build the index
-    bwa_mem2_rust::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
+    ferrous_align::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
 
     // 3. Create multiple paired-end reads with insert sizes: 250, 300, 300, 300, 350
     // This should give: mean ~300, median 300
@@ -396,7 +396,7 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCT
     create_fasta_file(&temp_dir, "ref.fa", ref_fasta_content)?;
 
     // 2. Build the index
-    bwa_mem2_rust::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
+    ferrous_align::bwa_index::bwa_index(&temp_dir.join("ref.fa"), &ref_prefix)?;
 
     // 3. Test FR orientation (most common)
     // Read1: Forward strand, position 1
