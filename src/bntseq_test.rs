@@ -226,13 +226,16 @@ AGCT
         let segment4 = bns.get_reference_segment(5, 1)?;
         assert_eq!(segment4, vec![2]); // G (using NST_NT4_TABLE values)
 
-        // Test error: out of bounds
+        // Test bridging forward-reverse boundary: returns empty (not error)
+        // l_pac = 8, so requesting (0, 10) bridges from forward into RC territory
         let result = bns.get_reference_segment(0, 10);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Vec::<u8>::new()); // Should return empty vec
 
-        // Test error: start + len > l_pac
+        // Test bridging boundary: (7, 2) means positions 7-8, bridging l_pac=8
         let result = bns.get_reference_segment(7, 2);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Vec::<u8>::new()); // Should return empty vec
 
         cleanup_test_files(&test_dir);
         Ok(())

@@ -12,6 +12,18 @@ test_50bp_*
 test_100bp_*
 .DS_Store
 
+# Development notes and session logs
+/dev_notes/
+
+# Test output files (should not be committed)
+*.log
+*.sam
+test_*.sh
+test_*.fasta
+test_*.fastq
+*_results.txt
+test_*.txt
+
 # Large test data files
 chm13v2.0.fa.gz*
 HG03576.final.cram*

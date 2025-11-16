@@ -6,7 +6,7 @@ use crate::mem::BwaIndex;
 use crate::mem_opt::MemOpt;
 
 // Define a struct to represent a seed
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Seed {
     pub query_pos: i32, // Position in the query
     pub ref_pos: u64,   // Position in the reference
@@ -458,9 +458,9 @@ fn partition_jobs_by_divergence(jobs: &[AlignmentJob]) -> (Vec<AlignmentJob>, Ve
 pub(crate) fn execute_batched_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
-) -> Vec<Vec<(u8, i32)>> {
+) -> Vec<(i32, Vec<(u8, i32)>)> {
     const BATCH_SIZE: usize = 16;
-    let mut all_cigars = vec![Vec::new(); jobs.len()];
+    let mut all_results = vec![(0, Vec::new()); jobs.len()];
 
     // Process jobs in batches of 16
     for batch_start in (0..jobs.len()).step_by(BATCH_SIZE) {
@@ -485,15 +485,15 @@ pub(crate) fn execute_batched_alignments(
         // Execute batched alignment with CIGAR generation
         let results = sw_params.simd_banded_swa_batch16_with_cigar(&batch_data);
 
-        // Extract CIGARs from results
+        // Extract scores and CIGARs from results
         for (i, result) in results.iter().enumerate() {
             if i < batch_jobs.len() {
-                all_cigars[batch_start + i] = result.cigar.clone();
+                all_results[batch_start + i] = (result.score.score, result.cigar.clone());
             }
         }
     }
 
-    all_cigars
+    all_results
 }
 
 /// Execute alignments with adaptive strategy selection
@@ -510,7 +510,7 @@ pub(crate) fn execute_batched_alignments(
 pub(crate) fn execute_adaptive_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
-) -> Vec<Vec<(u8, i32)>> {
+) -> Vec<(i32, Vec<(u8, i32)>)> {
     if jobs.is_empty() {
         return Vec::new();
     }
@@ -537,10 +537,10 @@ pub(crate) fn execute_adaptive_alignments(
     );
 
     // Create result vector with correct size
-    let mut all_cigars = vec![Vec::new(); jobs.len()];
+    let mut all_results = vec![(0, Vec::new()); jobs.len()];
 
     // Process high-divergence jobs with scalar (more efficient for divergent sequences)
-    let high_div_cigars = if !high_div_jobs.is_empty() {
+    let high_div_results = if !high_div_jobs.is_empty() {
         log::debug!(
             "Processing {} high-divergence jobs with scalar",
             high_div_jobs.len()
@@ -551,7 +551,7 @@ pub(crate) fn execute_adaptive_alignments(
     };
 
     // Process low-divergence jobs with adaptive batched SIMD
-    let low_div_cigars = if !low_div_jobs.is_empty() {
+    let low_div_results = if !low_div_jobs.is_empty() {
         let optimal_batch_size = determine_optimal_batch_size(&low_div_jobs);
         log::debug!(
             "Processing {} low-divergence jobs with SIMD (batch_size={})",
@@ -569,22 +569,22 @@ pub(crate) fn execute_adaptive_alignments(
 
     for (original_idx, job) in jobs.iter().enumerate() {
         let div_score = estimate_divergence_score(job.query.len(), job.target.len());
-        let cigar = if div_score > 0.7 {
+        let result = if div_score > 0.7 {
             // High divergence - get from scalar results
-            let result = high_div_cigars[high_idx].clone();
+            let res = high_div_results[high_idx].clone();
             high_idx += 1;
-            result
+            res
         } else {
             // Low divergence - get from SIMD results
-            let result = low_div_cigars[low_idx].clone();
+            let res = low_div_results[low_idx].clone();
             low_idx += 1;
-            result
+            res
         };
 
-        all_cigars[original_idx] = cigar;
+        all_results[original_idx] = result;
     }
 
-    all_cigars
+    all_results
 }
 
 /// Execute batched alignments with configurable batch size
@@ -592,8 +592,8 @@ fn execute_batched_alignments_with_size(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
     batch_size: usize,
-) -> Vec<Vec<(u8, i32)>> {
-    let mut all_cigars = vec![Vec::new(); jobs.len()];
+) -> Vec<(i32, Vec<(u8, i32)>)> {
+    let mut all_results = vec![(0, Vec::new()); jobs.len()];
 
     // Process jobs in batches of specified size
     for batch_start in (0..jobs.len()).step_by(batch_size) {
@@ -618,33 +618,43 @@ fn execute_batched_alignments_with_size(
         // Execute batched alignment with CIGAR generation
         let results = sw_params.simd_banded_swa_batch16_with_cigar(&batch_data);
 
-        // Extract CIGARs from results
+        // Extract scores and CIGARs from results
         for (i, result) in results.iter().enumerate() {
             if i < batch_jobs.len() {
-                all_cigars[batch_start + i] = result.cigar.clone();
+                all_results[batch_start + i] = (result.score.score, result.cigar.clone());
             }
         }
     }
 
-    all_cigars
+    all_results
 }
 
 /// Execute alignments using scalar processing (fallback for small batches)
 pub(crate) fn execute_scalar_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
-) -> Vec<Vec<(u8, i32)>> {
+) -> Vec<(i32, Vec<(u8, i32)>)> {
     jobs.iter()
-        .map(|job| {
-            let (_score, cigar) = sw_params.scalar_banded_swa(
-                job.query.len() as i32,
+        .enumerate()
+        .map(|(idx, job)| {
+            let qlen = job.query.len() as i32;
+            let tlen = job.target.len() as i32;
+            let (score_out, cigar) = sw_params.scalar_banded_swa(
+                qlen,
                 &job.query,
-                job.target.len() as i32,
+                tlen,
                 &job.target,
                 job.band_width,
                 0, // h0
             );
-            cigar
+
+            if idx < 3 {  // Log first 3 alignments for debugging
+                log::debug!("Scalar alignment {}: qlen={}, tlen={}, score={}, CIGAR_len={}, first_op={:?}",
+                            idx, qlen, tlen, score_out.score, cigar.len(),
+                            cigar.first().map(|&(op, len)| (op as char, len)));
+            }
+
+            (score_out.score, cigar)
         })
         .collect()
 }
@@ -807,41 +817,43 @@ fn generate_seeds_with_mode(
         prev_array.reverse();
 
         // Phase 2: Backward search (C++ lines 595-665)
+        log::debug!("{}: [RUST Phase 2] Starting backward search from x={}, prev_array.len()={}",
+                    query_name, x, prev_array.len());
+
         for j in (0..x).rev() {
             let a = encoded_query[j];
 
             if a >= 4 {
                 // Hit 'N' base - stop backward search
+                log::debug!("{}: [RUST Phase 2] Hit 'N' base at j={}, stopping", query_name, j);
                 break;
             }
 
             let mut curr_array: Vec<SMEM> = Vec::new();
             let mut curr_s = None;
 
-            if x < 3 {
-                log::debug!("{}: x={}, j={}, prev_array.len()={}",
-                            query_name, x, j, prev_array.len());
-            }
+            log::debug!("{}: [RUST Phase 2] j={}, base={}, prev_array.len()={}",
+                        query_name, j, a, prev_array.len());
 
             for (i, smem) in prev_array.iter().enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
-                if x < 3 && i == 0 {
-                    let old_len = smem.n - smem.m + 1;
-                    let new_len = new_smem.n - new_smem.m + 1;
-                    log::debug!("{}: x={}, j={}, i={}: old_smem(m={},n={},len={},s={}), new_smem(m={},n={},len={},s={}), min_intv={}",
-                                query_name, x, j, i,
-                                smem.m, smem.n, old_len, smem.s,
-                                new_smem.m, new_smem.n, new_len, new_smem.s,
-                                min_intv);
-                }
+                let old_len = smem.n - smem.m + 1;
+                let new_len = new_smem.n - new_smem.m + 1;
+
+                log::debug!("{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
+                            query_name, x, j, i,
+                            smem.m, smem.n, old_len, smem.k, smem.l, smem.s,
+                            new_smem.m, new_smem.n, new_len, new_smem.k, new_smem.l, new_smem.s,
+                            min_intv);
 
                 // Check if we should output this SMEM (C++ lines 613-619)
                 if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
                     let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                    log::debug!("{}: x={}, j={}, PUSH TO ALL_SMEMS: smem(m={},n={},k={},l={},s={}), l-k={}, match={}",
-                                query_name, x, j, smem.m, smem.n, smem.k, smem.l, smem.s, s_from_lk, smem.s == s_from_lk);
+                    let s_matches = smem.s == s_from_lk;
+                    log::debug!("{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
+                                query_name, smem.m, smem.n, smem.k, smem.l, smem.s, new_smem.s, min_intv, s_from_lk, s_matches);
                     all_smems.push(*smem);
                     break; // C++ breaks after first output in this position
                 }
@@ -850,8 +862,13 @@ fn generate_seeds_with_mode(
                 if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
                     curr_s = Some(new_smem.s);
                     curr_array.push(new_smem);
+                    log::debug!("{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
+                                query_name, new_smem.s, min_intv);
                     break; // C++ breaks after first successful extension
                 }
+
+                log::debug!("{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
+                            query_name, new_smem.s, min_intv, curr_s == Some(new_smem.s));
             }
 
             // Continue with remaining SMEMs (C++ lines 632-649)
@@ -859,14 +876,12 @@ fn generate_seeds_with_mode(
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
-                if x < 3 && i < 3 {
-                    let new_len = new_smem.n - new_smem.m + 1;
-                    log::debug!("{}: x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
-                                query_name, x, j, i+1,
-                                smem.m, smem.n, smem.s,
-                                new_smem.m, new_smem.n, new_len, new_smem.s,
-                                new_smem.s >= min_intv && curr_s != Some(new_smem.s));
-                }
+                let new_len = new_smem.n - new_smem.m + 1;
+                log::debug!("{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
+                            query_name, x, j, i+1,
+                            smem.m, smem.n, smem.s,
+                            new_smem.m, new_smem.n, new_len, new_smem.s,
+                            new_smem.s >= min_intv && curr_s != Some(new_smem.s));
 
                 if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
                     curr_s = Some(new_smem.s);
@@ -876,7 +891,11 @@ fn generate_seeds_with_mode(
 
             // Update prev_array for next iteration (C++ lines 650-654)
             prev_array = curr_array;
+            log::debug!("{}: [RUST Phase 2] After j={}, prev_array.len()={}",
+                        query_name, j, prev_array.len());
+
             if prev_array.is_empty() {
+                log::debug!("{}: [RUST Phase 2] prev_array empty, breaking at j={}", query_name, j);
                 break;
             }
         }
@@ -887,14 +906,17 @@ fn generate_seeds_with_mode(
             let len = smem.n - smem.m + 1;
             if len >= min_seed_len {
                 let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                log::debug!("{}: Position x={}, OUTPUT SMEM (line 852): m={}, n={}, len={}, s={}, l-k={}, match={}, next_x={}",
-                            query_name, x, smem.m, smem.n, len, smem.s, s_from_lk, smem.s == s_from_lk, next_x);
+                let s_matches = smem.s == s_from_lk;
+                log::debug!("{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
+                            query_name, smem.m, smem.n, smem.k, smem.l, smem.s, len, s_from_lk, s_matches, next_x);
                 all_smems.push(smem);
-            } else if len > 15 {
-                // Log SMEMs that are close to the threshold
-                log::debug!("{}: Position x={}, CLOSE but < min_seed_len: m={}, n={}, len={}, s={}, min_seed_len={}",
-                            query_name, x, smem.m, smem.n, len, smem.s, min_seed_len);
+            } else {
+                // Log SMEMs that are rejected for being too short
+                log::debug!("{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
+                            query_name, smem.m, smem.n, len, min_seed_len, smem.s);
             }
+        } else {
+            log::debug!("{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}", query_name, x);
         }
 
         // CRITICAL: Skip ahead to next uncovered position (C++ line 679)
@@ -1138,6 +1160,9 @@ fn generate_seeds_with_mode(
         .collect();
     query_segment_encoded_rc.reverse();
 
+    log::debug!("{}: query_segment_encoded (FWD) first_10={:?}", query_name, &query_segment_encoded[..10.min(query_segment_encoded.len())]);
+    log::debug!("{}: query_segment_encoded_rc (RC) first_10={:?}", query_name, &query_segment_encoded_rc[..10.min(query_segment_encoded_rc.len())]);
+
     for (idx, smem) in useful_smems.iter().enumerate() {
         let smem = *smem;
 
@@ -1230,12 +1255,10 @@ fn generate_seeds_with_mode(
                        &smem_query_bases[..5.min(smem_query_bases.len())]);
         }
 
-        // Adjust query_pos for reverse complement seeds
-        let query_pos = if is_rev {
-            (query_len as i32 - 1) - smem.n // Adjust to original query coordinates
-        } else {
-            smem.m
-        };
+        // Use query position in the coordinate system of the query we're aligning
+        // For RC seeds, use smem.m directly (RC query coordinates)
+        // For forward seeds, use smem.m directly (forward query coordinates)
+        let query_pos = smem.m;
 
         let seed = Seed {
             query_pos,
@@ -1273,13 +1296,21 @@ fn generate_seeds_with_mode(
 
         match target_segment_result {
             Ok(target_segment) => {
-                log::debug!("{}: Seed {}: target_segment_len={}, query_first_10={:?}, target_first_10={:?}",
-                            query_name, idx, target_segment.len(),
-                            &query_segment_encoded[..10.min(query_segment_encoded.len())],
+                // CRITICAL FIX: Use correct query orientation for alignment
+                // Use is_rev (updated after RC region conversion) not smem.is_rev_comp
+                let query_for_alignment = if is_rev {
+                    query_segment_encoded_rc.clone()
+                } else {
+                    query_segment_encoded.clone()
+                };
+
+                log::debug!("{}: Seed {}: target_segment_len={}, is_rev={}, query_first_10={:?}, target_first_10={:?}",
+                            query_name, idx, target_segment.len(), is_rev,
+                            &query_for_alignment[..10.min(query_for_alignment.len())],
                             &target_segment[..10.min(target_segment.len())]);
                 alignment_jobs.push(AlignmentJob {
                     seed_idx: idx,
-                    query: query_segment_encoded.clone(),
+                    query: query_for_alignment,
                     target: target_segment,
                     band_width: _opt.w, // Use band width from options
                 });
@@ -1313,15 +1344,19 @@ fn generate_seeds_with_mode(
         execute_scalar_alignments(&sw_params, &alignment_jobs)
     };
 
+    // Separate scores and CIGARs
+    let alignment_scores: Vec<i32> = extended_cigars.iter().map(|(score, _)| *score).collect();
+    let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars.into_iter().map(|(_, cigar)| cigar).collect();
+
     log::debug!(
         "{}: Extended {} seeds, {} CIGARs produced",
         query_name,
         seeds.len(),
-        extended_cigars.len()
+        alignment_cigars.len()
     );
 
     // --- Seed Chaining ---
-    let chained_results = chain_seeds(seeds, _opt);
+    let chained_results = chain_seeds(seeds.clone(), _opt);
     log::debug!(
         "{}: Chaining produced {} chains",
         query_name,
@@ -1329,17 +1364,43 @@ fn generate_seeds_with_mode(
     );
     // --- End Seed Chaining ---
 
-    // For now, let's create a dummy alignment from the first chain
+    // Select the best alignment from ALL seeds, not just those in the chain
+    // This is a simplification - C++ bwa-mem2 uses chain filtering and multi-alignment logic
     let mut alignments = Vec::new();
-    if let Some(first_chain) = chained_results.first() {
-        // Find the CIGAR for the best seed in the chain (simplification for now)
-        // In a real implementation, you'd likely re-run SWA for the entire chained region
-        // or combine CIGARs from individual seeds.
-        let best_seed_idx_in_chain = first_chain.seeds[0]; // Assuming first seed in chain is "best" for cigar
-        let cigar_for_alignment = extended_cigars[best_seed_idx_in_chain].clone();
+    if !alignment_scores.is_empty() {
+        // Find the seed with the best alignment score across all seeds
+        let mut best_seed_idx = 0;
+        let mut best_score = alignment_scores[0];
+
+        for (seed_idx, &score) in alignment_scores.iter().enumerate() {
+            if score > best_score {
+                best_score = score;
+                best_seed_idx = seed_idx;
+            }
+        }
+
+        log::debug!("{}: Selected best seed {} (score={}) from {} total seeds",
+                    query_name, best_seed_idx, best_score, alignment_scores.len());
+
+        let cigar_for_alignment = alignment_cigars[best_seed_idx].clone();
+
+        log::debug!("{}: Best alignment CIGAR={:?}",
+                    query_name,
+                    cigar_for_alignment.iter().take(5).collect::<Vec<_>>());
+
+        // Get the best seed's information
+        let best_seed = &seeds[best_seed_idx];
+
+        // Calculate the adjusted reference start position for full query alignment
+        // The alignment was performed with the reference adjusted backwards by query_pos
+        let adjusted_ref_start = if best_seed.query_pos as u64 > best_seed.ref_pos {
+            0
+        } else {
+            best_seed.ref_pos - best_seed.query_pos as u64
+        };
 
         // Convert global position to chromosome-specific position
-        let global_pos = first_chain.ref_start as i64;
+        let global_pos = adjusted_ref_start as i64;
         let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(global_pos);
         let rid = bwa_idx.bns.bns_pos2rid(pos_f);
 
@@ -1349,17 +1410,17 @@ fn generate_seeds_with_mode(
             (ann.name.clone(), rid as usize, chr_relative_pos as u64)
         } else {
             log::warn!("{}: Invalid reference ID {} for position {}", query_name, rid, global_pos);
-            ("unknown_ref".to_string(), 0, first_chain.ref_start)
+            ("unknown_ref".to_string(), 0, best_seed.ref_pos)
         };
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
-            flag: if first_chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
+            flag: if best_seed.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
             ref_name,
             ref_id,
             pos: chr_pos,
             mapq: 60,                 // Placeholder, needs proper calculation
-            score: first_chain.score, // Add alignment score for paired-end scoring
+            score: best_score,        // Use actual alignment score
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
             pnext: 0,
@@ -1599,8 +1660,8 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
     let result = adjusted_sa_val + count;
 
-    log::debug!("get_sa_entry: original_pos={}, final_pos={}, count={}, sa_index={}, sa_val={}, adjusted={}, result={}",
-               original_pos, pos, count, sa_index, sa_val, adjusted_sa_val, result);
+    log::debug!("get_sa_entry: original_pos={}, final_pos={}, count={}, sa_index={}, sa_val={}, adjusted={}, result={}, l_pac={}, sentinel={}",
+               original_pos, pos, count, sa_index, sa_val, adjusted_sa_val, result, bwa_idx.bns.l_pac, (bwa_idx.bns.l_pac << 1));
     result
 }
 
@@ -2030,29 +2091,37 @@ mod tests {
         ];
 
         // Test scalar execution
-        let scalar_cigars = super::execute_scalar_alignments(&sw_params, &jobs);
-        assert_eq!(scalar_cigars.len(), 2, "Should return 2 CIGARs for 2 jobs");
+        let scalar_results = super::execute_scalar_alignments(&sw_params, &jobs);
+        assert_eq!(scalar_results.len(), 2, "Should return 2 results for 2 jobs");
         assert!(
-            !scalar_cigars[0].is_empty(),
+            !scalar_results[0].1.is_empty(),
             "First CIGAR should not be empty"
         );
         assert!(
-            !scalar_cigars[1].is_empty(),
+            !scalar_results[1].1.is_empty(),
             "Second CIGAR should not be empty"
         );
 
-        // Test batched execution (currently falls back to scalar)
-        let batched_cigars = super::execute_batched_alignments(&sw_params, &jobs);
-        assert_eq!(batched_cigars.len(), 2, "Should return 2 CIGARs for 2 jobs");
+        // Test batched execution
+        let batched_results = super::execute_batched_alignments(&sw_params, &jobs);
+        assert_eq!(batched_results.len(), 2, "Should return 2 results for 2 jobs");
 
-        // Results should be identical (since batched currently uses scalar fallback)
+        // Results should be identical (CIGARs and scores)
         assert_eq!(
-            scalar_cigars[0], batched_cigars[0],
-            "Scalar and batched should produce identical results"
+            scalar_results[0].0, batched_results[0].0,
+            "Scores should match"
         );
         assert_eq!(
-            scalar_cigars[1], batched_cigars[1],
-            "Scalar and batched should produce identical results"
+            scalar_results[0].1, batched_results[0].1,
+            "CIGARs should match"
+        );
+        assert_eq!(
+            scalar_results[1].0, batched_results[1].0,
+            "Scores should match"
+        );
+        assert_eq!(
+            scalar_results[1].1, batched_results[1].1,
+            "CIGARs should match"
         );
     }
 }

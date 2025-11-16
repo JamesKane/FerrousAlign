@@ -128,14 +128,21 @@ impl BntSeq {
             seq_id += 1;
         }
 
-        bns.l_pac = packed_base_count; // Assign the count of non-ambiguous bases to l_pac
+        bns.l_pac = packed_base_count; // Assign the count of non-ambiguous bases to l_pac (forward strand only)
         bns.n_seqs = seq_id;
         bns.ambs = current_ambs;
         bns.n_holes = bns.ambs.len() as i32;
         bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
 
+        // NOTE: Unlike C++ bwa-mem2 which appends RC to pac in memory before building BWT,
+        // we store ONLY the forward strand in the .pac file (standard bwa-mem2 disk format).
+        // The RC strand is computed on-the-fly in get_reference_segment() when needed.
+        // BWT is still built on bidirectional text (forward + RC) during index construction.
         let mut pac_file = File::create(prefix.with_extension("pac"))?;
         pac_file.write_all(&pac_data)?;
+
+        log::info!("Created .pac file: forward_len={}, file_bytes={}",
+                  packed_base_count, pac_data.len());
 
         Ok(bns)
     }
@@ -294,34 +301,72 @@ impl BntSeq {
     }
 
     // New method to get a segment of the reference sequence
+    // CRITICAL: Handles both forward (start < l_pac) and reverse complement (start >= l_pac) strands
+    // Matches C++ bwa-mem2 bns_get_seq() behavior
     pub fn get_reference_segment(&self, start: u64, len: u64) -> io::Result<Vec<u8>> {
         let pac_file_path = self
             .pac_file_path
             .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PAC file path not set"))?;
 
-        let mut pac_file = BufReader::new(File::open(pac_file_path)?);
+        let end = start + len;
+
+        // Check if we're bridging the forward-reverse boundary
+        if start < self.l_pac && end > self.l_pac {
+            log::warn!("get_reference_segment: bridging forward-reverse boundary at start={}, end={}, l_pac={} - returning empty",
+                      start, end, self.l_pac);
+            return Ok(Vec::new());
+        }
 
         let mut segment = Vec::with_capacity(len as usize);
 
-        let start_byte_offset = start / 4;
-        let end_byte_offset = (start + len - 1) / 4;
-        let bytes_to_read = (end_byte_offset - start_byte_offset + 1) as usize;
+        if start >= self.l_pac {
+            // Reverse complement strand: convert to forward coordinates
+            // C++ formula: beg_f = (l_pac<<1) - 1 - end, end_f = (l_pac<<1) - 1 - beg
+            let beg_f = ((self.l_pac << 1) - 1).saturating_sub(end - 1);
+            let end_f = ((self.l_pac << 1) - 1).saturating_sub(start);
 
-        let mut pac_bytes = vec![0u8; bytes_to_read];
-        pac_file.seek(SeekFrom::Start(start_byte_offset as u64))?;
-        pac_file.read_exact(&mut pac_bytes)?;
+            log::debug!("get_reference_segment: RC strand start={}, len={}, l_pac={}, beg_f={}, end_f={}",
+                       start, len, self.l_pac, beg_f, end_f);
 
-        for i in 0..len {
-            let k = start + i;
-            let byte_idx_in_segment = (k / 4 - start_byte_offset) as usize;
-            // CRITICAL: Match C++ bwa-mem2 bit order
-            // C++ uses: ((pac)[(l)>>2]>>((~(l)&3)<<1)&3)
-            // Bit shifts are: l=0->6, l=1->4, l=2->2, l=3->0 (MSB to LSB)
-            let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
-            let base = (pac_bytes[byte_idx_in_segment] >> base_in_byte_offset) & 0x3;
-            segment.push(base);
+            // Read in reverse order with complementation
+            let mut pac_file = BufReader::new(File::open(pac_file_path)?);
+            for k in (beg_f + 1..=end_f).rev() {
+                let byte_idx = k / 4;
+                let mut byte_buf = [0u8; 1];
+                pac_file.seek(SeekFrom::Start(byte_idx))?;
+                pac_file.read_exact(&mut byte_buf)?;
+
+                let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
+                let base = (byte_buf[0] >> base_in_byte_offset) & 0x3;
+                let complement = 3 - base; // A<->T (0<->3), C<->G (1<->2)
+                segment.push(complement);
+            }
+        } else {
+            // Forward strand: read normally
+            let start_byte_offset = start / 4;
+            let end_byte_offset = (end - 1) / 4;
+            let bytes_to_read = (end_byte_offset - start_byte_offset + 1) as usize;
+
+            let mut pac_file = BufReader::new(File::open(pac_file_path)?);
+            let mut pac_bytes = vec![0u8; bytes_to_read];
+            pac_file.seek(SeekFrom::Start(start_byte_offset))?;
+            pac_file.read_exact(&mut pac_bytes)?;
+
+            log::debug!("get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, bytes_to_read={}",
+                       start, len, self.l_pac, start_byte_offset, bytes_to_read);
+
+            for i in 0..len {
+                let k = start + i;
+                let byte_idx_in_segment = (k / 4 - start_byte_offset) as usize;
+                let base_in_byte_offset = ((k & 3) * 2) as u32;
+                let base = (pac_bytes[byte_idx_in_segment] >> base_in_byte_offset) & 0x3;
+                segment.push(base);
+            }
         }
+
+        log::debug!("get_reference_segment: extracted {} bases, first_10={:?}",
+                   segment.len(), &segment[..segment.len().min(10)]);
 
         Ok(segment)
     }
