@@ -198,7 +198,7 @@ pub unsafe fn simd_banded_swa_batch32(
     // Compute band boundaries for each lane
     let mut beg = vec![0i8; SIMD_WIDTH];  // Current band start for each lane
     let mut end = vec![0i8; SIMD_WIDTH];  // Current band end for each lane
-    let terminated = vec![false; SIMD_WIDTH];  // Track which lanes have terminated early (TODO: implement Z-drop)
+    let mut terminated = vec![false; SIMD_WIDTH];  // Track which lanes have terminated early via Z-drop
 
     for lane in 0..SIMD_WIDTH {
         beg[lane] = 0;
@@ -348,8 +348,39 @@ pub unsafe fn simd_banded_swa_batch32(
         let mut max_score_vals = [0i8; SIMD_WIDTH];
         <Engine as crate::simd_abstraction::SimdEngine>::storeu_si128(max_score_vals.as_mut_ptr() as *mut <Engine as crate::simd_abstraction::SimdEngine>::Vec8, max_score_vec);
 
-        // Z-drop early termination (simplified - no actual Z-drop logic yet)
-        // TODO: Implement proper Z-drop threshold checking
+        // Z-drop early termination: Check if score has dropped too much
+        // This implements the same logic as the SSE version's Z-drop check
+        if zdrop > 0 {
+            for lane in 0..SIMD_WIDTH {
+                if !terminated[lane] && i > 0 && i < tlen[lane] as usize {
+                    // Compute maximum score seen in this row (within adaptive band)
+                    let mut row_max = 0i8;
+                    let row_beg = current_beg[lane] as usize;
+                    let row_end = current_end[lane] as usize;
+
+                    for j in row_beg..row_end {
+                        let h_val = h_matrix[j * SIMD_WIDTH + lane];
+                        row_max = row_max.max(h_val);
+                    }
+
+                    // Early termination condition 1: row max drops to 0
+                    if row_max == 0 {
+                        terminated[lane] = true;
+                        continue;
+                    }
+
+                    // Early termination condition 2: zdrop threshold
+                    let global_max = max_score_vals[lane];
+                    let score_drop = (global_max as i32) - (row_max as i32);
+
+                    if score_drop > zdrop {
+                        terminated[lane] = true;
+                    }
+                }
+            }
+        }
+
+        // Update max_scores array
         for lane in 0..SIMD_WIDTH {
             max_scores[lane] = max_score_vals[lane];
         }
