@@ -1536,4 +1536,444 @@ mod tests {
 
         println!("✅ Full batch (16) CIGAR generation test passed!");
     }
+
+    // ========================================================================
+    // Cross-Engine Correctness Tests (AVX2/AVX-512 vs SSE Baseline)
+    // ========================================================================
+
+    /// Test that SSE and AVX2 produce identical alignment scores
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_sse_vs_avx2_correctness() {
+        if !is_x86_feature_detected!("avx2") {
+            eprintln!("Skipping AVX2 correctness test - CPU does not support AVX2");
+            return;
+        }
+
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Create test sequences (ACGT encoding: A=0, C=1, G=2, T=3)
+        let test_cases = vec![
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]), // Perfect match
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3]), // One mismatch
+            (vec![0u8, 1, 2, 2, 3], vec![0u8, 1, 2, 3]), // Insertion in query
+            (vec![0u8, 1, 3], vec![0u8, 1, 2, 3]), // Deletion in query
+            (
+                vec![0u8, 1, 2, 3, 0, 1, 2, 3],
+                vec![0u8, 1, 2, 3, 0, 1, 2, 3],
+            ), // Longer match
+        ];
+
+        for (idx, (query, target)) in test_cases.iter().enumerate() {
+            // Pad to 32 sequences for AVX2
+            let mut batch32 = Vec::new();
+            for _ in 0..32 {
+                batch32.push((
+                    query.len() as i32,
+                    query.as_slice(),
+                    target.len() as i32,
+                    target.as_slice(),
+                    100,
+                    0,
+                ));
+            }
+
+            // Run with SSE (batch16)
+            let sse_results = bsw.simd_banded_swa_batch16(&batch32[0..16]);
+
+            // Run with AVX2 (batch32) - directly call AVX2 kernel
+            let avx2_results = unsafe {
+                crate::banded_swa_avx2::simd_banded_swa_batch32(
+                    &batch32,
+                    bsw.o_del,
+                    bsw.e_del,
+                    bsw.o_ins,
+                    bsw.e_ins,
+                    bsw.zdrop,
+                    &bsw.mat,
+                    bsw.m,
+                )
+            };
+
+            // Debug output for first test case
+            if idx == 0 {
+                println!("SSE result: score={}, qle={}, tle={}",
+                    sse_results[0].score, sse_results[0].qle, sse_results[0].tle);
+                println!("AVX2 result: score={}, qle={}, tle={}",
+                    avx2_results[0].score, avx2_results[0].qle, avx2_results[0].tle);
+                println!("Scoring matrix check:");
+                println!("  A-A (mat[0]): {}", bsw.mat[0]);
+                println!("  C-C (mat[6]): {}", bsw.mat[6]);
+                println!("  G-G (mat[12]): {}", bsw.mat[12]);
+                println!("  T-T (mat[18]): {}", bsw.mat[18]);
+            }
+
+            // Compare first result (all results in batch should be identical)
+            assert_eq!(
+                sse_results[0].score,
+                avx2_results[0].score,
+                "Test case {}: SSE score {} != AVX2 score {}",
+                idx,
+                sse_results[0].score,
+                avx2_results[0].score
+            );
+
+            assert_eq!(
+                sse_results[0].qle,
+                avx2_results[0].qle,
+                "Test case {}: SSE query end {} != AVX2 query end {}",
+                idx,
+                sse_results[0].qle,
+                avx2_results[0].qle
+            );
+
+            assert_eq!(
+                sse_results[0].tle,
+                avx2_results[0].tle,
+                "Test case {}: SSE target end {} != AVX2 target end {}",
+                idx,
+                sse_results[0].tle,
+                avx2_results[0].tle
+            );
+        }
+
+        println!("✅ SSE vs AVX2 correctness test passed ({} test cases)", test_cases.len());
+    }
+
+    /// Test that SSE and AVX-512 produce identical alignment scores
+    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+    #[test]
+    fn test_sse_vs_avx512_correctness() {
+        if !is_x86_feature_detected!("avx512bw") {
+            eprintln!("Skipping AVX-512 correctness test - CPU does not support AVX-512BW");
+            return;
+        }
+
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Create test sequences
+        let test_cases = vec![
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]), // Perfect match
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3]), // One mismatch
+            (vec![0u8, 1, 2, 2, 3], vec![0u8, 1, 2, 3]), // Insertion
+            (vec![0u8, 1, 3], vec![0u8, 1, 2, 3]), // Deletion
+        ];
+
+        for (idx, (query, target)) in test_cases.iter().enumerate() {
+            // Pad to 64 sequences for AVX-512
+            let mut batch64 = Vec::new();
+            for _ in 0..64 {
+                batch64.push((
+                    query.len() as i32,
+                    query.as_slice(),
+                    target.len() as i32,
+                    target.as_slice(),
+                    100,
+                    0,
+                ));
+            }
+
+            // Run with SSE (batch16)
+            let sse_results = bsw.simd_banded_swa_batch16(&batch64[0..16]);
+
+            // Run with AVX-512 (batch64) - directly call AVX-512 kernel
+            let avx512_results = unsafe {
+                crate::banded_swa_avx512::simd_banded_swa_batch64(
+                    &batch64,
+                    bsw.o_del,
+                    bsw.e_del,
+                    bsw.o_ins,
+                    bsw.e_ins,
+                    bsw.zdrop,
+                    &bsw.mat,
+                    bsw.m,
+                )
+            };
+
+            // Compare results
+            assert_eq!(
+                sse_results[0].score,
+                avx512_results[0].score,
+                "Test case {}: SSE score {} != AVX-512 score {}",
+                idx,
+                sse_results[0].score,
+                avx512_results[0].score
+            );
+
+            assert_eq!(
+                sse_results[0].qle,
+                avx512_results[0].qle,
+                "Test case {}: SSE query end {} != AVX-512 query end {}",
+                idx,
+                sse_results[0].qle,
+                avx512_results[0].qle
+            );
+
+            assert_eq!(
+                sse_results[0].tle,
+                avx512_results[0].tle,
+                "Test case {}: SSE target end {} != AVX-512 target end {}",
+                idx,
+                sse_results[0].tle,
+                avx512_results[0].tle
+            );
+        }
+
+        println!("✅ SSE vs AVX-512 correctness test passed ({} test cases)", test_cases.len());
+    }
+
+    /// Test that all three engines produce identical results on a comprehensive batch
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_all_engines_batch_correctness() {
+        use crate::simd_abstraction::detect_optimal_simd_engine;
+
+        let engine = detect_optimal_simd_engine();
+        println!("Detected optimal SIMD engine: {:?}", engine);
+
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Create a diverse set of test sequences
+        let test_sequences = vec![
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]),          // Perfect match
+            (vec![0u8, 1, 2, 3], vec![3u8, 2, 1, 0]),          // Reverse
+            (vec![0u8, 0, 0, 0], vec![1u8, 1, 1, 1]),          // All mismatch
+            (vec![0u8, 1, 2, 3, 0, 1], vec![0u8, 1, 2, 3]),    // Query longer
+            (vec![0u8, 1, 2], vec![0u8, 1, 2, 3, 0, 1]),       // Target longer
+            (vec![0u8, 1, 1, 2, 3], vec![0u8, 1, 2, 3]),       // Insertion
+            (vec![0u8, 2, 3], vec![0u8, 1, 2, 3]),             // Deletion
+            (vec![0u8; 8], vec![0u8; 8]),                      // Long perfect match
+        ];
+
+        // Pad to ensure we have 64 sequences (for AVX-512 full batch test)
+        let mut padded_sequences = test_sequences.clone();
+        while padded_sequences.len() < 64 {
+            padded_sequences.extend(test_sequences.iter().cloned());
+        }
+        padded_sequences.truncate(64);
+
+        // Build batch for SSE (16 sequences)
+        let mut sse_batch = Vec::new();
+        for i in 0..16 {
+            let (query, target) = &padded_sequences[i];
+            sse_batch.push((
+                query.len() as i32,
+                query.as_slice(),
+                target.len() as i32,
+                target.as_slice(),
+                100,
+                0,
+            ));
+        }
+
+        // Run SSE baseline
+        let sse_results = bsw.simd_banded_swa_batch16(&sse_batch);
+
+        // Test AVX2 if available
+        if is_x86_feature_detected!("avx2") {
+            let mut avx2_batch = Vec::new();
+            for i in 0..32 {
+                let (query, target) = &padded_sequences[i];
+                avx2_batch.push((
+                    query.len() as i32,
+                    query.as_slice(),
+                    target.len() as i32,
+                    target.as_slice(),
+                    100,
+                    0,
+                ));
+            }
+
+            let avx2_results = unsafe {
+                crate::banded_swa_avx2::simd_banded_swa_batch32(
+                    &avx2_batch,
+                    bsw.o_del,
+                    bsw.e_del,
+                    bsw.o_ins,
+                    bsw.e_ins,
+                    bsw.zdrop,
+                    &bsw.mat,
+                    bsw.m,
+                )
+            };
+
+            // Compare first 16 results (overlap with SSE batch)
+            for i in 0..16 {
+                assert_eq!(
+                    sse_results[i].score,
+                    avx2_results[i].score,
+                    "Sequence {}: SSE score {} != AVX2 score {}",
+                    i,
+                    sse_results[i].score,
+                    avx2_results[i].score
+                );
+            }
+
+            println!("✅ SSE vs AVX2 batch correctness verified (16 sequences)");
+        }
+
+        // Test AVX-512 if available and feature enabled
+        #[cfg(feature = "avx512")]
+        {
+            if is_x86_feature_detected!("avx512bw") {
+                let mut avx512_batch = Vec::new();
+                for i in 0..64 {
+                    let (query, target) = &padded_sequences[i];
+                    avx512_batch.push((
+                        query.len() as i32,
+                        query.as_slice(),
+                        target.len() as i32,
+                        target.as_slice(),
+                        100,
+                        0,
+                    ));
+                }
+
+                let avx512_results = unsafe {
+                    crate::banded_swa_avx512::simd_banded_swa_batch64(
+                        &avx512_batch,
+                        bsw.o_del,
+                        bsw.e_del,
+                        bsw.o_ins,
+                        bsw.e_ins,
+                        bsw.zdrop,
+                        &bsw.mat,
+                        bsw.m,
+                    )
+                };
+
+                // Compare first 16 results (overlap with SSE batch)
+                for i in 0..16 {
+                    assert_eq!(
+                        sse_results[i].score,
+                        avx512_results[i].score,
+                        "Sequence {}: SSE score {} != AVX-512 score {}",
+                        i,
+                        sse_results[i].score,
+                        avx512_results[i].score
+                    );
+                }
+
+                println!("✅ SSE vs AVX-512 batch correctness verified (16 sequences)");
+            }
+        }
+
+        println!("✅ All engines batch correctness test completed");
+    }
+
+    /// Stress test with random sequences across all engines
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_random_sequences_all_engines() {
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Generate pseudo-random sequences (deterministic for testing)
+        let mut sequences = Vec::new();
+        for seed in 0..16 {
+            let mut query = Vec::new();
+            let mut target = Vec::new();
+
+            for i in 0..10 {
+                query.push(((seed * 3 + i * 7) % 4) as u8);
+                target.push(((seed * 5 + i * 11) % 4) as u8);
+            }
+
+            sequences.push((query, target));
+        }
+
+        // Build batch
+        let mut batch = Vec::new();
+        for (query, target) in &sequences {
+            batch.push((
+                query.len() as i32,
+                query.as_slice(),
+                target.len() as i32,
+                target.as_slice(),
+                100,
+                0,
+            ));
+        }
+
+        // Run with SSE
+        let sse_results = bsw.simd_banded_swa_batch16(&batch);
+
+        // Compare with AVX2 if available
+        if is_x86_feature_detected!("avx2") {
+            // Pad to 32 sequences
+            let mut batch32 = batch.clone();
+            for _ in batch.len()..32 {
+                batch32.push(batch[0]);
+            }
+
+            let avx2_results = unsafe {
+                crate::banded_swa_avx2::simd_banded_swa_batch32(
+                    &batch32,
+                    bsw.o_del,
+                    bsw.e_del,
+                    bsw.o_ins,
+                    bsw.e_ins,
+                    bsw.zdrop,
+                    &bsw.mat,
+                    bsw.m,
+                )
+            };
+
+            for i in 0..sequences.len() {
+                assert_eq!(
+                    sse_results[i].score,
+                    avx2_results[i].score,
+                    "Random sequence {}: SSE score {} != AVX2 score {}",
+                    i,
+                    sse_results[i].score,
+                    avx2_results[i].score
+                );
+            }
+
+            println!("✅ Random sequences: SSE vs AVX2 verified");
+        }
+
+        // Compare with AVX-512 if available
+        #[cfg(feature = "avx512")]
+        {
+            if is_x86_feature_detected!("avx512bw") {
+                // Pad to 64 sequences
+                let mut batch64 = batch.clone();
+                for _ in batch.len()..64 {
+                    batch64.push(batch[0]);
+                }
+
+                let avx512_results = unsafe {
+                    crate::banded_swa_avx512::simd_banded_swa_batch64(
+                        &batch64,
+                        bsw.o_del,
+                        bsw.e_del,
+                        bsw.o_ins,
+                        bsw.e_ins,
+                        bsw.zdrop,
+                        &bsw.mat,
+                        bsw.m,
+                    )
+                };
+
+                for i in 0..sequences.len() {
+                    assert_eq!(
+                        sse_results[i].score,
+                        avx512_results[i].score,
+                        "Random sequence {}: SSE score {} != AVX-512 score {}",
+                        i,
+                        sse_results[i].score,
+                        avx512_results[i].score
+                    );
+                }
+
+                println!("✅ Random sequences: SSE vs AVX-512 verified");
+            }
+        }
+
+        println!("✅ Random sequence stress test completed");
+    }
 }

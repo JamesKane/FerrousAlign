@@ -232,20 +232,14 @@ let h_vec = Engine::loadu_si128(h_matrix.as_ptr().add(j * SIMD_WIDTH));
 
 ### Current Test Status
 
-✅ **All 99 unit tests passing**
+✅ **All 113 unit tests passing** (as of Session 29)
 - No regressions introduced
 - **Clean compilation on x86_64** (Ryzen 9 7900X)
 - Proper `#[cfg(target_arch = "x86_64")]` gating for AVX2/AVX-512
 - AVX-512 properly feature-gated (disabled by default)
+- Zero unsafe function call warnings (E0133)
 
-### What's Tested
-
-- Individual SIMD intrinsic operations
-- Batch processing with various sizes
-- Edge cases (empty sequences, short sequences)
-- CIGAR generation correctness
-
-### What's Tested (Session 28)
+### What's Tested (Session 28 - Initial x86_64 Compilation)
 
 ✅ **x86_64 Compilation**
 - Clean build on AMD Ryzen 9 7900X
@@ -259,18 +253,56 @@ let h_vec = Engine::loadu_si128(h_matrix.as_ptr().add(j * SIMD_WIDTH));
 - Runtime dispatch selects AVX2 on compatible CPUs
 - Feature-gated AVX-512 (requires `--features avx512` + nightly)
 
+### What's Tested (Session 29 - Bug Fixes & Correctness)
+
+✅ **SIMD Abstraction Layer Tests** (10 new tests in `simd_abstraction.rs`)
+- Basic arithmetic operations (add, saturating add/sub)
+- Max/min operations for all three engines
+- Comparison operations (eq, gt)
+- Bitwise operations (and, or, andnot)
+- Memory operations (load/store, aligned/unaligned)
+- Zero vector creation
+- AVX2-specific operation validation
+- AVX-512-specific operation validation (feature-gated)
+- Cross-engine consistency verification
+- Runtime CPU detection validation
+
+✅ **Cross-Engine Correctness Tests** (4 new tests in `banded_swa.rs`)
+- SSE vs AVX2 bit-for-bit comparison (5 test cases)
+  - Perfect match (ACGT vs ACGT)
+  - Single mismatch
+  - Insertion in query
+  - Deletion in query
+  - Longer sequences
+- SSE vs AVX-512 bit-for-bit comparison (4 test cases, feature-gated)
+- Comprehensive batch validation (diverse sequence types)
+- Random sequence stress testing (16 deterministic cases)
+
+✅ **Critical Bug Fix**
+- **Issue**: AVX2/AVX-512 kernels used unsigned operations (`adds_epu8`, `max_epu8`) on signed i8 scores
+- **Symptom**: Perfect 4-base match scored -1 instead of 4
+- **Root Cause**: Negative intermediate values misinterpreted as 255 (unsigned), corrupting DP matrix
+- **Fix**: Changed all scoring operations to signed (`adds_epi8`, `max_epi8`) matching SSE baseline
+- **Validation**: All cross-engine tests now pass with identical scores
+
+✅ **Code Quality**
+- Fixed 93 unsafe function call warnings (E0133)
+- Added `#[allow(unsafe_op_in_unsafe_fn)]` to appropriate scopes
+- Removed unnecessary `mut` qualifiers
+- Clean build with only minor unused variable warnings
+
 ### What's NOT Tested (Yet)
 
 ⏳ **Performance Validation**
 - Actual speedup measurements on AVX2 hardware
 - Actual speedup measurements on AVX-512 hardware (when enabled)
-- Comparison: AVX2 vs SSE bit-for-bit correctness
-- Comparison: AVX-512 vs SSE bit-for-bit correctness
+- Memory bandwidth profiling
+- Comparison with C++ bwa-mem2 performance
 
 ⏳ **Production Workloads**
 - Real sequencing data alignment
 - Large-scale batch processing
-- Memory bandwidth profiling
+- End-to-end pipeline testing
 
 ---
 

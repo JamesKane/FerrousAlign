@@ -28,6 +28,7 @@ use crate::simd_abstraction::SimdEngine256 as Engine;
 /// - DP matrices (H, E, F): `matrix[position * 32 + lane]`
 /// - Query profiles: `profile[target_base][query_pos * 32 + lane]`
 #[target_feature(enable = "avx2")]
+#[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn simd_banded_swa_batch32(
     batch: &[(i32, &[u8], i32, &[u8], i32, i32)], // (qlen, query, tlen, target, w, h0)
     o_del: i32,      // Gap open penalty (deletion)
@@ -146,8 +147,8 @@ pub unsafe fn simd_banded_swa_batch32(
     <Engine as crate::simd_abstraction::SimdEngine>::storeu_si128(h_matrix.as_mut_ptr() as *mut <Engine as crate::simd_abstraction::SimdEngine>::Vec8, h0_vec);
 
     // H[0][1] = max(0, h0 - oe_ins)
-    let h1_vec = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(h0_vec, oe_ins_vec);
-    let h1_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(h1_vec, zero_vec);
+    let h1_vec = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(h0_vec, oe_ins_vec);
+    let h1_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(h1_vec, zero_vec);
     <Engine as crate::simd_abstraction::SimdEngine>::storeu_si128(
         h_matrix.as_mut_ptr().add(SIMD_WIDTH) as *mut <Engine as crate::simd_abstraction::SimdEngine>::Vec8,
         h1_vec
@@ -156,8 +157,8 @@ pub unsafe fn simd_banded_swa_batch32(
     // H[0][j] = max(0, H[0][j-1] - e_ins) for j > 1
     let mut h_prev = h1_vec;
     for j in 2..max_qlen as usize {
-        let h_curr = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(h_prev, e_ins_vec);
-        let h_curr = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(h_curr, zero_vec);
+        let h_curr = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(h_prev, e_ins_vec);
+        let h_curr = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(h_curr, zero_vec);
         <Engine as crate::simd_abstraction::SimdEngine>::storeu_si128(
             h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut <Engine as crate::simd_abstraction::SimdEngine>::Vec8,
             h_curr
@@ -197,7 +198,7 @@ pub unsafe fn simd_banded_swa_batch32(
     // Compute band boundaries for each lane
     let mut beg = vec![0i8; SIMD_WIDTH];  // Current band start for each lane
     let mut end = vec![0i8; SIMD_WIDTH];  // Current band end for each lane
-    let mut terminated = vec![false; SIMD_WIDTH];  // Track which lanes have terminated early
+    let terminated = vec![false; SIMD_WIDTH];  // Track which lanes have terminated early (TODO: implement Z-drop)
 
     for lane in 0..SIMD_WIDTH {
         beg[lane] = 0;
@@ -225,13 +226,13 @@ pub unsafe fn simd_banded_swa_batch32(
         let end_vec = <Engine as crate::simd_abstraction::SimdEngine>::loadu_si128(end.as_ptr() as *const <Engine as crate::simd_abstraction::SimdEngine>::Vec8);
 
         // current_beg = max(beg, i - w)
-        let i_minus_w = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(i_vec, w_vec);
-        let current_beg_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(beg_vec, i_minus_w);
+        let i_minus_w = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(i_vec, w_vec);
+        let current_beg_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(beg_vec, i_minus_w);
 
         // current_end = min(end, min(i + w + 1, qlen))
         let one_vec = <Engine as crate::simd_abstraction::SimdEngine>::set1_epi8(1);
-        let i_plus_w = <Engine as crate::simd_abstraction::SimdEngine>::adds_epu8(i_vec, w_vec);
-        let i_plus_w_plus_1 = <Engine as crate::simd_abstraction::SimdEngine>::adds_epu8(i_plus_w, one_vec);
+        let i_plus_w = <Engine as crate::simd_abstraction::SimdEngine>::adds_epi8(i_vec, w_vec);
+        let i_plus_w_plus_1 = <Engine as crate::simd_abstraction::SimdEngine>::adds_epi8(i_plus_w, one_vec);
         let current_end_vec = <Engine as crate::simd_abstraction::SimdEngine>::min_epu8(end_vec, i_plus_w_plus_1);
         let current_end_vec = <Engine as crate::simd_abstraction::SimdEngine>::min_epu8(current_end_vec, qlen_vec);
 
@@ -255,7 +256,7 @@ pub unsafe fn simd_banded_swa_batch32(
         for j in 0..max_qlen as usize {
             // Create mask for positions within band (per-lane)
             let j_vec = <Engine as crate::simd_abstraction::SimdEngine>::set1_epi8(j as i8);
-            let in_band_left = <Engine as crate::simd_abstraction::SimdEngine>::cmpgt_epi8(j_vec, <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(current_beg_vec, one_vec));
+            let in_band_left = <Engine as crate::simd_abstraction::SimdEngine>::cmpgt_epi8(j_vec, <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(current_beg_vec, one_vec));
             let in_band_right = <Engine as crate::simd_abstraction::SimdEngine>::cmpgt_epi8(current_end_vec, j_vec);
             let in_band_mask = <Engine as crate::simd_abstraction::SimdEngine>::and_si128(in_band_left, in_band_right);
 
@@ -285,24 +286,24 @@ pub unsafe fn simd_banded_swa_batch32(
             let score_vec = <Engine as crate::simd_abstraction::SimdEngine>::loadu_si128(score_vals.as_ptr() as *const <Engine as crate::simd_abstraction::SimdEngine>::Vec8);
 
             // M = H[i-1][j-1] + score (diagonal + score)
-            let m_vec = <Engine as crate::simd_abstraction::SimdEngine>::adds_epu8(h_diag_vec, score_vec);
-            let m_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(m_vec, zero_vec);
+            let m_vec = <Engine as crate::simd_abstraction::SimdEngine>::adds_epi8(h_diag_vec, score_vec);
+            let m_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(m_vec, zero_vec);
 
             // Calculate E (gap in target/deletion in query)
-            let e_open = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(m_vec, oe_del_vec);
-            let e_open = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(e_open, zero_vec);
-            let e_extend = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(e_prev, e_del_vec);
-            let e_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(e_open, e_extend);
+            let e_open = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(m_vec, oe_del_vec);
+            let e_open = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(e_open, zero_vec);
+            let e_extend = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(e_prev, e_del_vec);
+            let e_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(e_open, e_extend);
 
             // Calculate F (gap in query/insertion in target)
-            let f_open = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(m_vec, oe_ins_vec);
-            let f_open = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(f_open, zero_vec);
-            let f_extend = <Engine as crate::simd_abstraction::SimdEngine>::subs_epu8(f_vec, e_ins_vec);
-            f_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(f_open, f_extend);
+            let f_open = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(m_vec, oe_ins_vec);
+            let f_open = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(f_open, zero_vec);
+            let f_extend = <Engine as crate::simd_abstraction::SimdEngine>::subs_epi8(f_vec, e_ins_vec);
+            f_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(f_open, f_extend);
 
             // H[i][j] = max(M, E, F)
-            let mut h_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(m_vec, e_vec);
-            h_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(h_vec, f_vec);
+            let mut h_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(m_vec, e_vec);
+            h_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(h_vec, f_vec);
 
             // Apply combined mask: band mask AND termination mask
             let combined_mask = <Engine as crate::simd_abstraction::SimdEngine>::and_si128(in_band_mask, term_mask);
@@ -326,7 +327,7 @@ pub unsafe fn simd_banded_swa_batch32(
 
             // Track maximum score per lane with positions
             let is_greater = <Engine as crate::simd_abstraction::SimdEngine>::cmpgt_epi8(h_vec, max_score_vec);
-            max_score_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epu8(h_vec, max_score_vec);
+            max_score_vec = <Engine as crate::simd_abstraction::SimdEngine>::max_epi8(h_vec, max_score_vec);
 
             // Update positions where new max was found
             let mut h_vals = [0i8; SIMD_WIDTH];
