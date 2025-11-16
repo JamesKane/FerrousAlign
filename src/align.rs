@@ -188,18 +188,43 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
 /// C++ reference: FMI_search.cpp lines 546-554
 #[inline]
 pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
+    // Debug logging for forward extension
+    let debug_enabled = log::log_enabled!(log::Level::Trace);
+
+    if debug_enabled {
+        log::trace!("forward_ext: input smem(k={}, l={}, s={}), a={}",
+                    smem.k, smem.l, smem.s, a);
+    }
+
     // Step 1: Swap k and l (lines 547-548)
     let mut smem_swapped = smem;
     smem_swapped.k = smem.l;
     smem_swapped.l = smem.k;
 
+    if debug_enabled {
+        log::trace!("forward_ext: after swap smem_swapped(k={}, l={})",
+                    smem_swapped.k, smem_swapped.l);
+    }
+
     // Step 2: Backward extension with complement base (line 549)
     let mut result = backward_ext(bwa_idx, smem_swapped, 3 - a);
 
+    if debug_enabled {
+        log::trace!("forward_ext: after backward_ext result(k={}, l={}, s={})",
+                    result.k, result.l, result.s);
+    }
+
     // Step 3: Swap k and l back (lines 552-553)
+    // NOTE: We swap k and l but KEEP s unchanged (matches C++ behavior)
+    // The s value is still valid because it represents interval size
     let k_temp = result.k;
     result.k = result.l;
     result.l = k_temp;
+
+    if debug_enabled {
+        log::trace!("forward_ext: after swap back result(k={}, l={}, s={})",
+                    result.k, result.l, result.s);
+    }
 
     result
 }
@@ -648,7 +673,10 @@ fn generate_seeds_with_mode(
     //   Phase 2: Backward extension (generate final bidirectional SMEMs)
 
     let min_seed_len = _opt.min_seed_len;
-    let min_intv = _opt.max_occ as u64; // min_intv is the occurrence threshold
+    // CRITICAL FIX: C++ bwa-mem2 uses min_intv=1 during SMEM generation (not max_occ!)
+    // See bwamem.cpp:661 - min_intv_ar[l] = 1;
+    // The max_occ filter is applied LATER during SMEM filtering, not during generation
+    let min_intv = 1u64;
 
     log::debug!("{}: Starting SMEM generation: min_seed_len={}, min_intv={}, query_len={}",
                 query_name, min_seed_len, min_intv, query_len);
@@ -673,6 +701,13 @@ fn generate_seeds_with_mode(
             is_rev_comp: false,
         };
 
+        if x == 0 {
+            log::debug!("{}: Initial SMEM at x={}: a={}, k={}, l={}, s={}, l2[{}]={}, l2[{}]={}",
+                        query_name, x, a, smem.k, smem.l, smem.s,
+                        a, bwa_idx.bwt.l2[a as usize],
+                        3 - a, bwa_idx.bwt.l2[(3 - a) as usize]);
+        }
+
         // Phase 1: Forward extension (C++ lines 537-581)
         let mut prev_array: Vec<SMEM> = Vec::new();
 
@@ -681,11 +716,20 @@ fn generate_seeds_with_mode(
 
             if a >= 4 {
                 // Hit 'N' base - stop forward extension
+                if x == 0 && log::log_enabled!(log::Level::Debug) {
+                    log::debug!("{}: x={}, forward extension stopped at j={} due to N base",
+                                query_name, x, j);
+                }
                 break;
             }
 
             // Forward extension (C++ lines 546-554)
             let new_smem = forward_ext(bwa_idx, smem, a);
+
+            if x == 0 && j <= 12 {
+                log::debug!("{}: x={}, j={}, a={}, old_smem.s={}, new_smem(k={}, l={}, s={})",
+                            query_name, x, j, a, smem.s, new_smem.k, new_smem.l, new_smem.s);
+            }
 
             // If interval size changed, save previous SMEM (C++ lines 556-559)
             if new_smem.s != smem.s {
@@ -694,6 +738,10 @@ fn generate_seeds_with_mode(
 
             // Check if interval became too small (C++ lines 560-564)
             if new_smem.s < min_intv {
+                if x == 0 && log::log_enabled!(log::Level::Debug) {
+                    log::debug!("{}: x={}, forward extension stopped at j={} because new_smem.s={} < min_intv={}",
+                                query_name, x, j, new_smem.s, min_intv);
+                }
                 break;
             }
 
@@ -726,9 +774,24 @@ fn generate_seeds_with_mode(
             let mut curr_array: Vec<SMEM> = Vec::new();
             let mut curr_s = None;
 
-            for smem in &prev_array {
+            if x < 3 {
+                log::debug!("{}: x={}, j={}, prev_array.len()={}",
+                            query_name, x, j, prev_array.len());
+            }
+
+            for (i, smem) in prev_array.iter().enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
+
+                if x < 3 && i == 0 {
+                    let old_len = smem.n - smem.m + 1;
+                    let new_len = new_smem.n - new_smem.m + 1;
+                    log::debug!("{}: x={}, j={}, i={}: old_smem(m={},n={},len={},s={}), new_smem(m={},n={},len={},s={}), min_intv={}",
+                                query_name, x, j, i,
+                                smem.m, smem.n, old_len, smem.s,
+                                new_smem.m, new_smem.n, new_len, new_smem.s,
+                                min_intv);
+                }
 
                 // Check if we should output this SMEM (C++ lines 613-619)
                 if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
@@ -745,9 +808,18 @@ fn generate_seeds_with_mode(
             }
 
             // Continue with remaining SMEMs (C++ lines 632-649)
-            for smem in prev_array.iter().skip(1) {
+            for (i, smem) in prev_array.iter().skip(1).enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
+
+                if x < 3 && i < 3 {
+                    let new_len = new_smem.n - new_smem.m + 1;
+                    log::debug!("{}: x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
+                                query_name, x, j, i+1,
+                                smem.m, smem.n, smem.s,
+                                new_smem.m, new_smem.n, new_len, new_smem.s,
+                                new_smem.s >= min_intv && curr_s != Some(new_smem.s));
+                }
 
                 if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
                     curr_s = Some(new_smem.s);
@@ -766,16 +838,14 @@ fn generate_seeds_with_mode(
         if !prev_array.is_empty() {
             let smem = prev_array[0];
             let len = smem.n - smem.m + 1;
-            if x < 3 {
-                log::debug!("{}: Position x={}, final prev_array[0]: len={}, min_seed_len={}, will_output={}",
-                            query_name, x, len, min_seed_len, len >= min_seed_len);
-            }
             if len >= min_seed_len {
+                log::debug!("{}: Position x={}, OUTPUT SMEM: m={}, n={}, len={}, s={}",
+                            query_name, x, smem.m, smem.n, len, smem.s);
                 all_smems.push(smem);
-                if x < 3 {
-                    log::debug!("{}: OUTPUT SMEM at x={}: m={}, n={}, len={}",
-                                query_name, x, smem.m, smem.n, len);
-                }
+            } else if len > 15 {
+                // Log SMEMs that are close to the threshold
+                log::debug!("{}: Position x={}, CLOSE but < min_seed_len: m={}, n={}, len={}, s={}, min_seed_len={}",
+                            query_name, x, smem.m, smem.n, len, smem.s, min_seed_len);
             }
         }
     }
@@ -897,7 +967,9 @@ fn generate_seeds_with_mode(
 
     if let Some(mut prev_smem) = all_smems.first().cloned() {
         let seed_len = prev_smem.n - prev_smem.m + 1;
-        let occurrences = prev_smem.l - prev_smem.k;
+        // CRITICAL FIX: Use s field for occurrences, NOT l - k
+        // The l field encodes reverse complement BWT info, not interval endpoint
+        let occurrences = prev_smem.s;
 
         // Filter by min_seed_len (-k) and max_occ (-c)
         if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
@@ -916,7 +988,8 @@ fn generate_seeds_with_mode(
             if current_smem != prev_smem {
                 // Use PartialEq for comparison
                 let seed_len = current_smem.n - current_smem.m + 1;
-                let occurrences = current_smem.l - current_smem.k;
+                // CRITICAL FIX: Use s field for occurrences, NOT l - k
+                let occurrences = current_smem.s;
 
                 // Filter by min_seed_len (-k) and max_occ (-c)
                 if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {

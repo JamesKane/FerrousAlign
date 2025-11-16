@@ -31,7 +31,7 @@ Contains single 148bp read from HG002 whole-genome sequencing dataset.
 
 ### C++ bwa-mem2 Reference Implementation
 ```bash
-/home/jkane/Applications/bwa-mem2/
+/tmp/bwa-mem2-diag/
 ```
 
 ## Running Tests
@@ -43,7 +43,7 @@ Contains single 148bp read from HG002 whole-genome sequencing dataset.
   /home/jkane/Genomics/HG002/test_1read.fq
 
 # C++ reference (for comparison)
-/home/jkane/Applications/bwa-mem2/bwa-mem2 mem -v 3 \
+/tmp/bwa-mem2-diag/bwa-mem2 mem -v 3 \
   /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   /home/jkane/Genomics/HG002/test_1read.fq
 ```
@@ -93,11 +93,35 @@ Contains single 148bp read from HG002 whole-genome sequencing dataset.
   - Forward extension phase: collects 12-13 intermediate SMEMs
   - Backward extension phase: should extend SMEMs further
 
-### Current Status (Debugging Phase):
-- Forward extension working: generating prev_arrays with 12-13 SMEMs
-- SMEMs have interval sizes above threshold (s=1429, 1112, 870 > min_intv=500)
-- **Issue**: SMEMs only length 11, need >= 19 (min_seed_len)
-- **Analysis**: Backward phase should extend `m` backward to create longer SMEMs
-- Forward extends `n` forward by ~11 positions before interval drops
-- Backward should extend `m` backward by many more positions
-- Need to debug why backward extension isn't producing longer SMEMs
+### Current Status (Debugging Phase - Session 2025-11-16 continued):
+
+**CRITICAL BUG FOUND**: Forward extension stops too early!
+- C++ bwa-mem2: Generates SMEMs with len=96, 51, 19, 19 (extends to j=95)
+- Rust: Generates NO SMEMs >= 19 (stops at j=11)
+
+**Root Cause**: Forward extension stopping condition
+- Initial SMEM (x=0): k=0, l=4381983819, s=1817861263
+- Forward extension j=1: k=1344759810, l=1344759809, s=473101453
+  - **Note**: k > l is OK! The `l` field encodes reverse complement BWT info, NOT interval endpoint
+  - The `s` field represents interval size/occurrence count
+- s values decrease: 1817861263 → 473101453 → ... → 1429 → **433**
+- Stops at j=11 because s=433 < min_intv=500
+- **But C++ extends to j=95 with final s=1!**
+
+### CRITICAL BUGS FIXED (Session 2025-11-16):
+
+**Bug 1: Wrong min_intv during SMEM generation**
+- **Problem**: Used `min_intv = max_occ` (500), causing forward extension to stop at j=11
+- **Fix**: Use `min_intv = 1` to match C++ (bwamem.cpp:661)
+- **Impact**: Now extends to j=95+ like C++, generating long SMEMs
+
+**Bug 2: Wrong occurrence count in SMEM filtering**
+- **Problem**: Used `occurrences = l - k` (invalid, since l encodes reverse complement BWT)
+- **Fix**: Use `occurrences = s` (the actual interval size)
+- **Impact**: SMEMs now pass filtering correctly
+
+**Results after fixes**:
+- Generated: 950 SMEMs → filtered to 566 unique (was 0 before!)
+- Using 10 seeds for alignment
+- Chaining: produces 1 chain
+- **Next**: Debug why SAM output is not being produced (chain → SAM conversion issue)
