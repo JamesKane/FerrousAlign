@@ -331,12 +331,84 @@ fn test_backward_ext_boundary() {
   - Added early batch completion optimization
   - Created INSTRUMENTATION_GUIDE.md and WGS_BENCHMARKING_GUIDE.md
 
+## Bug Fix - 2025-11-16
+
+### Root Cause Identified
+
+The bug was in the `backward_ext()` function at `src/align.rs:168-172`. The calculation of `l_arr` was fundamentally incorrect:
+
+**Buggy Code:**
+```rust
+l_arr[3] = smem.l + sentinel_offset;  // Uses OLD smem.l!
+l_arr[2] = l_arr[3] + s_arr[3];
+l_arr[1] = l_arr[2] + s_arr[2];
+l_arr[0] = l_arr[1] + s_arr[1];
+
+smem.k = k_arr[a as usize];
+smem.l = l_arr[a as usize];  // Assigns wrong l value
+smem.s = s_arr[a as usize];
+```
+
+**Problem**: The code was using the OLD `smem.l` value to calculate the new interval end, then adding cumulative sums of s_arr values. This produced completely invalid BWT intervals where `k > l`, causing integer underflow when calculating occurrence counts.
+
+**Fix Applied:**
+```rust
+// Calculate l_arr correctly: l = k + s for each base
+// The new interval end is simply the start plus the size
+for b in 0..4 {
+    l_arr[b] = k_arr[b] + s_arr[b];
+}
+
+smem.k = k_arr[a as usize];
+smem.l = l_arr[a as usize];
+smem.s = s_arr[a as usize];
+
+// Apply sentinel offset if needed
+if sentinel_offset > 0 && smem.k <= bwa_idx.sentinel_index as u64 && smem.l > bwa_idx.sentinel_index as u64 {
+    smem.l += sentinel_offset;
+}
+
+// Validation: ensure BWT interval invariants hold
+debug_assert!(smem.k <= smem.l, "BWT interval invariant violated: k={} > l={}", smem.k, smem.l);
+debug_assert!(smem.s == smem.l - smem.k, "BWT interval size mismatch: s={} but l-k={}", smem.s, smem.l - smem.k);
+debug_assert!(smem.l <= bwa_idx.bwt.seq_len, "BWT interval out of bounds: l={} > seq_len={}", smem.l, bwa_idx.bwt.seq_len);
+```
+
+### Test Results
+
+**Before Fix:**
+- 4,740 SMEMs generated → 0 unique after filtering
+- All SMEMs had invalid occurrence counts (billions)
+- Zero alignments produced
+
+**After Fix:**
+- 4,740 SMEMs generated → 81 unique after filtering ✅
+- Valid occurrence counts
+- Test results:
+  - 1 read: 1 alignment produced ✅
+  - 1,000 reads: 998 alignments with `-T 0`, 356 with default threshold ✅
+  - No crashes, all tests pass ✅
+
+### Validation Added
+
+Added three `debug_assert!` checks to catch invalid BWT intervals:
+1. `k <= l` (fundamental BWT interval invariant)
+2. `s == l - k` (size consistency)
+3. `l <= seq_len` (bounds checking)
+
+These assertions will catch similar bugs early in debug builds.
+
 ## Current Status
 
-**BLOCKED**: Cannot proceed with SIMD optimization validation until SMEM generation is fixed.
+**RESOLVED**: BWT interval calculation bug fixed. SMEM generation now produces valid intervals.
 
-**Severity**: CRITICAL - Zero alignments produced on real data
+**Testing**: Verified with HG002 WGS data (GRCh38 reference)
+- 1,000 reads processed successfully in 0.10 seconds
+- 35.6% alignment rate with default quality threshold (T=30)
+- 99.8% alignment rate with minimal threshold (T=0)
 
-**Workaround**: None - this is a fundamental bug in the core alignment algorithm
-
-**Timeline**: Must fix before any benchmarking or performance testing can be valid
+**Next Steps**:
+1. Investigate CIGAR quality issues (some alignments show all insertions)
+2. Tune scoring parameters for better alignment quality
+3. Resume SIMD optimization validation
+4. Run full WGS benchmarking suite

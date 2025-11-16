@@ -39,10 +39,6 @@ pub struct CpOcc {
     pub one_hot_bwt_str: [u64; 4],
 }
 
-
-
-
-
 // Scoring matrix matching C++ defaults (Match=1, Mismatch=-4)
 // This matches C++ bwa_fill_scmat() with a=1, b=4
 // A, C, G, T, N
@@ -52,11 +48,11 @@ pub struct CpOcc {
 // T -4 -4 -4  1 -1
 // N -1 -1 -1 -1 -1
 pub const DEFAULT_SCORING_MATRIX: [i8; 25] = [
-     1, -4, -4, -4, -1,  // A row
-    -4,  1, -4, -4, -1,  // C row
-    -4, -4,  1, -4, -1,  // G row
-    -4, -4, -4,  1, -1,  // T row
-    -1, -1, -1, -1, -1,  // N row
+    1, -4, -4, -4, -1, // A row
+    -4, 1, -4, -4, -1, // C row
+    -4, -4, 1, -4, -1, // G row
+    -4, -4, -4, 1, -1, // T row
+    -1, -1, -1, -1, -1, // N row
 ];
 
 // Global one_hot_mask_array (initialized once)
@@ -91,7 +87,7 @@ fn popcount64(x: u64) -> i64 {
             // Sum all 8 lanes using horizontal add (pairwise additions)
             // vcnt gives us 8 bytes, each with bit count of that byte
             // We need to sum them all to get total popcount
-            let sum16 = vpaddl_u8(cnt);    // Pairwise add to 4x u16
+            let sum16 = vpaddl_u8(cnt); // Pairwise add to 4x u16
             let sum32 = vpaddl_u16(sum16); // Pairwise add to 2x u32
             let sum64 = vpaddl_u32(sum32); // Pairwise add to 1x u64
 
@@ -152,27 +148,55 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
         //           b, b, bwa_idx.bwt.l2[b as usize], occ_sp, occ_ep, k_arr[b as usize]);
 
         // Defensive: avoid u64 underflow if occ_ep < occ_sp due to malformed/placeholder data
-        let s = if occ_ep >= occ_sp {
-            occ_ep - occ_sp
-        } else {
-            0
-        };
+        let s = if occ_ep >= occ_sp { occ_ep - occ_sp } else { 0 };
         s_arr[b as usize] = s as u64;
     }
 
-    let mut sentinel_offset = 0;
-    if smem.k <= bwa_idx.sentinel_index as u64 && (smem.k + smem.s) > bwa_idx.sentinel_index as u64 {
-        sentinel_offset = 1;
+    // Calculate l_arr correctly: l = k + s for each base
+    // The new interval end is simply the start plus the size
+    for b in 0..4 {
+        l_arr[b] = k_arr[b] + s_arr[b];
     }
 
-    l_arr[3] = smem.l + sentinel_offset;
-    l_arr[2] = l_arr[3] + s_arr[3];
-    l_arr[1] = l_arr[2] + s_arr[2];
-    l_arr[0] = l_arr[1] + s_arr[1];
+    // Sentinel handling: if the old interval contained the sentinel,
+    // we may need to adjust the selected interval
+    let mut sentinel_offset = 0;
+    if smem.k <= bwa_idx.sentinel_index as u64 && (smem.k + smem.s) > bwa_idx.sentinel_index as u64
+    {
+        sentinel_offset = 1;
+    }
 
     smem.k = k_arr[a as usize];
     smem.l = l_arr[a as usize];
     smem.s = s_arr[a as usize];
+
+    // Apply sentinel offset if needed
+    if sentinel_offset > 0
+        && smem.k <= bwa_idx.sentinel_index as u64
+        && smem.l > bwa_idx.sentinel_index as u64
+    {
+        smem.l += sentinel_offset;
+    }
+
+    // Validation: ensure BWT interval invariants hold
+    debug_assert!(
+        smem.k <= smem.l,
+        "BWT interval invariant violated: k={} > l={}",
+        smem.k,
+        smem.l
+    );
+    debug_assert!(
+        smem.s == smem.l - smem.k,
+        "BWT interval size mismatch: s={} but l-k={}",
+        smem.s,
+        smem.l - smem.k
+    );
+    debug_assert!(
+        smem.l <= bwa_idx.bwt.seq_len,
+        "BWT interval out of bounds: l={} > seq_len={}",
+        smem.l,
+        bwa_idx.bwt.seq_len
+    );
 
     // eprintln!("  → Result: k={}, l={}, s={}", smem.k, smem.l, smem.s);
 
@@ -221,16 +245,16 @@ pub struct Alignment {
     pub query_name: String,
     pub flag: u16, // SAM flag
     pub ref_name: String,
-    pub ref_id: usize, // Reference sequence ID (for paired-end scoring)
-    pub pos: u64, // 0-based leftmost mapping position
-    pub mapq: u8, // Mapping quality
-    pub score: i32, // Alignment score (for paired-end scoring)
+    pub ref_id: usize,         // Reference sequence ID (for paired-end scoring)
+    pub pos: u64,              // 0-based leftmost mapping position
+    pub mapq: u8,              // Mapping quality
+    pub score: i32,            // Alignment score (for paired-end scoring)
     pub cigar: Vec<(u8, i32)>, // CIGAR string
-    pub rnext: String, // Ref. name of the mate/next read
-    pub pnext: u64, // Position of the mate/next read
-    pub tlen: i32, // Observed template length
-    pub seq: String, // Segment sequence
-    pub qual: String, // ASCII of Phred-scaled base quality+33
+    pub rnext: String,         // Ref. name of the mate/next read
+    pub pnext: u64,            // Position of the mate/next read
+    pub tlen: i32,             // Observed template length
+    pub seq: String,           // Segment sequence
+    pub qual: String,          // ASCII of Phred-scaled base quality+33
     // Optional SAM tags
     pub tags: Vec<(String, String)>, // Vector of (tag_name, tag_value) pairs
 }
@@ -238,9 +262,10 @@ pub struct Alignment {
 impl Alignment {
     /// Get CIGAR string as a formatted string (e.g., "50M2I48M")
     pub fn cigar_string(&self) -> String {
-        self.cigar.iter().map(|&(op, len)| {
-            format!("{}{}", len, op as char)
-        }).collect()
+        self.cigar
+            .iter()
+            .map(|&(op, len)| format!("{}{}", len, op as char))
+            .collect()
     }
 
     pub fn to_sam_string(&self) -> String {
@@ -373,7 +398,10 @@ fn partition_jobs_by_divergence(jobs: &[AlignmentJob]) -> (Vec<AlignmentJob>, Ve
 
 /// Execute alignments using batched SIMD (processes up to 16 at a time)
 /// Now includes CIGAR generation via hybrid approach
-pub(crate) fn execute_batched_alignments(sw_params: &BandedPairWiseSW, jobs: &[AlignmentJob]) -> Vec<Vec<(u8, i32)>> {
+pub(crate) fn execute_batched_alignments(
+    sw_params: &BandedPairWiseSW,
+    jobs: &[AlignmentJob],
+) -> Vec<Vec<(u8, i32)>> {
     const BATCH_SIZE: usize = 16;
     let mut all_cigars = vec![Vec::new(); jobs.len()];
 
@@ -386,9 +414,14 @@ pub(crate) fn execute_batched_alignments(sw_params: &BandedPairWiseSW, jobs: &[A
         let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
             .iter()
             .map(|job| {
-                (job.query.len() as i32, job.query.as_slice(),
-                 job.target.len() as i32, job.target.as_slice(),
-                 job.band_width, 0)
+                (
+                    job.query.len() as i32,
+                    job.query.as_slice(),
+                    job.target.len() as i32,
+                    job.target.as_slice(),
+                    job.band_width,
+                    0,
+                )
             })
             .collect();
 
@@ -417,7 +450,10 @@ pub(crate) fn execute_batched_alignments(sw_params: &BandedPairWiseSW, jobs: &[A
 /// - High-divergence sequences avoid SIMD overhead and batch synchronization penalty
 /// - Low-divergence sequences use optimal batch sizes for their characteristics
 /// - Expected 15-25% improvement over fixed batching strategy
-pub(crate) fn execute_adaptive_alignments(sw_params: &BandedPairWiseSW, jobs: &[AlignmentJob]) -> Vec<Vec<(u8, i32)>> {
+pub(crate) fn execute_adaptive_alignments(
+    sw_params: &BandedPairWiseSW,
+    jobs: &[AlignmentJob],
+) -> Vec<Vec<(u8, i32)>> {
     if jobs.is_empty() {
         return Vec::new();
     }
@@ -429,7 +465,8 @@ pub(crate) fn execute_adaptive_alignments(sw_params: &BandedPairWiseSW, jobs: &[
     let avg_divergence: f64 = jobs
         .iter()
         .map(|job| estimate_divergence_score(job.query.len(), job.target.len()))
-        .sum::<f64>() / jobs.len() as f64;
+        .sum::<f64>()
+        / jobs.len() as f64;
 
     // Log routing statistics (INFO level - shows in default verbosity)
     log::info!(
@@ -447,7 +484,10 @@ pub(crate) fn execute_adaptive_alignments(sw_params: &BandedPairWiseSW, jobs: &[
 
     // Process high-divergence jobs with scalar (more efficient for divergent sequences)
     let high_div_cigars = if !high_div_jobs.is_empty() {
-        log::debug!("Processing {} high-divergence jobs with scalar", high_div_jobs.len());
+        log::debug!(
+            "Processing {} high-divergence jobs with scalar",
+            high_div_jobs.len()
+        );
         execute_scalar_alignments(sw_params, &high_div_jobs)
     } else {
         Vec::new()
@@ -507,9 +547,14 @@ fn execute_batched_alignments_with_size(
         let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
             .iter()
             .map(|job| {
-                (job.query.len() as i32, job.query.as_slice(),
-                 job.target.len() as i32, job.target.as_slice(),
-                 job.band_width, 0)
+                (
+                    job.query.len() as i32,
+                    job.query.as_slice(),
+                    job.target.len() as i32,
+                    job.target.as_slice(),
+                    job.band_width,
+                    0,
+                )
             })
             .collect();
 
@@ -528,7 +573,10 @@ fn execute_batched_alignments_with_size(
 }
 
 /// Execute alignments using scalar processing (fallback for small batches)
-pub(crate) fn execute_scalar_alignments(sw_params: &BandedPairWiseSW, jobs: &[AlignmentJob]) -> Vec<Vec<(u8, i32)>> {
+pub(crate) fn execute_scalar_alignments(
+    sw_params: &BandedPairWiseSW,
+    jobs: &[AlignmentJob],
+) -> Vec<Vec<(u8, i32)>> {
     jobs.iter()
         .map(|job| {
             let (_score, cigar) = sw_params.scalar_banded_swa(
@@ -544,7 +592,13 @@ pub(crate) fn execute_scalar_alignments(sw_params: &BandedPairWiseSW, jobs: &[Al
         .collect()
 }
 
-pub fn generate_seeds(bwa_idx: &BwaIndex, query_name: &str, query_seq: &[u8], query_qual: &str, opt: &MemOpt) -> Vec<Alignment> {
+pub fn generate_seeds(
+    bwa_idx: &BwaIndex,
+    query_name: &str,
+    query_seq: &[u8],
+    query_qual: &str,
+    opt: &MemOpt,
+) -> Vec<Alignment> {
     generate_seeds_with_mode(bwa_idx, query_name, query_seq, query_qual, true, opt)
 }
 
@@ -591,7 +645,8 @@ fn generate_seeds_with_mode(
     for i in (0..query_len).rev() {
         let current_base_code = encoded_query[i];
 
-        if current_base_code == 4 { // Skip 'N' bases
+        if current_base_code == 4 {
+            // Skip 'N' bases
             continue;
         }
 
@@ -601,7 +656,8 @@ fn generate_seeds_with_mode(
             n: i as i32,
             k: bwa_idx.bwt.l2[current_base_code as usize],
             l: bwa_idx.bwt.l2[(current_base_code + 1) as usize],
-            s: bwa_idx.bwt.l2[(current_base_code + 1) as usize] - bwa_idx.bwt.l2[current_base_code as usize],
+            s: bwa_idx.bwt.l2[(current_base_code + 1) as usize]
+                - bwa_idx.bwt.l2[current_base_code as usize],
             is_rev_comp: false,
         };
 
@@ -635,7 +691,8 @@ fn generate_seeds_with_mode(
     for i in (0..query_len).rev() {
         let current_base_code = encoded_query_rc[i];
 
-        if current_base_code == 4 { // Skip 'N' bases
+        if current_base_code == 4 {
+            // Skip 'N' bases
             continue;
         }
 
@@ -645,7 +702,8 @@ fn generate_seeds_with_mode(
             n: i as i32,
             k: bwa_idx.bwt.l2[current_base_code as usize],
             l: bwa_idx.bwt.l2[(current_base_code + 1) as usize],
-            s: bwa_idx.bwt.l2[(current_base_code + 1) as usize] - bwa_idx.bwt.l2[current_base_code as usize],
+            s: bwa_idx.bwt.l2[(current_base_code + 1) as usize]
+                - bwa_idx.bwt.l2[current_base_code as usize],
             is_rev_comp: true, // Mark as from reverse complement
         };
 
@@ -691,55 +749,84 @@ fn generate_seeds_with_mode(
     let mut filtered_too_many_occ = 0;
     let mut duplicates = 0;
 
-            if let Some(mut prev_smem) = all_smems.first().cloned() {
-                let seed_len = prev_smem.n - prev_smem.m + 1;
-                let occurrences = prev_smem.l - prev_smem.k;
+    if let Some(mut prev_smem) = all_smems.first().cloned() {
+        let seed_len = prev_smem.n - prev_smem.m + 1;
+        let occurrences = prev_smem.l - prev_smem.k;
+
+        // Filter by min_seed_len (-k) and max_occ (-c)
+        if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
+            unique_filtered_smems.push(prev_smem);
+        } else {
+            if seed_len < _opt.min_seed_len {
+                filtered_too_short += 1;
+            }
+            if occurrences > _opt.max_occ as u64 {
+                filtered_too_many_occ += 1;
+            }
+        }
+
+        for i in 1..all_smems.len() {
+            let current_smem = all_smems[i];
+            if current_smem != prev_smem {
+                // Use PartialEq for comparison
+                let seed_len = current_smem.n - current_smem.m + 1;
+                let occurrences = current_smem.l - current_smem.k;
 
                 // Filter by min_seed_len (-k) and max_occ (-c)
                 if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
-                    unique_filtered_smems.push(prev_smem);
+                    unique_filtered_smems.push(current_smem);
                 } else {
-                    if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
-                    if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
-                }
-
-                for i in 1..all_smems.len() {
-                    let current_smem = all_smems[i];
-                    if current_smem != prev_smem { // Use PartialEq for comparison
-                        let seed_len = current_smem.n - current_smem.m + 1;
-                        let occurrences = current_smem.l - current_smem.k;
-
-                        // Filter by min_seed_len (-k) and max_occ (-c)
-                        if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
-                            unique_filtered_smems.push(current_smem);
-                        } else {
-                            if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
-                            if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
-                        }
-                    } else {
-                        duplicates += 1;
+                    if seed_len < _opt.min_seed_len {
+                        filtered_too_short += 1;
                     }
-                    prev_smem = current_smem;
+                    if occurrences > _opt.max_occ as u64 {
+                        filtered_too_many_occ += 1;
+                    }
                 }
+            } else {
+                duplicates += 1;
             }
+            prev_smem = current_smem;
+        }
+    }
 
     if unique_filtered_smems.is_empty() && all_smems.len() > 0 {
-        log::debug!("{}: All SMEMs filtered out - too_short={}, too_many_occ={}, duplicates={}, min_len={}, max_occ={}",
-            query_name, filtered_too_short, filtered_too_many_occ, duplicates, _opt.min_seed_len, _opt.max_occ);
+        log::debug!(
+            "{}: All SMEMs filtered out - too_short={}, too_many_occ={}, duplicates={}, min_len={}, max_occ={}",
+            query_name,
+            filtered_too_short,
+            filtered_too_many_occ,
+            duplicates,
+            _opt.min_seed_len,
+            _opt.max_occ
+        );
 
         // Sample first few SMEMs to see actual values
         for (i, smem) in all_smems.iter().take(5).enumerate() {
             let len = smem.n - smem.m + 1;
             let occ = smem.l - smem.k;
-            log::debug!("{}: Sample SMEM {}: len={}, occ={}, m={}, n={}, k={}, l={}",
-                query_name, i, len, occ, smem.m, smem.n, smem.k, smem.l);
+            log::debug!(
+                "{}: Sample SMEM {}: len={}, occ={}, m={}, n={}, k={}, l={}",
+                query_name,
+                i,
+                len,
+                occ,
+                smem.m,
+                smem.n,
+                smem.k,
+                smem.l
+            );
         }
     }
     // eprintln!("unique_filtered_smems: {:?}", unique_filtered_smems);
     // --- End Filtering SMEMs ---
 
-
-    log::debug!("{}: Generated {} SMEMs, filtered to {} unique", query_name, all_smems.len(), unique_filtered_smems.len());
+    log::debug!(
+        "{}: Generated {} SMEMs, filtered to {} unique",
+        query_name,
+        all_smems.len(),
+        unique_filtered_smems.len()
+    );
 
     // Convert SMEMs to Seed structs and perform seed extension
     // TODO FIXME: This was limited to 1 seed for development - needs to process ALL seeds
@@ -751,7 +838,12 @@ fn generate_seeds_with_mode(
     let max_seeds = std::cmp::min(smem_count, 10); // Increased from 1 to 10
     let useful_smems: Vec<_> = sorted_smems.into_iter().take(max_seeds).collect();
 
-    log::debug!("{}: Using {} of {} filtered SMEMs for alignment", query_name, useful_smems.len(), smem_count);
+    log::debug!(
+        "{}: Using {} of {} filtered SMEMs for alignment",
+        query_name,
+        useful_smems.len(),
+        smem_count
+    );
 
     let mut seeds = Vec::new();
     let mut alignment_jobs = Vec::new(); // Collect alignment jobs for batching
@@ -787,10 +879,13 @@ fn generate_seeds_with_mode(
 
         // --- Prepare Seed Extension Job ---
         // Prepare reference segment (query_len + 2*band_width for diagonal extension)
-        let ref_segment_len = (query_len as u64 + 2 * _opt.w as u64).min(bwa_idx.bns.l_pac - seed.ref_pos);
+        let ref_segment_len =
+            (query_len as u64 + 2 * _opt.w as u64).min(bwa_idx.bns.l_pac - seed.ref_pos);
         let ref_segment_start = seed.ref_pos;
 
-        let target_segment_result = bwa_idx.bns.get_reference_segment(ref_segment_start, ref_segment_len);
+        let target_segment_result = bwa_idx
+            .bns
+            .get_reference_segment(ref_segment_start, ref_segment_len);
 
         match target_segment_result {
             Ok(target_segment) => {
@@ -798,9 +893,9 @@ fn generate_seeds_with_mode(
                     seed_idx: idx,
                     query: query_segment_encoded.clone(),
                     target: target_segment,
-                    band_width: _opt.w,  // Use band width from options
+                    band_width: _opt.w, // Use band width from options
                 });
-            },
+            }
             Err(e) => {
                 log::error!("Error getting reference segment for seed {:?}: {}", seed, e);
             }
@@ -809,7 +904,12 @@ fn generate_seeds_with_mode(
         seeds.push(seed);
     }
 
-    log::debug!("{}: Found {} seeds, {} alignment jobs", query_name, seeds.len(), alignment_jobs.len());
+    log::debug!(
+        "{}: Found {} seeds, {} alignment jobs",
+        query_name,
+        seeds.len(),
+        alignment_jobs.len()
+    );
 
     // --- Execute Alignments (Adaptive Strategy) ---
     // Use adaptive routing strategy that combines:
@@ -825,11 +925,20 @@ fn generate_seeds_with_mode(
         execute_scalar_alignments(&sw_params, &alignment_jobs)
     };
 
-    log::debug!("{}: Extended {} seeds, {} CIGARs produced", query_name, seeds.len(), extended_cigars.len());
+    log::debug!(
+        "{}: Extended {} seeds, {} CIGARs produced",
+        query_name,
+        seeds.len(),
+        extended_cigars.len()
+    );
 
     // --- Seed Chaining ---
     let chained_results = chain_seeds(seeds, _opt);
-    log::debug!("{}: Chaining produced {} chains", query_name, chained_results.len());
+    log::debug!(
+        "{}: Chaining produced {} chains",
+        query_name,
+        chained_results.len()
+    );
     // --- End Seed Chaining ---
 
     // For now, let's create a dummy alignment from the first chain
@@ -854,7 +963,7 @@ fn generate_seeds_with_mode(
             ref_name,
             ref_id: 0, // TODO: Get actual reference ID from chain
             pos: first_chain.ref_start,
-            mapq: 60, // Placeholder, needs proper calculation
+            mapq: 60,                 // Placeholder, needs proper calculation
             score: first_chain.score, // Add alignment score for paired-end scoring
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
@@ -890,13 +999,14 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
         for j in 0..i {
             // Check for compatibility: seed[j] must end before seed[i] starts in both query and reference
             // And they must be on the same strand
-            if seeds[j].is_rev == seeds[i].is_rev &&
-               seeds[j].query_pos + seeds[j].len < seeds[i].query_pos &&
-               seeds[j].ref_pos + (seeds[j].len as u64) < seeds[i].ref_pos {
-
+            if seeds[j].is_rev == seeds[i].is_rev
+                && seeds[j].query_pos + seeds[j].len < seeds[i].query_pos
+                && seeds[j].ref_pos + (seeds[j].len as u64) < seeds[i].ref_pos
+            {
                 // Calculate gap length
                 let q_gap = seeds[i].query_pos - (seeds[j].query_pos + seeds[j].len);
-                let r_gap = seeds[i].ref_pos as i32 - (seeds[j].ref_pos + seeds[j].len as u64) as i32;
+                let r_gap =
+                    seeds[i].ref_pos as i32 - (seeds[j].ref_pos + seeds[j].len as u64) as i32;
 
                 // Check max_chain_gap constraint (do not chain if gap too large)
                 if q_gap.max(r_gap.abs()) > max_gap {
@@ -987,8 +1097,11 @@ pub fn get_bwt_base_from_cp_occ(cp_occ: &[CpOcc], pos: u64) -> u8 {
 
     // Safety: check bounds
     if cp_block >= cp_occ.len() {
-        log::warn!("get_bwt_base_from_cp_occ: cp_block {} >= cp_occ.len() {}",
-                  cp_block, cp_occ.len());
+        log::warn!(
+            "get_bwt_base_from_cp_occ: cp_block {} >= cp_occ.len() {}",
+            cp_block,
+            cp_occ.len()
+        );
         return 4; // Return sentinel for out-of-bounds
     }
 
@@ -1034,9 +1147,21 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     while pos % bwa_idx.bwt.sa_intv as u64 != 0 {
         // Safety check: prevent infinite loops
         if count >= MAX_ITERATIONS {
-            log::error!("get_sa_entry exceeded MAX_ITERATIONS ({}) - possible infinite loop!", MAX_ITERATIONS);
-            log::error!("  original_pos={}, current_pos={}, count={}", original_pos, pos, count);
-            log::error!("  sa_intv={}, seq_len={}", bwa_idx.bwt.sa_intv, bwa_idx.bwt.seq_len);
+            log::error!(
+                "get_sa_entry exceeded MAX_ITERATIONS ({}) - possible infinite loop!",
+                MAX_ITERATIONS
+            );
+            log::error!(
+                "  original_pos={}, current_pos={}, count={}",
+                original_pos,
+                pos,
+                count
+            );
+            log::error!(
+                "  sa_intv={}, seq_len={}",
+                bwa_idx.bwt.sa_intv,
+                bwa_idx.bwt.seq_len
+            );
             return count; // Return what we have so far
         }
 
@@ -1083,7 +1208,10 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::align::{chain_seeds, base_to_code, reverse_complement_code, backward_ext, CpOcc, CP_SHIFT, Seed, SMEM, popcount64};
+    use crate::align::{
+        CP_SHIFT, CpOcc, SMEM, Seed, backward_ext, base_to_code, chain_seeds, popcount64,
+        reverse_complement_code,
+    };
     use crate::bntseq::{BntAnn1, BntSeq};
     use crate::bwt::Bwt;
     use crate::mem::BwaIndex;
@@ -1169,13 +1297,19 @@ mod tests {
             let extended = super::backward_ext(&bwa_idx, initial_smem, base);
 
             // Extended range should be smaller or equal to initial range
-            assert!(extended.s <= initial_smem.s,
-                    "Extended range size {} should be <= initial size {} for base {}",
-                    extended.s, initial_smem.s, base);
+            assert!(
+                extended.s <= initial_smem.s,
+                "Extended range size {} should be <= initial size {} for base {}",
+                extended.s,
+                initial_smem.s,
+                base
+            );
 
             // k should be within bounds
-            assert!(extended.k < bwa_idx.bwt.seq_len,
-                    "Extended k should be within sequence length");
+            assert!(
+                extended.k < bwa_idx.bwt.seq_len,
+                "Extended k should be within sequence length"
+            );
         }
     }
 
@@ -1213,9 +1347,13 @@ mod tests {
 
             // Range should generally get smaller (or stay same) with each extension
             // (though it could stay the same if the pattern is very common)
-            assert!(smem.s <= prev_s,
-                    "After extension {}, range size {} should be <= previous {}",
-                    i, smem.s, prev_s);
+            assert!(
+                smem.s <= prev_s,
+                "After extension {}, range size {} should be <= previous {}",
+                i,
+                smem.s,
+                prev_s
+            );
 
             prev_s = smem.s;
 
@@ -1328,8 +1466,12 @@ mod tests {
         let sa_entry = super::get_sa_entry(&bwa_idx, 0);
 
         // SA entry should be within the reference sequence length
-        assert!(sa_entry < bwa_idx.bwt.seq_len,
-                "SA entry {} should be less than seq_len {}", sa_entry, bwa_idx.bwt.seq_len);
+        assert!(
+            sa_entry < bwa_idx.bwt.seq_len,
+            "SA entry {} should be less than seq_len {}",
+            sa_entry,
+            bwa_idx.bwt.seq_len
+        );
     }
 
     #[test]
@@ -1354,8 +1496,10 @@ mod tests {
         let sampled_pos = bwa_idx.bwt.sa_intv as u64;
         let sa_entry = super::get_sa_entry(&bwa_idx, sampled_pos);
 
-        assert!(sa_entry < bwa_idx.bwt.seq_len,
-                "SA entry at sampled position should be within sequence length");
+        assert!(
+            sa_entry < bwa_idx.bwt.seq_len,
+            "SA entry at sampled position should be within sequence length"
+        );
     }
 
     #[test]
@@ -1387,8 +1531,11 @@ mod tests {
             let sa_entry = super::get_sa_entry(&bwa_idx, pos);
 
             // All SA entries should be valid (within sequence length)
-            assert!(sa_entry < bwa_idx.bwt.seq_len,
-                    "SA entry for pos {} should be within sequence length", pos);
+            assert!(
+                sa_entry < bwa_idx.bwt.seq_len,
+                "SA entry for pos {} should be within sequence length",
+                pos
+            );
         }
     }
 
@@ -1415,8 +1562,10 @@ mod tests {
         let sa_entry2 = super::get_sa_entry(&bwa_idx, pos);
 
         // Same position should always return same SA entry
-        assert_eq!(sa_entry1, sa_entry2,
-                   "get_sa_entry should return consistent results for the same position");
+        assert_eq!(
+            sa_entry1, sa_entry2,
+            "get_sa_entry should return consistent results for the same position"
+        );
     }
 
     #[test]
@@ -1443,8 +1592,10 @@ mod tests {
 
             // Either we get a valid position or None (sentinel)
             if let Some(new_pos) = bwt_result {
-                assert!(new_pos < bwa_idx.bwt.seq_len,
-                        "BWT position should be within sequence length");
+                assert!(
+                    new_pos < bwa_idx.bwt.seq_len,
+                    "BWT position should be within sequence length"
+                );
             }
             // If None, we hit the sentinel - that's ok
         }
@@ -1455,11 +1606,8 @@ mod tests {
         // Test that the batched alignment infrastructure works correctly
         use crate::banded_swa::BandedPairWiseSW;
 
-        let sw_params = BandedPairWiseSW::new(
-            4, 2, 4, 2, 100, 0,
-            super::DEFAULT_SCORING_MATRIX,
-            2, -4,
-        );
+        let sw_params =
+            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, super::DEFAULT_SCORING_MATRIX, 2, -4);
 
         // Create test alignment jobs
         let query1 = vec![0u8, 1, 2, 3]; // ACGT
@@ -1486,17 +1634,27 @@ mod tests {
         // Test scalar execution
         let scalar_cigars = super::execute_scalar_alignments(&sw_params, &jobs);
         assert_eq!(scalar_cigars.len(), 2, "Should return 2 CIGARs for 2 jobs");
-        assert!(!scalar_cigars[0].is_empty(), "First CIGAR should not be empty");
-        assert!(!scalar_cigars[1].is_empty(), "Second CIGAR should not be empty");
+        assert!(
+            !scalar_cigars[0].is_empty(),
+            "First CIGAR should not be empty"
+        );
+        assert!(
+            !scalar_cigars[1].is_empty(),
+            "Second CIGAR should not be empty"
+        );
 
         // Test batched execution (currently falls back to scalar)
         let batched_cigars = super::execute_batched_alignments(&sw_params, &jobs);
         assert_eq!(batched_cigars.len(), 2, "Should return 2 CIGARs for 2 jobs");
 
         // Results should be identical (since batched currently uses scalar fallback)
-        assert_eq!(scalar_cigars[0], batched_cigars[0],
-                   "Scalar and batched should produce identical results");
-        assert_eq!(scalar_cigars[1], batched_cigars[1],
-                   "Scalar and batched should produce identical results");
+        assert_eq!(
+            scalar_cigars[0], batched_cigars[0],
+            "Scalar and batched should produce identical results"
+        );
+        assert_eq!(
+            scalar_cigars[1], batched_cigars[1],
+            "Scalar and batched should produce identical results"
+        );
     }
 }
