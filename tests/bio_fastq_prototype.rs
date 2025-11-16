@@ -18,17 +18,15 @@ fn test_basic_fastq_reading() {
     }
 
     let reader = reader.unwrap();
-    let records: Vec<_> = reader.records()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let records: Vec<_> = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(records.len(), 1);
 
     // Check Record API
     let record = &records[0];
-    let id = record.id();  // Returns &str
-    let seq = record.seq();  // Returns &[u8]
-    let qual = record.qual();  // Returns &[u8]
+    let id = record.id(); // Returns &str
+    let seq = record.seq(); // Returns &[u8]
+    let qual = record.qual(); // Returns &[u8]
 
     println!("Read ID: {}", id);
     println!("Sequence length: {}", seq.len());
@@ -64,7 +62,8 @@ fn test_batch_reading_pattern() {
     let mut records_iter = reader.records();
 
     loop {
-        let batch: Vec<_> = records_iter.by_ref()
+        let batch: Vec<_> = records_iter
+            .by_ref()
             .take(BATCH_SIZE)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -91,8 +90,8 @@ fn test_batch_reading_pattern() {
 
 #[test]
 fn test_gzip_support() {
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
 
     // Create a gzipped FASTQ file
@@ -118,9 +117,7 @@ fn test_gzip_support() {
     let decoder = GzDecoder::new(file);
     let reader = fastq::Reader::new(decoder);
 
-    let records: Vec<_> = reader.records()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let records: Vec<_> = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(records.len(), 10);
 
@@ -141,9 +138,7 @@ fn test_empty_file_handling() {
     let file = NamedTempFile::new().unwrap();
 
     let reader = fastq::Reader::from_file(file.path()).unwrap();
-    let records: Vec<_> = reader.records()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let records: Vec<_> = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(records.len(), 0);
     println!("✓ Empty file handling works!");
@@ -162,9 +157,7 @@ fn test_quality_score_handling() {
     file.flush().unwrap();
 
     let reader = fastq::Reader::from_file(file.path()).unwrap();
-    let records: Vec<_> = reader.records()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let records: Vec<_> = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(records.len(), 1);
 

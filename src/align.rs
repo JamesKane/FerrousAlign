@@ -856,11 +856,18 @@ fn generate_seeds_with_mode(
         let mut ref_pos = get_sa_entry(bwa_idx, smem.k);
         let mut is_rev = smem.is_rev_comp;
 
+        let smem_query_bases = &query_segment_encoded[smem.m as usize..=(smem.n as usize).min(query_segment_encoded.len()-1)];
+        log::debug!("{}: SMEM {}: k={}, l={}, m={}, n={}, len={}, raw_ref_pos={}, l_pac={}, smem_bases={:?}",
+                    query_name, idx, smem.k, smem.l, smem.m, smem.n, smem.n - smem.m + 1, ref_pos, bwa_idx.bns.l_pac,
+                    &smem_query_bases[..10.min(smem_query_bases.len())]);
+
         // Convert positions in reverse complement region to forward strand
         // BWT contains both forward [0, l_pac) and reverse [l_pac, 2*l_pac)
         if ref_pos >= bwa_idx.bns.l_pac {
             ref_pos = (bwa_idx.bns.l_pac << 1) - 1 - ref_pos;
             is_rev = !is_rev; // Flip strand orientation
+            log::debug!("{}: SMEM {} was in RC region, converted ref_pos to {}, is_rev={}",
+                        query_name, idx, ref_pos, is_rev);
         }
 
         // Adjust query_pos for reverse complement seeds
@@ -878,10 +885,27 @@ fn generate_seeds_with_mode(
         };
 
         // --- Prepare Seed Extension Job ---
+        // The SMEM matched at query position smem.m (or adjusted for reverse complement)
+        // But we want to align the ENTIRE query starting from position 0
+        // So we need to adjust the reference position backwards
+        let ref_start_for_full_query = if seed.query_pos as u64 > ref_pos {
+            // Edge case: can't go back far enough
+            0
+        } else {
+            ref_pos - seed.query_pos as u64
+        };
+
         // Prepare reference segment (query_len + 2*band_width for diagonal extension)
         let ref_segment_len =
-            (query_len as u64 + 2 * _opt.w as u64).min(bwa_idx.bns.l_pac - seed.ref_pos);
-        let ref_segment_start = seed.ref_pos;
+            (query_len as u64 + 2 * _opt.w as u64).min(bwa_idx.bns.l_pac - ref_start_for_full_query);
+        let ref_segment_start = ref_start_for_full_query;
+
+        // Debug: fetch a small segment at the original ref_pos to see if it matches the SMEM
+        let debug_ref_at_smem = bwa_idx.bns.get_reference_segment(ref_pos, 21.min(bwa_idx.bns.l_pac - ref_pos));
+        let debug_ref_bases = debug_ref_at_smem.as_ref().map(|v| &v[..10.min(v.len())]).unwrap_or(&[]);
+
+        log::debug!("{}: Seed {}: original_ref_pos={}, query_pos={}, adjusted_ref_start={}, ref_segment_len={}, query_len={}, ref_at_smem_pos={:?}",
+                    query_name, idx, ref_pos, seed.query_pos, ref_start_for_full_query, ref_segment_len, query_len, debug_ref_bases);
 
         let target_segment_result = bwa_idx
             .bns
@@ -889,6 +913,10 @@ fn generate_seeds_with_mode(
 
         match target_segment_result {
             Ok(target_segment) => {
+                log::debug!("{}: Seed {}: target_segment_len={}, query_first_10={:?}, target_first_10={:?}",
+                            query_name, idx, target_segment.len(),
+                            &query_segment_encoded[..10.min(query_segment_encoded.len())],
+                            &target_segment[..10.min(target_segment.len())]);
                 alignment_jobs.push(AlignmentJob {
                     seed_idx: idx,
                     query: query_segment_encoded.clone(),
@@ -950,19 +978,26 @@ fn generate_seeds_with_mode(
         let best_seed_idx_in_chain = first_chain.seeds[0]; // Assuming first seed in chain is "best" for cigar
         let cigar_for_alignment = extended_cigars[best_seed_idx_in_chain].clone();
 
-        // Determine reference name (assuming single reference for now)
-        let ref_name = if !bwa_idx.bns.anns.is_empty() {
-            bwa_idx.bns.anns[0].name.clone()
+        // Convert global position to chromosome-specific position
+        let global_pos = first_chain.ref_start as i64;
+        let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(global_pos);
+        let rid = bwa_idx.bns.bns_pos2rid(pos_f);
+
+        let (ref_name, ref_id, chr_pos) = if rid >= 0 && (rid as usize) < bwa_idx.bns.anns.len() {
+            let ann = &bwa_idx.bns.anns[rid as usize];
+            let chr_relative_pos = pos_f - ann.offset as i64;
+            (ann.name.clone(), rid as usize, chr_relative_pos as u64)
         } else {
-            "unknown_ref".to_string()
+            log::warn!("{}: Invalid reference ID {} for position {}", query_name, rid, global_pos);
+            ("unknown_ref".to_string(), 0, first_chain.ref_start)
         };
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
             flag: if first_chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
             ref_name,
-            ref_id: 0, // TODO: Get actual reference ID from chain
-            pos: first_chain.ref_start,
+            ref_id,
+            pos: chr_pos,
             mapq: 60,                 // Placeholder, needs proper calculation
             score: first_chain.score, // Add alignment score for paired-end scoring
             cigar: cigar_for_alignment,

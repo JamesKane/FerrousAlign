@@ -4,9 +4,9 @@
 mod tests {
     use super::*;
     use crate::bwt::Bwt;
-    use std::path::Path;
     use std::fs;
     use std::io::{self, Read};
+    use std::path::Path;
 
     // Helper function to create a dummy Bwt for testing
     fn create_dummy_bwt() -> Bwt {
@@ -101,33 +101,57 @@ mod tests {
         let mut offset = 0;
 
         // seq_len
-        assert_eq!(u64::from_le_bytes(buffer[offset..offset+8].try_into().unwrap()), bwt.seq_len);
+        assert_eq!(
+            u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()),
+            bwt.seq_len
+        );
         offset += 8;
         // primary
-        assert_eq!(u64::from_le_bytes(buffer[offset..offset+8].try_into().unwrap()), bwt.primary);
+        assert_eq!(
+            u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()),
+            bwt.primary
+        );
         offset += 8;
         // l2
         for i in 0..5 {
-            assert_eq!(u64::from_le_bytes(buffer[offset..offset+8].try_into().unwrap()), bwt.l2[i]);
+            assert_eq!(
+                u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()),
+                bwt.l2[i]
+            );
             offset += 8;
         }
         // sa_intv
-        assert_eq!(i32::from_le_bytes(buffer[offset..offset+4].try_into().unwrap()), bwt.sa_intv);
+        assert_eq!(
+            i32::from_le_bytes(buffer[offset..offset + 4].try_into().unwrap()),
+            bwt.sa_intv
+        );
         offset += 4;
         // n_sa
-        assert_eq!(u64::from_le_bytes(buffer[offset..offset+8].try_into().unwrap()), bwt.n_sa);
+        assert_eq!(
+            u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()),
+            bwt.n_sa
+        );
         offset += 8;
         // bwt_data
-        assert_eq!(&buffer[offset..offset + bwt.bwt_data.len()], bwt.bwt_data.as_slice());
+        assert_eq!(
+            &buffer[offset..offset + bwt.bwt_data.len()],
+            bwt.bwt_data.as_slice()
+        );
         offset += bwt.bwt_data.len();
         // sa_ms_byte
         for val in &bwt.sa_ms_byte {
-            assert_eq!(i8::from_le_bytes(buffer[offset..offset+1].try_into().unwrap()), *val);
+            assert_eq!(
+                i8::from_le_bytes(buffer[offset..offset + 1].try_into().unwrap()),
+                *val
+            );
             offset += 1;
         }
         // sa_ls_word
         for val in &bwt.sa_ls_word {
-            assert_eq!(u32::from_le_bytes(buffer[offset..offset+4].try_into().unwrap()), *val);
+            assert_eq!(
+                u32::from_le_bytes(buffer[offset..offset + 4].try_into().unwrap()),
+                *val
+            );
             offset += 4;
         }
 
@@ -145,7 +169,10 @@ mod tests {
         bwt.bwt_cal_sa(sa_intv, &sa_temp);
 
         assert_eq!(bwt.sa_intv, sa_intv);
-        assert_eq!(bwt.n_sa, (bwt.seq_len + sa_intv as u64 - 1) / sa_intv as u64);
+        assert_eq!(
+            bwt.n_sa,
+            (bwt.seq_len + sa_intv as u64 - 1) / sa_intv as u64
+        );
         assert_eq!(bwt.sa_ms_byte.len(), bwt.n_sa as usize);
         assert_eq!(bwt.sa_ls_word.len(), bwt.n_sa as usize);
 
@@ -202,15 +229,27 @@ mod tests {
                 bwt_output.push(4); // Sentinel (wraps to last char before $)
             } else {
                 let bwt_char = text_for_sais[(sa_val - 1) as usize];
-                bwt_output.push(if bwt_char == 0 { 4 } else { (bwt_char - 1) as i32 });
+                bwt_output.push(if bwt_char == 0 {
+                    4
+                } else {
+                    (bwt_char - 1) as i32
+                });
             }
         }
 
         // Expected SA for "ACGT$": [4, 0, 1, 2, 3] (positions of $, A, C, G, T when sorted)
         // Expected BWT: [T, $, A, C, G] -> [3, 4, 0, 1, 2] in our encoding
 
-        assert_eq!(sa_i32, vec![4, 0, 1, 2, 3], "SA should be [4, 0, 1, 2, 3] for 'ACGT$'");
-        assert_eq!(bwt_output, vec![3, 4, 0, 1, 2], "BWT should be [3, 4, 0, 1, 2] for 'ACGT$'");
+        assert_eq!(
+            sa_i32,
+            vec![4, 0, 1, 2, 3],
+            "SA should be [4, 0, 1, 2, 3] for 'ACGT$'"
+        );
+        assert_eq!(
+            bwt_output,
+            vec![3, 4, 0, 1, 2],
+            "BWT should be [3, 4, 0, 1, 2] for 'ACGT$'"
+        );
 
         // Verify l2 counts
         let mut l2_counts = [0u64; 4];
@@ -221,7 +260,11 @@ mod tests {
         }
 
         // BWT = [T, $, A, C, G] -> 1 of each A,C,G,T (sentinel not counted)
-        assert_eq!(l2_counts, [1, 1, 1, 1], "Each base should appear once in BWT");
+        assert_eq!(
+            l2_counts,
+            [1, 1, 1, 1],
+            "Each base should appear once in BWT"
+        );
     }
 
     #[test]
@@ -241,7 +284,11 @@ mod tests {
                 bwt_output.push(4); // Sentinel
             } else {
                 let bwt_char = text_for_sais[(sa_val - 1) as usize];
-                bwt_output.push(if bwt_char == 0 { 4 } else { (bwt_char - 1) as i32 });
+                bwt_output.push(if bwt_char == 0 {
+                    4
+                } else {
+                    (bwt_char - 1) as i32
+                });
             }
         }
 
@@ -254,7 +301,11 @@ mod tests {
             counts[base as usize] += 1;
         }
         assert_eq!(counts[4], 1, "Exactly one sentinel in BWT");
-        assert_eq!(counts[0] + counts[1] + counts[2] + counts[3], 4, "Four DNA bases in BWT");
+        assert_eq!(
+            counts[0] + counts[1] + counts[2] + counts[3],
+            4,
+            "Four DNA bases in BWT"
+        );
     }
 
     #[test]
@@ -269,12 +320,20 @@ mod tests {
         // SA should be a permutation of [0, 1, 2, 3, 4, 5, 6]
         let mut sa_sorted = sa_i32.clone();
         sa_sorted.sort();
-        assert_eq!(sa_sorted, vec![0, 1, 2, 3, 4, 5, 6], "SA should be permutation of [0..n)");
+        assert_eq!(
+            sa_sorted,
+            vec![0, 1, 2, 3, 4, 5, 6],
+            "SA should be permutation of [0..n)"
+        );
 
         // No duplicates
         let mut seen = std::collections::HashSet::new();
         for &val in &sa_i32 {
-            assert!(seen.insert(val), "SA should have no duplicates, found duplicate: {}", val);
+            assert!(
+                seen.insert(val),
+                "SA should have no duplicates, found duplicate: {}",
+                val
+            );
         }
     }
 
@@ -293,7 +352,10 @@ mod tests {
         bwt.bwt_cal_sa(sa_intv, &sa_temp);
 
         // Verify we sample at intervals
-        assert_eq!(bwt.n_sa, 13, "100 bases with interval 8 should give 13 samples");
+        assert_eq!(
+            bwt.n_sa, 13,
+            "100 bases with interval 8 should give 13 samples"
+        );
 
         // Verify sampled values are correct
         // Sample 0: sa_temp[0] = 0
@@ -325,7 +387,10 @@ mod tests {
             }
         }
 
-        assert!(sentinel_pos.is_some(), "Should find sentinel position in SA");
+        assert!(
+            sentinel_pos.is_some(),
+            "Should find sentinel position in SA"
+        );
         let sentinel_index = sentinel_pos.unwrap();
 
         // Sentinel should be at position where sorted suffix starts with $
@@ -339,7 +404,10 @@ mod tests {
         // We're looking for where SA[i] == 0, which means "suffix starting at position 0"
         // That suffix is "ACGT$"
         // Let's just verify we found a valid position
-        assert!(sentinel_index < sa.len(), "Sentinel position should be valid");
+        assert!(
+            sentinel_index < sa.len(),
+            "Sentinel position should be valid"
+        );
     }
 
     #[test]
@@ -370,8 +438,11 @@ mod tests {
         assert!(!cp_occ.is_empty(), "cp_occ should have at least one entry");
 
         // First checkpoint should have cp_count = [0, 0, 0, 0] (counts before position 0)
-        assert_eq!(cp_occ[0].cp_count, [0, 0, 0, 0],
-                   "First checkpoint should have zero counts");
+        assert_eq!(
+            cp_occ[0].cp_count,
+            [0, 0, 0, 0],
+            "First checkpoint should have zero counts"
+        );
 
         // After processing all 8 positions, we should see cumulative counts
         // BWT = "ACGTACGT" -> 2 of each base
@@ -409,15 +480,21 @@ mod tests {
         let bit_pos = 63 - 1; // Position 1 in the block
         for base in 0..4 {
             let bit_set = (cp_occ[0].one_hot_bwt_str[base] >> bit_pos) & 1;
-            assert_eq!(bit_set, 0,
-                      "Sentinel position should not set bit for base {} in cp_occ bitmask", base);
+            assert_eq!(
+                bit_set, 0,
+                "Sentinel position should not set bit for base {} in cp_occ bitmask",
+                base
+            );
         }
 
         // But other positions should have bits set
         // Position 0 has T(3), so one_hot_bwt_str[3] should have bit 63 set
         let bit_pos_0 = 63 - 0;
         let t_bit = (cp_occ[0].one_hot_bwt_str[3] >> bit_pos_0) & 1;
-        assert_eq!(t_bit, 1, "Position 0 (T) should set bit in one_hot_bwt_str[3]");
+        assert_eq!(
+            t_bit, 1,
+            "Position 0 (T) should set bit in one_hot_bwt_str[3]"
+        );
     }
 
     #[test]
@@ -456,12 +533,16 @@ mod tests {
         let cp_occ = bwt.calculate_cp_occ(999); // No sentinel
 
         // At checkpoint after position 63 (end of first block), counts should be [16, 16, 16, 16]
-        assert!(cp_occ.len() >= 2, "Should have at least 2 checkpoints for 64 bases");
+        assert!(
+            cp_occ.len() >= 2,
+            "Should have at least 2 checkpoints for 64 bases"
+        );
 
         // Second checkpoint (after processing all 64 bases)
-        assert_eq!(cp_occ[1].cp_count, [16, 16, 16, 16],
-                   "After 64 bases (ACGT*16), each base should appear 16 times");
+        assert_eq!(
+            cp_occ[1].cp_count,
+            [16, 16, 16, 16],
+            "After 64 bases (ACGT*16), each base should appear 16 times"
+        );
     }
-
-
 }

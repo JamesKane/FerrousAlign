@@ -174,7 +174,6 @@ pub type __m128i = simd_arch::__m128i;
 #[repr(transparent)]
 pub struct __m128i(pub simd_arch::uint8x16_t);
 
-
 // Helper methods for type casting on aarch64
 #[cfg(target_arch = "aarch64")]
 impl __m128i {
@@ -197,7 +196,7 @@ impl __m128i {
     pub fn from_s16(v: simd_arch::int16x8_t) -> Self {
         Self(unsafe { simd_arch::vreinterpretq_u8_s16(v) })
     }
-    
+
     #[inline(always)]
     pub fn as_u16(self) -> simd_arch::uint16x8_t {
         unsafe { simd_arch::vreinterpretq_u16_u8(self.0) }
@@ -207,7 +206,7 @@ impl __m128i {
     pub fn from_u16(v: simd_arch::uint16x8_t) -> Self {
         Self(unsafe { simd_arch::vreinterpretq_u8_u16(v) })
     }
-    
+
     #[inline(always)]
     pub fn as_s32(self) -> simd_arch::int32x4_t {
         unsafe { simd_arch::vreinterpretq_s32_u8(self.0) }
@@ -362,7 +361,9 @@ pub unsafe fn _mm_store_si128(p: *mut __m128i, a: __m128i) {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe { *(p as *mut __m128i) = a; }
+        unsafe {
+            *(p as *mut __m128i) = a;
+        }
     }
 }
 
@@ -518,9 +519,7 @@ pub unsafe fn _mm_subs_epi8(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i::from_s8(simd_arch::vqsubq_s8(a.as_s8(), b.as_s8()))
-        }
+        unsafe { __m128i::from_s8(simd_arch::vqsubq_s8(a.as_s8(), b.as_s8())) }
     }
 }
 
@@ -533,9 +532,7 @@ pub unsafe fn _mm_adds_epi8(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i::from_s8(simd_arch::vqaddq_s8(a.as_s8(), b.as_s8()))
-        }
+        unsafe { __m128i::from_s8(simd_arch::vqaddq_s8(a.as_s8(), b.as_s8())) }
     }
 }
 
@@ -548,9 +545,7 @@ pub unsafe fn _mm_adds_epu8(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i(simd_arch::vqaddq_u8(a.0, b.0))
-        }
+        unsafe { __m128i(simd_arch::vqaddq_u8(a.0, b.0)) }
     }
 }
 
@@ -563,9 +558,7 @@ pub unsafe fn _mm_adds_epi16(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i::from_s16(simd_arch::vqaddq_s16(a.as_s16(), b.as_s16()))
-        }
+        unsafe { __m128i::from_s16(simd_arch::vqaddq_s16(a.as_s16(), b.as_s16())) }
     }
 }
 
@@ -578,9 +571,7 @@ pub unsafe fn _mm_subs_epi16(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i::from_s16(simd_arch::vqsubq_s16(a.as_s16(), b.as_s16()))
-        }
+        unsafe { __m128i::from_s16(simd_arch::vqsubq_s16(a.as_s16(), b.as_s16())) }
     }
 }
 
@@ -593,9 +584,7 @@ pub unsafe fn _mm_min_epi16(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i::from_s16(simd_arch::vminq_s16(a.as_s16(), b.as_s16()))
-        }
+        unsafe { __m128i::from_s16(simd_arch::vminq_s16(a.as_s16(), b.as_s16())) }
     }
 }
 
@@ -608,9 +597,7 @@ pub unsafe fn _mm_cmpgt_epi16(a: __m128i, b: __m128i) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        unsafe {
-            __m128i::from_u16(simd_arch::vcgtq_s16(a.as_s16(), b.as_s16()))
-        }
+        unsafe { __m128i::from_u16(simd_arch::vcgtq_s16(a.as_s16(), b.as_s16())) }
     }
 }
 
@@ -731,7 +718,9 @@ pub unsafe fn _mm_storeu_si128(p: *mut __m128i, a: __m128i) {
     #[cfg(target_arch = "aarch64")]
     {
         // NEON stores are unaligned by default
-        unsafe { simd_arch::vst1q_u8(p as *mut u8, a.0); }
+        unsafe {
+            simd_arch::vst1q_u8(p as *mut u8, a.0);
+        }
     }
 }
 
@@ -747,8 +736,8 @@ pub struct SimdEngine128;
 
 #[allow(unsafe_op_in_unsafe_fn)]
 impl SimdEngine for SimdEngine128 {
-    const WIDTH_8: usize = 16;  // 128 bits ÷ 8 bits = 16 lanes
-    const WIDTH_16: usize = 8;   // 128 bits ÷ 16 bits = 8 lanes
+    const WIDTH_8: usize = 16; // 128 bits ÷ 8 bits = 16 lanes
+    const WIDTH_16: usize = 8; // 128 bits ÷ 16 bits = 8 lanes
 
     type Vec8 = __m128i;
     type Vec16 = __m128i;
@@ -984,8 +973,8 @@ pub struct SimdEngine256;
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_op_in_unsafe_fn)]
 impl SimdEngine for SimdEngine256 {
-    const WIDTH_8: usize = 32;  // 256 bits ÷ 8 bits = 32 lanes
-    const WIDTH_16: usize = 16;  // 256 bits ÷ 16 bits = 16 lanes
+    const WIDTH_8: usize = 32; // 256 bits ÷ 8 bits = 32 lanes
+    const WIDTH_16: usize = 16; // 256 bits ÷ 16 bits = 16 lanes
 
     type Vec8 = simd_arch::__m256i;
     type Vec16 = simd_arch::__m256i;
@@ -1214,7 +1203,7 @@ pub struct SimdEngine512;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 #[allow(unsafe_op_in_unsafe_fn)]
 impl SimdEngine for SimdEngine512 {
-    const WIDTH_8: usize = 64;  // 64 lanes for 8-bit operations (4x SSE)
+    const WIDTH_8: usize = 64; // 64 lanes for 8-bit operations (4x SSE)
     const WIDTH_16: usize = 32; // 32 lanes for 16-bit operations (4x SSE)
 
     type Vec8 = simd_arch::__m512i;
@@ -1485,9 +1474,13 @@ pub fn simd_engine_description(engine: SimdEngineType) -> &'static str {
     match engine {
         SimdEngineType::Engine128 => {
             #[cfg(target_arch = "x86_64")]
-            { "SSE (128-bit, 8-way parallelism)" }
+            {
+                "SSE (128-bit, 8-way parallelism)"
+            }
             #[cfg(not(target_arch = "x86_64"))]
-            { "NEON (128-bit, 8-way parallelism)" }
+            {
+                "NEON (128-bit, 8-way parallelism)"
+            }
         }
         #[cfg(target_arch = "x86_64")]
         SimdEngineType::Engine256 => "AVX2 (256-bit, 32-way parallelism)",

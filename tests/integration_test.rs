@@ -1,8 +1,8 @@
 // bwa-mem2-rust/tests/integration_test.rs
 
-use std::path::{Path, PathBuf};
 use std::fs;
 use std::io::{self};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Helper function to create a temporary directory for test files
@@ -19,7 +19,11 @@ fn setup_test_dir(test_name: &str) -> io::Result<PathBuf> {
 fn cleanup_test_dir(temp_dir: &Path) {
     if temp_dir.exists() {
         if let Err(e) = fs::remove_dir_all(temp_dir) {
-            eprintln!("Failed to clean up test directory {}: {}", temp_dir.display(), e);
+            eprintln!(
+                "Failed to clean up test directory {}: {}",
+                temp_dir.display(),
+                e
+            );
         }
     }
 }
@@ -73,7 +77,7 @@ AGCTAGCT
     let binary_path = PathBuf::from("target/release/ferrous-align"); // Assuming cargo build --release was run
 
     let output = Command::new(&binary_path)
-        .arg("mem")  // Use new CLI subcommand
+        .arg("mem") // Use new CLI subcommand
         .arg(ref_prefix.to_str().unwrap())
         .arg(query_fastq_path.to_str().unwrap())
         .output()?;
@@ -97,10 +101,22 @@ AGCTAGCT
     let expected_lines: Vec<&str> = expected_sam_output.lines().collect();
 
     // Basic check for number of lines and presence of key elements
-    assert_eq!(actual_lines.len(), expected_lines.len(), "Mismatch in number of SAM output lines.\nExpected:\n{}\\nActual:\n{}", expected_sam_output, stdout);
+    assert_eq!(
+        actual_lines.len(),
+        expected_lines.len(),
+        "Mismatch in number of SAM output lines.\nExpected:\n{}\\nActual:\n{}",
+        expected_sam_output,
+        stdout
+    );
 
     for (i, expected_line) in expected_lines.iter().enumerate() {
-        assert!(actual_lines[i].contains(expected_line), "Mismatch on line {}.\nExpected to contain: '{}'\nActual line: '{}'", i, expected_line, actual_lines[i]);
+        assert!(
+            actual_lines[i].contains(expected_line),
+            "Mismatch on line {}.\nExpected to contain: '{}'\nActual line: '{}'",
+            i,
+            expected_line,
+            actual_lines[i]
+        );
     }
 
     // Check stderr - allow informational messages from CLI

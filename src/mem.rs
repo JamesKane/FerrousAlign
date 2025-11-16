@@ -1,29 +1,29 @@
 // bwa-mem2-rust/src/mem.rs
 
-use std::io::{self, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use std::fs::File;
-use std::sync::Arc;
-use crate::bwt::Bwt;
 use crate::bntseq::BntSeq;
+use crate::bwt::Bwt;
 use crate::fastq_reader::FastqReader;
 use crate::mem_opt::MemOpt;
 use rayon::prelude::*;
+use std::fs::File;
+use std::io::{self, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::align;
-use crate::align::{CpOcc, CP_SHIFT};
+use crate::align::{CP_SHIFT, CpOcc};
 
 // Batch processing constants (matching C++ bwa-mem2)
-const BATCH_SIZE: usize = 512;  // Number of reads per batch (from C++ BATCH_SIZE)
+const BATCH_SIZE: usize = 512; // Number of reads per batch (from C++ BATCH_SIZE)
 
 // Paired-end insert size constants (from C++ bwamem_pair.cpp)
 #[allow(dead_code)] // Reserved for future use in alignment scoring
-const MIN_RATIO: f64 = 0.8;     // Minimum ratio for unique alignment
-const MIN_DIR_CNT: usize = 10;  // Minimum pairs for orientation
+const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignment
+const MIN_DIR_CNT: usize = 10; // Minimum pairs for orientation
 const MIN_DIR_RATIO: f64 = 0.05; // Minimum ratio for orientation
 const OUTLIER_BOUND: f64 = 2.0; // IQR multiplier for outliers
 const MAPPING_BOUND: f64 = 3.0; // IQR multiplier for mapping
-const MAX_STDDEV: f64 = 4.0;    // Max standard deviations for boundaries
+const MAX_STDDEV: f64 = 4.0; // Max standard deviations for boundaries
 
 // Read data structure for batching
 #[derive(Clone)]
@@ -37,11 +37,11 @@ struct ReadBatch {
 // Insert size statistics for one orientation
 #[derive(Debug, Clone)]
 pub struct InsertSizeStats {
-    pub avg: f64,      // Mean insert size
-    pub std: f64,      // Standard deviation
-    pub low: i32,      // Lower bound for proper pairs
-    pub high: i32,     // Upper bound for proper pairs
-    pub failed: bool,  // Whether this orientation has enough data
+    pub avg: f64,     // Mean insert size
+    pub std: f64,     // Standard deviation
+    pub low: i32,     // Lower bound for proper pairs
+    pub high: i32,    // Upper bound for proper pairs
+    pub failed: bool, // Whether this orientation has enough data
 }
 
 pub struct BwaIndex {
@@ -49,7 +49,7 @@ pub struct BwaIndex {
     pub bns: BntSeq,
     pub cp_occ: Vec<CpOcc>,
     pub sentinel_index: i64,
-    pub min_seed_len: i32,  // Kept for backwards compatibility, but will use MemOpt
+    pub min_seed_len: i32, // Kept for backwards compatibility, but will use MemOpt
 }
 
 impl BwaIndex {
@@ -89,12 +89,15 @@ impl BwaIndex {
                 cp_file.read_exact(&mut buf_u64)?;
                 one_hot_bwt_str[i] = u64::from_le_bytes(buf_u64);
             }
-            cp_occ.push(CpOcc { cp_count, one_hot_bwt_str });
+            cp_occ.push(CpOcc {
+                cp_count,
+                one_hot_bwt_str,
+            });
         }
 
         // In C++, SA_COMPX is 2, so sa_intv is 4.
         let sa_compx = 3;
-        let sa_intv = 1 << sa_compx;  // sa_intv = 8
+        let sa_intv = 1 << sa_compx; // sa_intv = 8
         // Use the same formula as bwt_cal_sa to calculate SA length
         let sa_len = (bwt.seq_len + sa_intv - 1) / sa_intv;
 
@@ -183,7 +186,12 @@ impl BwaIndex {
     }
 }
 
-pub fn main_mem(idx_prefix: &Path, query_files: &Vec<String>, output: Option<&String>, opt: &MemOpt) {
+pub fn main_mem(
+    idx_prefix: &Path,
+    query_files: &Vec<String>,
+    output: Option<&String>,
+    opt: &MemOpt,
+) {
     // Detect and display SIMD capabilities
     use crate::simd_abstraction::{detect_optimal_simd_engine, simd_engine_description};
     let simd_engine = detect_optimal_simd_engine();
@@ -201,13 +209,11 @@ pub fn main_mem(idx_prefix: &Path, query_files: &Vec<String>, output: Option<&St
 
     // Determine output writer
     let mut writer: Box<dyn Write> = match output {
-        Some(file_name) => {
-            match File::create(file_name) {
-                Ok(file) => Box::new(file),
-                Err(e) => {
-                    log::error!("Error creating output file {}: {}", file_name, e);
-                    return;
-                }
+        Some(file_name) => match File::create(file_name) {
+            Ok(file) => Box::new(file),
+            Err(e) => {
+                log::error!("Error creating output file {}: {}", file_name, e);
+                return;
             }
         },
         None => Box::new(io::stdout()),
@@ -280,7 +286,12 @@ pub fn main_mem(idx_prefix: &Path, query_files: &Vec<String>, output: Option<&St
 }
 
 // Process single-end reads with parallel batching
-fn process_single_end(bwa_idx: &BwaIndex, query_files: &Vec<String>, writer: &mut Box<dyn Write>, opt: &MemOpt) {
+fn process_single_end(
+    bwa_idx: &BwaIndex,
+    query_files: &Vec<String>,
+    writer: &mut Box<dyn Write>,
+    opt: &MemOpt,
+) {
     use std::time::Instant;
 
     // Wrap index in Arc for thread-safe sharing
@@ -328,7 +339,8 @@ fn process_single_end(bwa_idx: &BwaIndex, query_files: &Vec<String>, writer: &mu
             // Stage 1: Process batch in parallel (matching C++ kt_pipeline step 1)
             let bwa_idx_clone = Arc::clone(&bwa_idx);
             let opt_clone = Arc::clone(&opt);
-            let alignments: Vec<Vec<align::Alignment>> = batch.names
+            let alignments: Vec<Vec<align::Alignment>> = batch
+                .names
                 .par_iter()
                 .zip(batch.seqs.par_iter())
                 .zip(batch.quals.par_iter())
@@ -340,7 +352,9 @@ fn process_single_end(bwa_idx: &BwaIndex, query_files: &Vec<String>, writer: &mu
             // Stage 2: Write output sequentially (matching C++ kt_pipeline step 2)
             // Filter by minimum score threshold (-T)
             // Extract read group ID if specified
-            let rg_id = opt.read_group.as_ref()
+            let rg_id = opt
+                .read_group
+                .as_ref()
                 .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
 
             for alignment_vec in alignments {
@@ -368,12 +382,22 @@ fn process_single_end(bwa_idx: &BwaIndex, query_files: &Vec<String>, writer: &mu
 
     // Print summary statistics
     let elapsed = start_time.elapsed();
-    log::info!("Processed {} reads ({} bp) in {:.2} sec",
-               total_reads, total_bases, elapsed.as_secs_f64());
+    log::info!(
+        "Processed {} reads ({} bp) in {:.2} sec",
+        total_reads,
+        total_bases,
+        elapsed.as_secs_f64()
+    );
 }
 
 // Process paired-end reads with parallel batching
-fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, writer: &mut Box<dyn Write>, opt: &MemOpt) {
+fn process_paired_end(
+    bwa_idx: &BwaIndex,
+    read1_file: &str,
+    read2_file: &str,
+    writer: &mut Box<dyn Write>,
+    opt: &MemOpt,
+) {
     use std::time::Instant;
 
     // Wrap index in Arc for thread-safe sharing
@@ -435,8 +459,8 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
         // Calculate batch base pairs (both reads)
         let batch_bp: usize = batch1.seqs.iter().map(|s| s.len()).sum::<usize>()
-                            + batch2.seqs.iter().map(|s| s.len()).sum::<usize>();
-        total_reads += batch_size * 2;  // Count both reads
+            + batch2.seqs.iter().map(|s| s.len()).sum::<usize>();
+        total_reads += batch_size * 2; // Count both reads
         total_bases += batch_bp;
 
         log::info!("Read {} sequences ({} bp)", batch_size * 2, batch_bp);
@@ -448,7 +472,8 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
         // Process read1 batch in parallel
         let opt_clone1 = Arc::clone(&opt);
-        let alignments1: Vec<Vec<align::Alignment>> = batch1.names
+        let alignments1: Vec<Vec<align::Alignment>> = batch1
+            .names
             .par_iter()
             .zip(batch1.seqs.par_iter())
             .zip(batch1.quals.par_iter())
@@ -459,7 +484,8 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
         // Process read2 batch in parallel
         let opt_clone2 = Arc::clone(&opt);
-        let alignments2: Vec<Vec<align::Alignment>> = batch2.names
+        let alignments2: Vec<Vec<align::Alignment>> = batch2
+            .names
             .par_iter()
             .zip(batch2.seqs.par_iter())
             .zip(batch2.quals.par_iter())
@@ -496,33 +522,81 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
     let stats = if let Some(ref is_override) = opt.insert_size_override {
         // Use manual insert size specification (-I option)
         if opt.verbosity >= 3 {
-            log::info!("[Paired-end] Using manual insert size: mean={:.1}, std={:.1}, max={}, min={}",
-                     is_override.mean, is_override.stddev, is_override.max, is_override.min);
+            log::info!(
+                "[Paired-end] Using manual insert size: mean={:.1}, std={:.1}, max={}, min={}",
+                is_override.mean,
+                is_override.stddev,
+                is_override.max,
+                is_override.min
+            );
         }
 
         // Create stats for FR orientation only (most common)
         // Other orientations are set to failed
         [
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true }, // FF
-            InsertSizeStats { // FR (standard paired-end)
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            }, // FF
+            InsertSizeStats {
+                // FR (standard paired-end)
                 avg: is_override.mean,
                 std: is_override.stddev,
                 low: is_override.min,
                 high: is_override.max,
                 failed: false,
             },
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true }, // RF
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true }, // RR
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            }, // RF
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            }, // RR
         ]
     } else if !position_pairs.is_empty() {
         // Auto-infer from data (original behavior)
         calculate_insert_size_stats(l_pac, &position_pairs)
     } else {
         [
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
-            InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
         ]
     };
 
@@ -556,16 +630,28 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
     let mut all_seqs2: Vec<(String, Vec<u8>, String)> = Vec::new();
 
     loop {
-        let batch1 = reader1_rescue.read_batch(BATCH_SIZE).unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
-        let batch2 = reader2_rescue.read_batch(BATCH_SIZE).unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
+        let batch1 = reader1_rescue
+            .read_batch(BATCH_SIZE)
+            .unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
+        let batch2 = reader2_rescue
+            .read_batch(BATCH_SIZE)
+            .unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
 
         if batch1.is_empty() {
             break;
         }
 
         for i in 0..batch1.names.len() {
-            all_seqs1.push((batch1.names[i].clone(), batch1.seqs[i].clone(), batch1.quals[i].clone()));
-            all_seqs2.push((batch2.names[i].clone(), batch2.seqs[i].clone(), batch2.quals[i].clone()));
+            all_seqs1.push((
+                batch1.names[i].clone(),
+                batch1.seqs[i].clone(),
+                batch1.quals[i].clone(),
+            ));
+            all_seqs2.push((
+                batch2.names[i].clone(),
+                batch2.seqs[i].clone(),
+                batch2.quals[i].clone(),
+            ));
         }
     }
 
@@ -580,13 +666,15 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
         // Convert sequence to encoded format
         let encode_seq = |seq: &[u8]| -> Vec<u8> {
-            seq.iter().map(|&b| match b {
-                b'A' | b'a' => 0,
-                b'C' | b'c' => 1,
-                b'G' | b'g' => 2,
-                b'T' | b't' => 3,
-                _ => 4,
-            }).collect()
+            seq.iter()
+                .map(|&b| match b {
+                    b'A' | b'a' => 0,
+                    b'C' | b'c' => 1,
+                    b'G' | b'g' => 2,
+                    b'T' | b't' => 3,
+                    _ => 4,
+                })
+                .collect()
         };
 
         // Try to rescue read2 if read1 has good alignments but read2 doesn't
@@ -639,25 +727,26 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
         };
 
         // Determine best paired alignment indices and check if properly paired
-        let (best_idx1, best_idx2, is_properly_paired) = if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
-            // Found a valid pair from mem_pair - check if they're on the same chromosome (not discordant)
-            let aln1 = &alignments1[idx1];
-            let aln2 = &alignments2[idx2];
-            let same_chr = aln1.ref_name == aln2.ref_name;
-            // Only mark as properly paired if on same chromosome
-            (idx1, idx2, same_chr)
-        } else if !alignments1.is_empty() && !alignments2.is_empty() {
-            // mem_pair returned None (likely due to insufficient statistics)
-            // But both reads are mapped - use first alignments and check if same chr
-            let aln1 = &alignments1[0];
-            let aln2 = &alignments2[0];
-            let same_chr = aln1.ref_name == aln2.ref_name;
-            // Mark as properly paired if on same chromosome (basic pairing criteria)
-            (0, 0, same_chr)
-        } else {
-            // At least one read is unmapped
-            (0, 0, false)
-        };
+        let (best_idx1, best_idx2, is_properly_paired) =
+            if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
+                // Found a valid pair from mem_pair - check if they're on the same chromosome (not discordant)
+                let aln1 = &alignments1[idx1];
+                let aln2 = &alignments2[idx2];
+                let same_chr = aln1.ref_name == aln2.ref_name;
+                // Only mark as properly paired if on same chromosome
+                (idx1, idx2, same_chr)
+            } else if !alignments1.is_empty() && !alignments2.is_empty() {
+                // mem_pair returned None (likely due to insufficient statistics)
+                // But both reads are mapped - use first alignments and check if same chr
+                let aln1 = &alignments1[0];
+                let aln2 = &alignments2[0];
+                let same_chr = aln1.ref_name == aln2.ref_name;
+                // Mark as properly paired if on same chromosome (basic pairing criteria)
+                (0, 0, same_chr)
+            } else {
+                // At least one read is unmapped
+                (0, 0, false)
+            };
 
         // Extract mate info from best alignments before mutably borrowing
         let (mate2_ref, mate2_pos, mate2_flag) = if let Some(aln2) = alignments2.get(best_idx2) {
@@ -677,7 +766,7 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
         if alignments1.is_empty() {
             let mut unmapped = align::Alignment {
                 query_name: String::new(), // Will be filled from kseq if needed
-                flag: 0x1 | 0x4 | 0x40, // paired | unmapped | first in pair
+                flag: 0x1 | 0x4 | 0x40,    // paired | unmapped | first in pair
                 ref_name: mate2_ref.clone(),
                 ref_id: 0,
                 pos: mate2_pos,
@@ -708,7 +797,7 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
         if alignments2.is_empty() {
             let mut unmapped = align::Alignment {
                 query_name: String::new(), // Will be filled from kseq if needed
-                flag: 0x1 | 0x4 | 0x80, // paired | unmapped | second in pair
+                flag: 0x1 | 0x4 | 0x80,    // paired | unmapped | second in pair
                 ref_name: mate1_ref.clone(),
                 ref_id: 0,
                 pos: mate1_pos,
@@ -742,10 +831,10 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
                 continue;
             }
 
-            alignment.flag |= 0x1;  // 0x1: paired
+            alignment.flag |= 0x1; // 0x1: paired
 
             if is_properly_paired && idx == best_idx1 {
-                alignment.flag |= 0x2;  // 0x2: properly paired
+                alignment.flag |= 0x2; // 0x2: properly paired
             }
 
             alignment.flag |= 0x40; // 0x40: first in pair
@@ -774,7 +863,11 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
                     let pos1 = alignment.pos as i64;
                     let pos2 = mate2_pos as i64;
                     let (_, dist) = infer_orientation(l_pac, pos1, pos2);
-                    alignment.tlen = if pos1 <= pos2 { dist as i32 } else { -(dist as i32) };
+                    alignment.tlen = if pos1 <= pos2 {
+                        dist as i32
+                    } else {
+                        -(dist as i32)
+                    };
                 }
             }
         }
@@ -786,10 +879,10 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
                 continue;
             }
 
-            alignment.flag |= 0x1;  // 0x1: paired
+            alignment.flag |= 0x1; // 0x1: paired
 
             if is_properly_paired && idx == best_idx2 {
-                alignment.flag |= 0x2;  // 0x2: properly paired
+                alignment.flag |= 0x2; // 0x2: properly paired
             }
 
             alignment.flag |= 0x80; // 0x80: second in pair
@@ -818,13 +911,19 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
                     let pos1 = mate1_pos as i64;
                     let pos2 = alignment.pos as i64;
                     let (_, dist) = infer_orientation(l_pac, pos1, pos2);
-                    alignment.tlen = if pos2 <= pos1 { dist as i32 } else { -(dist as i32) };
+                    alignment.tlen = if pos2 <= pos1 {
+                        dist as i32
+                    } else {
+                        -(dist as i32)
+                    };
                 }
             }
         }
 
         // Add optional tags to alignments before output
-        let rg_id = opt.read_group.as_ref()
+        let rg_id = opt
+            .read_group
+            .as_ref()
             .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
 
         // Get mate CIGARs for MC tag
@@ -850,7 +949,9 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
                 // Add MC (mate CIGAR) tag for paired-end reads
                 if !mate2_cigar.is_empty() {
-                    alignment.tags.push(("MC".to_string(), format!("Z:{}", mate2_cigar)));
+                    alignment
+                        .tags
+                        .push(("MC".to_string(), format!("Z:{}", mate2_cigar)));
                 }
 
                 let sam_record = alignment.to_sam_string();
@@ -870,7 +971,9 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
                 // Add MC (mate CIGAR) tag for paired-end reads
                 if !mate1_cigar.is_empty() {
-                    alignment.tags.push(("MC".to_string(), format!("Z:{}", mate1_cigar)));
+                    alignment
+                        .tags
+                        .push(("MC".to_string(), format!("Z:{}", mate1_cigar)));
                 }
 
                 let sam_record = alignment.to_sam_string();
@@ -885,8 +988,12 @@ fn process_paired_end(bwa_idx: &BwaIndex, read1_file: &str, read2_file: &str, wr
 
     // Print summary statistics
     let elapsed = start_time.elapsed();
-    log::info!("Processed {} reads ({} bp) in {:.2} sec",
-               total_reads, total_bases, elapsed.as_secs_f64());
+    log::info!(
+        "Processed {} reads ({} bp) in {:.2} sec",
+        total_reads,
+        total_bases,
+        elapsed.as_secs_f64()
+    );
 }
 
 // Infer orientation of paired reads (from C++ mem_infer_dir)
@@ -917,17 +1024,17 @@ fn infer_orientation(l_pac: i64, pos1: i64, pos2: i64) -> (usize, i64) {
 // Pair information for mem_pair scoring (equivalent to C++ pair64_t)
 #[derive(Debug, Clone, Copy)]
 struct AlignmentInfo {
-    pos_key: u64,  // (ref_id << 32) | forward_position
-    info: u64,     // (score << 32) | (index << 2) | (is_rev << 1) | read_number
+    pos_key: u64, // (ref_id << 32) | forward_position
+    info: u64,    // (score << 32) | (index << 2) | (is_rev << 1) | read_number
 }
 
 // Paired alignment scoring result
 #[derive(Debug, Clone, Copy)]
 struct PairScore {
-    idx1: usize,   // Index in read1 alignments
-    idx2: usize,   // Index in read2 alignments
-    score: i32,    // Paired alignment score
-    hash: u32,     // Hash for tie-breaking
+    idx1: usize, // Index in read1 alignments
+    idx2: usize, // Index in read2 alignments
+    score: i32,  // Paired alignment score
+    hash: u32,   // Hash for tie-breaking
 }
 
 // Score paired-end alignments based on insert size distribution (C++ mem_pair equivalent)
@@ -989,7 +1096,8 @@ fn mem_pair(
 
     // For each alignment, look backward for compatible mates
     for i in 0..v.len() {
-        for r in 0..2 {  // Try both orientations
+        for r in 0..2 {
+            // Try both orientations
             let dir = ((r << 1) | ((v[i].info >> 1) & 1)) as usize; // orientation index
 
             if stats[dir].failed {
@@ -1038,7 +1146,9 @@ fn mem_pair(
 
                 // Log-likelihood penalty: .721 * log(2 * erfc(|ns| / sqrt(2))) * match_score
                 // .721 = 1/log(4) converts to base-4 log
-                let log_prob = 0.721 * ((2.0 * erfc(ns.abs() / std::f64::consts::SQRT_2)).ln()) * (match_score as f64);
+                let log_prob = 0.721
+                    * ((2.0 * erfc(ns.abs() / std::f64::consts::SQRT_2)).ln())
+                    * (match_score as f64);
 
                 let score1 = (v[i].info >> 32) as i32;
                 let score2 = (v[k].info >> 32) as i32;
@@ -1053,8 +1163,16 @@ fn mem_pair(
                 let hash = (hash_64(hash_input ^ (pair_id << 8)) & 0xffffffff) as u32;
 
                 u.push(PairScore {
-                    idx1: if (v[k].info & 1) == 0 { ((v[k].info >> 2) & 0x3fffffff) as usize } else { ((v[i].info >> 2) & 0x3fffffff) as usize },
-                    idx2: if (v[k].info & 1) == 1 { ((v[k].info >> 2) & 0x3fffffff) as usize } else { ((v[i].info >> 2) & 0x3fffffff) as usize },
+                    idx1: if (v[k].info & 1) == 0 {
+                        ((v[k].info >> 2) & 0x3fffffff) as usize
+                    } else {
+                        ((v[i].info >> 2) & 0x3fffffff) as usize
+                    },
+                    idx2: if (v[k].info & 1) == 1 {
+                        ((v[k].info >> 2) & 0x3fffffff) as usize
+                    } else {
+                        ((v[i].info >> 2) & 0x3fffffff) as usize
+                    },
                     score: q,
                     hash,
                 });
@@ -1074,11 +1192,9 @@ fn mem_pair(
     }
 
     // Sort by score (descending), then by hash
-    u.sort_by(|a, b| {
-        match b.score.cmp(&a.score) {
-            std::cmp::Ordering::Equal => b.hash.cmp(&a.hash),
-            other => other,
-        }
+    u.sort_by(|a, b| match b.score.cmp(&a.score) {
+        std::cmp::Ordering::Equal => b.hash.cmp(&a.hash),
+        other => other,
     });
 
     // Best pair is first
@@ -1155,8 +1271,8 @@ fn mem_matesw(
         100, // zdrop
         0,   // end_bonus
         align::DEFAULT_SCORING_MATRIX,
-        2,   // w_match
-        -4,  // w_mismatch
+        2,  // w_match
+        -4, // w_mismatch
     );
 
     let mut n_rescued = 0;
@@ -1168,12 +1284,16 @@ fn mem_matesw(
         }
 
         let is_rev = (r >> 1) != (r & 1); // Whether to reverse complement the mate
-        let is_larger = (r >> 1) == 0;    // Whether the mate has larger coordinate
+        let is_larger = (r >> 1) == 0; // Whether the mate has larger coordinate
 
         // Prepare mate sequence (reverse complement if needed)
         let seq: Vec<u8>;
         if is_rev {
-            seq = mate_seq.iter().rev().map(|&b| if b < 4 { 3 - b } else { 4 }).collect();
+            seq = mate_seq
+                .iter()
+                .rev()
+                .map(|&b| if b < 4 { 3 - b } else { 4 })
+                .collect();
         } else {
             seq = mate_seq.to_vec();
         }
@@ -1210,12 +1330,8 @@ fn mem_matesw(
         }
 
         // Fetch reference sequence
-        let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(
-            &pac,
-            rb,
-            (rb + re) >> 1,
-            re,
-        );
+        let (ref_seq, adj_rb, adj_re, rid) =
+            bwa_idx.bns.bns_fetch_seq(&pac, rb, (rb + re) >> 1, re);
 
         // Check if on same reference and region is large enough
         if rid as usize != anchor.ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
@@ -1225,11 +1341,7 @@ fn mem_matesw(
         // Perform Smith-Waterman alignment
         let ref_len = ref_seq.len() as i32;
         let (out_score, cigar) = sw_params.scalar_banded_swa(
-            l_ms,
-            &seq,
-            ref_len,
-            &ref_seq,
-            100, // w (bandwidth)
+            l_ms, &seq, ref_len, &ref_seq, 100, // w (bandwidth)
             0,   // h0 (initial score)
         );
 
@@ -1246,14 +1358,17 @@ fn mem_matesw(
 
         for &(op, len) in &cigar {
             match op {
-                0 => { // Match/Mismatch
+                0 => {
+                    // Match/Mismatch
                     _query_consumed += len;
                     ref_consumed += len;
                 }
-                1 => { // Insertion (consumes query)
+                1 => {
+                    // Insertion (consumes query)
                     _query_consumed += len;
                 }
-                2 => { // Deletion (consumes reference)
+                2 => {
+                    // Deletion (consumes reference)
                     ref_consumed += len;
                 }
                 _ => {}
@@ -1288,9 +1403,19 @@ fn mem_matesw(
             rnext: String::from("*"),
             pnext: 0,
             tlen: 0,
-            seq: String::from_utf8(mate_seq.iter().map(|&b| match b {
-                0 => b'A', 1 => b'C', 2 => b'G', 3 => b'T', _ => b'N',
-            }).collect()).unwrap(),
+            seq: String::from_utf8(
+                mate_seq
+                    .iter()
+                    .map(|&b| match b {
+                        0 => b'A',
+                        1 => b'C',
+                        2 => b'G',
+                        3 => b'T',
+                        _ => b'N',
+                    })
+                    .collect(),
+            )
+            .unwrap(),
             qual: mate_qual.to_string(),
             tags: Vec::new(),
         };
@@ -1320,16 +1445,15 @@ fn erfc(x: f64) -> f64 {
     // Use standard library if available, otherwise approximation
     // For now, using a simple approximation
     let t = 1.0 / (1.0 + 0.5 * x.abs());
-    let tau = t * (-x * x - 1.26551223
-        + t * (1.00002368
-        + t * (0.37409196
-        + t * (0.09678418
-        + t * (-0.18628806
-        + t * (0.27886807
-        + t * (-1.13520398
-        + t * (1.48851587
-        + t * (-0.82215223
-        + t * 0.17087277)))))))));
+    let tau = t
+        * (-x * x - 1.26551223
+            + t * (1.00002368
+                + t * (0.37409196
+                    + t * (0.09678418
+                        + t * (-0.18628806
+                            + t * (0.27886807
+                                + t * (-1.13520398
+                                    + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
     if x >= 0.0 { tau } else { 2.0 - tau }
 }
 
@@ -1357,10 +1481,34 @@ fn calculate_insert_size_stats(
     );
 
     let mut stats = [
-        InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
-        InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
-        InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
-        InsertSizeStats { avg: 0.0, std: 0.0, low: 0, high: 0, failed: true },
+        InsertSizeStats {
+            avg: 0.0,
+            std: 0.0,
+            low: 0,
+            high: 0,
+            failed: true,
+        },
+        InsertSizeStats {
+            avg: 0.0,
+            std: 0.0,
+            low: 0,
+            high: 0,
+            failed: true,
+        },
+        InsertSizeStats {
+            avg: 0.0,
+            std: 0.0,
+            low: 0,
+            high: 0,
+            failed: true,
+        },
+        InsertSizeStats {
+            avg: 0.0,
+            std: 0.0,
+            low: 0,
+            high: 0,
+            failed: true,
+        },
     ];
 
     let orientation_names = ["FF", "FR", "RF", "RR"];
@@ -1372,14 +1520,17 @@ fn calculate_insert_size_stats(
         if sizes.len() < MIN_DIR_CNT {
             log::debug!(
                 "Skipping orientation {} (insufficient pairs: {} < {})",
-                orientation_names[d], sizes.len(), MIN_DIR_CNT
+                orientation_names[d],
+                sizes.len(),
+                MIN_DIR_CNT
             );
             continue;
         }
 
         log::info!(
             "Analyzing insert size for orientation {} ({} pairs)",
-            orientation_names[d], sizes.len()
+            orientation_names[d],
+            sizes.len()
         );
 
         // Sort insert sizes
@@ -1394,7 +1545,9 @@ fn calculate_insert_size_stats(
 
         // Calculate initial bounds for mean/std calculation (outlier removal)
         let mut low = ((p25 as f64 - OUTLIER_BOUND * iqr as f64) + 0.499) as i32;
-        if low < 1 { low = 1; }
+        if low < 1 {
+            low = 1;
+        }
         let mut high = ((p75 as f64 + OUTLIER_BOUND * iqr as f64) + 0.499) as i32;
 
         log::debug!("  Percentiles (25/50/75): {}/{}/{}", p25, p50, p75);
@@ -1411,7 +1564,10 @@ fn calculate_insert_size_stats(
         }
 
         if count == 0 {
-            log::warn!("No valid samples for orientation {} within bounds", orientation_names[d]);
+            log::warn!(
+                "No valid samples for orientation {} within bounds",
+                orientation_names[d]
+            );
             continue;
         }
 
@@ -1437,9 +1593,15 @@ fn calculate_insert_size_stats(
         let low_stddev = (avg - MAX_STDDEV * std + 0.499) as i32;
         let high_stddev = (avg + MAX_STDDEV * std + 0.499) as i32;
 
-        if low > low_stddev { low = low_stddev; }
-        if high < high_stddev { high = high_stddev; }
-        if low < 1 { low = 1; }
+        if low > low_stddev {
+            low = low_stddev;
+        }
+        if high < high_stddev {
+            high = high_stddev;
+        }
+        if low < 1 {
+            low = 1;
+        }
 
         log::info!("  Proper pair bounds: {} - {}", low, high);
 
@@ -1459,7 +1621,10 @@ fn calculate_insert_size_stats(
     for d in 0..4 {
         if !stats[d].failed && insert_sizes[d].len() < (max_count as f64 * MIN_DIR_RATIO) as usize {
             stats[d].failed = true;
-            log::debug!("Skipping orientation {} (insufficient ratio)", orientation_names[d]);
+            log::debug!(
+                "Skipping orientation {} (insufficient ratio)",
+                orientation_names[d]
+            );
         }
     }
 

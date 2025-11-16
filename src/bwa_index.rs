@@ -1,12 +1,16 @@
-use std::io;
-use std::path::Path;
 use std::fs::File;
+use std::io;
 use std::io::Read;
+use std::path::Path;
 
 pub const BWA_IDX_ALL: i32 = 0x7;
 
 pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
-    log::info!("Building index for {} with prefix {}", fasta_file.display(), prefix.display());
+    log::info!(
+        "Building index for {} with prefix {}",
+        fasta_file.display(),
+        prefix.display()
+    );
 
     // Step 1: Parse FASTA and generate BntSeq and PAC array
     let bns = crate::bntseq::BntSeq::bns_fasta2bntseq(
@@ -35,9 +39,9 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
         let byte_idx = (i / 4) as usize;
         let bit_offset = (i % 4) * 2;
         let base = (pac_data[byte_idx] >> bit_offset) & 0x03;
-        text_for_sais.push((base + 1) as u8);  // Shift: A=1, C=2, G=3, T=4
+        text_for_sais.push((base + 1) as u8); // Shift: A=1, C=2, G=3, T=4
     }
-    text_for_sais.push(0);  // Sentinel: lexicographically smallest
+    text_for_sais.push(0); // Sentinel: lexicographically smallest
 
     // eprintln!("DEBUG: Building SA for {} bases (with sentinel)", text_for_sais.len());
     // eprintln!("DEBUG: text_for_sais[:17] = {:?}", &text_for_sais[..text_for_sais.len().min(17)]);
@@ -66,7 +70,11 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
             // text_for_sais has values 1,2,3,4 (shifted) or 0 (sentinel)
             let bwt_char = text_for_sais[(sa_val - 1) as usize];
             // Convert back to 0,1,2,3 or 4 for sentinel
-            bwt_output[i] = if bwt_char == 0 { 4 } else { (bwt_char - 1) as i32 };
+            bwt_output[i] = if bwt_char == 0 {
+                4
+            } else {
+                (bwt_char - 1) as i32
+            };
         }
     }
 

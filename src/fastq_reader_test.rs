@@ -75,8 +75,8 @@ mod tests {
 
     #[test]
     fn test_gzip_detection() {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::fs::File;
 
         // Create a gzipped FASTQ file
@@ -115,7 +115,7 @@ mod tests {
         writeln!(file, "@read1").unwrap();
         writeln!(file, "ACGT").unwrap();
         writeln!(file, "+").unwrap();
-        writeln!(file, "!#$%").unwrap();  // Quality scores: 0, 2, 3, 4 (Phred+33)
+        writeln!(file, "!#$%").unwrap(); // Quality scores: 0, 2, 3, 4 (Phred+33)
         file.flush().unwrap();
 
         let mut reader = FastqReader::new(file.path().to_str().unwrap()).unwrap();

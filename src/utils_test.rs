@@ -4,11 +4,11 @@
 mod tests {
     use super::*;
     use crate::utils::*; // Import all from utils
-    use std::io::{self, Cursor, Write}; // Add Write trait
-    use std::fs;
-    use std::path::PathBuf;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::fs;
+    use std::io::{self, Cursor, Write}; // Add Write trait
+    use std::path::PathBuf;
 
     // Helper for creating temporary files
     fn create_temp_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<PathBuf> {
@@ -130,7 +130,7 @@ mod tests {
     fn test_xzopen_gz_file() -> io::Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let gz_file_path = temp_dir.path().join("test.txt.gz");
-        
+
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(b"gzipped content")?;
         let compressed_bytes = encoder.finish()?;
@@ -177,14 +177,17 @@ mod tests {
             Pair64 { x: 4, y: 0 },
         ];
         ks_introsort_128(&mut arr);
-        assert_eq!(arr, [
-            Pair64 { x: 1, y: 0 },
-            Pair64 { x: 2, y: 0 },
-            Pair64 { x: 4, y: 0 },
-            Pair64 { x: 5, y: 0 },
-            Pair64 { x: 8, y: 0 },
-            Pair64 { x: 9, y: 0 },
-        ]);
+        assert_eq!(
+            arr,
+            [
+                Pair64 { x: 1, y: 0 },
+                Pair64 { x: 2, y: 0 },
+                Pair64 { x: 4, y: 0 },
+                Pair64 { x: 5, y: 0 },
+                Pair64 { x: 8, y: 0 },
+                Pair64 { x: 9, y: 0 },
+            ]
+        );
 
         let mut arr_with_y = [
             Pair64 { x: 1, y: 5 },
@@ -192,10 +195,13 @@ mod tests {
             Pair64 { x: 2, y: 1 },
         ];
         ks_introsort_128(&mut arr_with_y);
-        assert_eq!(arr_with_y, [
-            Pair64 { x: 1, y: 2 },
-            Pair64 { x: 1, y: 5 },
-            Pair64 { x: 2, y: 1 },
-        ]);
+        assert_eq!(
+            arr_with_y,
+            [
+                Pair64 { x: 1, y: 2 },
+                Pair64 { x: 1, y: 5 },
+                Pair64 { x: 2, y: 1 },
+            ]
+        );
     }
 }

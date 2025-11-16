@@ -29,7 +29,6 @@ pub struct EhT {
 // Constants
 const DEFAULT_AMBIG: i8 = -1;
 
-
 // Traceback codes
 const TB_MATCH: u8 = 0;
 const TB_DEL: u8 = 1; // Gap in target/reference
@@ -59,8 +58,17 @@ pub struct BandedPairWiseSW {
 }
 
 impl BandedPairWiseSW {
-    pub fn new(o_del: i32, e_del: i32, o_ins: i32, e_ins: i32, zdrop: i32,
-               end_bonus: i32, mat: [i8; 25], w_match: i8, w_mismatch: i8) -> Self {
+    pub fn new(
+        o_del: i32,
+        e_del: i32,
+        o_ins: i32,
+        e_ins: i32,
+        zdrop: i32,
+        end_bonus: i32,
+        mat: [i8; 25],
+        w_match: i8,
+        w_mismatch: i8,
+    ) -> Self {
         BandedPairWiseSW {
             m: 5, // Assuming 5 bases (A, C, G, T, N)
             end_bonus,
@@ -72,15 +80,21 @@ impl BandedPairWiseSW {
             mat,
             w_match,
             w_mismatch: w_mismatch * -1, // Mismatch score is negative in C++
-            w_open: o_del as i8, // Cast to i8
-            w_extend: e_del as i8, // Cast to i8
+            w_open: o_del as i8,         // Cast to i8
+            w_extend: e_del as i8,       // Cast to i8
             w_ambig: DEFAULT_AMBIG,
         }
     }
 
-    pub fn scalar_banded_swa(&self, qlen: i32, query: &[u8], tlen: i32,
-                             target: &[u8], w: i32, h0: i32) -> (OutScore, Vec<(u8, i32)>) {
-
+    pub fn scalar_banded_swa(
+        &self,
+        qlen: i32,
+        query: &[u8],
+        tlen: i32,
+        target: &[u8],
+        w: i32,
+        h0: i32,
+    ) -> (OutScore, Vec<(u8, i32)>) {
         // Handle degenerate cases: empty sequences
         if tlen == 0 || qlen == 0 {
             // For empty sequences, return zero score and empty CIGAR
@@ -117,8 +131,8 @@ impl BandedPairWiseSW {
         eh[0].h = h0;
         eh[1].h = if h0 > oe_ins { h0 - oe_ins } else { 0 };
         for j in 2..=(qlen as usize) {
-            if eh[j-1].h > self.e_ins {
-                eh[j].h = eh[j-1].h - self.e_ins;
+            if eh[j - 1].h > self.e_ins {
+                eh[j].h = eh[j - 1].h - self.e_ins;
             } else {
                 eh[j].h = 0;
             }
@@ -133,7 +147,6 @@ impl BandedPairWiseSW {
         for i in 1..=(tlen as usize) {
             tb[i][0] = TB_DEL;
         }
-
 
         // DP loop
         let mut max_score = h0;
@@ -159,14 +172,22 @@ impl BandedPairWiseSW {
             let mut current_beg = beg;
             let mut current_end = end;
 
-            if current_beg < i - w { current_beg = i - w; }
-            if current_end > i + w + 1 { current_end = i + w + 1; }
-            if current_end > qlen { current_end = qlen; }
+            if current_beg < i - w {
+                current_beg = i - w;
+            }
+            if current_end > i + w + 1 {
+                current_end = i + w + 1;
+            }
+            if current_end > qlen {
+                current_end = qlen;
+            }
 
             // Compute the first column
             if current_beg == 0 {
                 _h1 = h0 - (self.o_del + self.e_del * (i + 1));
-                if _h1 < 0 { _h1 = 0; }
+                if _h1 < 0 {
+                    _h1 = 0;
+                }
             } else {
                 _h1 = 0;
             }
@@ -182,7 +203,9 @@ impl BandedPairWiseSW {
 
                 // Calculate M (match/mismatch) score
                 m_score = m_score + q_slice[j as usize] as i32;
-                if m_score < 0 { m_score = 0; } // Local alignment: clamp to 0
+                if m_score < 0 {
+                    m_score = 0;
+                } // Local alignment: clamp to 0
 
                 // Determine max of M, E, F
                 let mut h_scores = [(m_score, TB_MATCH), (e, TB_DEL), (f, TB_INS)];
@@ -223,7 +246,9 @@ impl BandedPairWiseSW {
                 }
             }
 
-            if m_val == 0 { break; }
+            if m_val == 0 {
+                break;
+            }
 
             if m_val > max_score {
                 max_score = m_val;
@@ -234,15 +259,22 @@ impl BandedPairWiseSW {
                 let diff_i = i - max_i;
                 let diff_j = mj - max_j;
                 if diff_i > diff_j {
-                    if max_score - m_val - (diff_i - diff_j) * self.e_del > self.zdrop { break; }
+                    if max_score - m_val - (diff_i - diff_j) * self.e_del > self.zdrop {
+                        break;
+                    }
                 } else {
-                    if max_score - m_val - (diff_j - diff_i) * self.e_ins > self.zdrop { break; }
+                    if max_score - m_val - (diff_j - diff_i) * self.e_ins > self.zdrop {
+                        break;
+                    }
                 }
             }
 
             // Update beg and end for the next round
             let mut new_beg = current_beg;
-            while new_beg < current_end && eh[new_beg as usize].h == 0 && eh[new_beg as usize].e == 0 {
+            while new_beg < current_end
+                && eh[new_beg as usize].h == 0
+                && eh[new_beg as usize].e == 0
+            {
                 new_beg += 1;
             }
             beg = new_beg;
@@ -259,7 +291,11 @@ impl BandedPairWiseSW {
         // rather than stopping at the max score position (local alignment)
         let mut cigar = Vec::new();
         let use_global_end = true; // TODO: this might need to be a parameter
-        let mut curr_i = if use_global_end { _max_ie + 1 } else { max_i + 1 };
+        let mut curr_i = if use_global_end {
+            _max_ie + 1
+        } else {
+            max_i + 1
+        };
         let mut curr_j = if use_global_end { qlen } else { max_j + 1 };
 
         const MAX_TRACEBACK_ITERATIONS: i32 = 10000; // Safety limit to prevent infinite loops
@@ -268,8 +304,17 @@ impl BandedPairWiseSW {
         while curr_i > 0 || curr_j > 0 {
             // Safety check: prevent infinite loops
             if iteration_count >= MAX_TRACEBACK_ITERATIONS {
-                log::error!("Traceback exceeded MAX_TRACEBACK_ITERATIONS ({}) - possible infinite loop!", MAX_TRACEBACK_ITERATIONS);
-                log::error!("  curr_i={}, curr_j={}, qlen={}, tlen={}", curr_i, curr_j, qlen, tlen);
+                log::error!(
+                    "Traceback exceeded MAX_TRACEBACK_ITERATIONS ({}) - possible infinite loop!",
+                    MAX_TRACEBACK_ITERATIONS
+                );
+                log::error!(
+                    "  curr_i={}, curr_j={}, qlen={}, tlen={}",
+                    curr_i,
+                    curr_j,
+                    qlen,
+                    tlen
+                );
                 break;
             }
             iteration_count += 1;
@@ -284,7 +329,10 @@ impl BandedPairWiseSW {
                     let mut match_count = 0;
                     let mut mismatch_count = 0;
 
-                    while curr_i > 0 && curr_j > 0 && tb[curr_i as usize][curr_j as usize] == TB_MATCH {
+                    while curr_i > 0
+                        && curr_j > 0
+                        && tb[curr_i as usize][curr_j as usize] == TB_MATCH
+                    {
                         // Check if the bases actually match
                         let query_base = query[(curr_j - 1) as usize];
                         let target_base = target[(curr_i - 1) as usize];
@@ -316,7 +364,7 @@ impl BandedPairWiseSW {
                     if mismatch_count > 0 {
                         cigar.push((b'X', mismatch_count));
                     }
-                },
+                }
                 TB_DEL => {
                     let mut count = 0;
                     while curr_i > 0 && tb[curr_i as usize][curr_j as usize] == TB_DEL {
@@ -326,7 +374,7 @@ impl BandedPairWiseSW {
                     if count > 0 {
                         cigar.push((b'D', count));
                     }
-                },
+                }
                 TB_INS => {
                     let mut count = 0;
                     while curr_j > 0 && tb[curr_i as usize][curr_j as usize] == TB_INS {
@@ -336,13 +384,18 @@ impl BandedPairWiseSW {
                     if count > 0 {
                         cigar.push((b'I', count));
                     }
-                },
+                }
                 _ => break, // Should not happen
             }
 
             // Safety check: ensure we made progress
             if curr_i == prev_i && curr_j == prev_j {
-                log::warn!("Traceback made no progress at curr_i={}, curr_j={}, tb_code={}", curr_i, curr_j, tb_code);
+                log::warn!(
+                    "Traceback made no progress at curr_i={}, curr_j={}, tb_code={}",
+                    curr_i,
+                    curr_j,
+                    tb_code
+                );
                 break; // Exit to prevent infinite loop
             }
         }
@@ -400,8 +453,12 @@ impl BandedPairWiseSW {
             tlen[i] = t.min(127) as i8;
             h0[i] = h as i8;
             w[i] = wi as i8;
-            if q > max_qlen { max_qlen = q; }
-            if t > max_tlen { max_tlen = t; }
+            if q > max_qlen {
+                max_qlen = q;
+            }
+            if t > max_tlen {
+                max_tlen = t;
+            }
         }
 
         // Clamp to MAX_SEQ_LEN
@@ -465,7 +522,10 @@ impl BandedPairWiseSW {
             // H[0][1] = max(0, h0 - oe_ins)
             let h1_vec = _mm_subs_epi8(h0_vec, oe_ins_vec);
             let h1_vec = _mm_max_epi8(h1_vec, zero_vec);
-            _mm_storeu_si128(h_matrix.as_mut_ptr().add(SIMD_WIDTH) as *mut __m128i, h1_vec);
+            _mm_storeu_si128(
+                h_matrix.as_mut_ptr().add(SIMD_WIDTH) as *mut __m128i,
+                h1_vec,
+            );
 
             // H[0][j] = max(0, H[0][j-1] - e_ins) for j > 1
             let mut h_prev = h1_vec;
@@ -474,7 +534,7 @@ impl BandedPairWiseSW {
                 let h_curr = _mm_max_epi8(h_curr, zero_vec);
                 _mm_storeu_si128(
                     h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i,
-                    h_curr
+                    h_curr,
                 );
                 h_prev = h_curr;
             }
@@ -503,9 +563,9 @@ impl BandedPairWiseSW {
 
         // Compute band boundaries for each lane
         // For each target position i, we only compute DP for j in [i-w, i+w+1] ∩ [0, qlen]
-        let mut beg = vec![0i8; SIMD_WIDTH];  // Current band start for each lane
-        let mut end = vec![0i8; SIMD_WIDTH];  // Current band end for each lane
-        let mut terminated = vec![false; SIMD_WIDTH];  // Track which lanes have terminated early
+        let mut beg = vec![0i8; SIMD_WIDTH]; // Current band start for each lane
+        let mut end = vec![0i8; SIMD_WIDTH]; // Current band end for each lane
+        let mut terminated = vec![false; SIMD_WIDTH]; // Track which lanes have terminated early
 
         for lane in 0..SIMD_WIDTH {
             beg[lane] = 0;
@@ -568,7 +628,8 @@ impl BandedPairWiseSW {
                     // Create mask for positions within band (per-lane)
                     // mask[lane] = (j >= current_beg[lane] && j < current_end[lane]) ? 0xFF : 0x00
                     let j_vec = _mm_set1_epi8(j as i8);
-                    let in_band_left = _mm_cmpgt_epi8(j_vec, _mm_subs_epi8(current_beg_vec, one_vec));
+                    let in_band_left =
+                        _mm_cmpgt_epi8(j_vec, _mm_subs_epi8(current_beg_vec, one_vec));
                     let in_band_right = _mm_cmpgt_epi8(current_end_vec, j_vec);
                     let in_band_mask = _mm_and_si128(in_band_left, in_band_right);
 
@@ -576,12 +637,10 @@ impl BandedPairWiseSW {
                     let h_diag_vec = _mm_loadu_si128(h_diag.as_ptr() as *const __m128i);
 
                     // Load H[i-1][j] (top) and E[i-1][j] from current position
-                    let h_top = _mm_loadu_si128(
-                        h_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m128i
-                    );
-                    let e_prev = _mm_loadu_si128(
-                        e_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m128i
-                    );
+                    let h_top =
+                        _mm_loadu_si128(h_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m128i);
+                    let e_prev =
+                        _mm_loadu_si128(e_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m128i);
 
                     // Save H[i-1][j] for next iteration's diagonal (becomes H[i-1][j] for next j+1)
                     _mm_storeu_si128(h_diag.as_mut_ptr() as *mut __m128i, h_top);
@@ -594,7 +653,8 @@ impl BandedPairWiseSW {
                         let target_base = target_soa[i * SIMD_WIDTH + lane];
                         if target_base < 4 {
                             // Use precomputed query profile instead of mat lookup
-                            score_vals[lane] = query_profiles[target_base as usize][j * SIMD_WIDTH + lane];
+                            score_vals[lane] =
+                                query_profiles[target_base as usize][j * SIMD_WIDTH + lane];
                         }
                         // else: score_vals[lane] stays 0 (ambiguous base)
                     }
@@ -632,15 +692,15 @@ impl BandedPairWiseSW {
                     // Store updated scores
                     _mm_storeu_si128(
                         h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i,
-                        h_vec
+                        h_vec,
                     );
                     _mm_storeu_si128(
                         e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i,
-                        e_vec_masked
+                        e_vec_masked,
                     );
                     _mm_storeu_si128(
                         f_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i,
-                        f_vec_masked
+                        f_vec_masked,
                     );
 
                     // Track maximum score per lane with positions
@@ -809,7 +869,11 @@ pub fn bwa_fill_scmat(match_score: i8, mismatch_penalty: i8, ambig_penalty: i8) 
     // Fill 5x5 matrix for A, C, G, T, N
     for i in 0..4 {
         for j in 0..4 {
-            mat[k] = if i == j { match_score } else { -mismatch_penalty };
+            mat[k] = if i == j {
+                match_score
+            } else {
+                -mismatch_penalty
+            };
             k += 1;
         }
         mat[k] = ambig_penalty; // ambiguous base (N)
@@ -844,7 +908,7 @@ impl BandedPairWiseSW {
         &self,
         batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
     ) -> Vec<OutScore> {
-        use crate::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+        use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 
         let engine = detect_optimal_simd_engine();
 
@@ -855,14 +919,8 @@ impl BandedPairWiseSW {
                 // Implementation in src/banded_swa_avx2.rs
                 unsafe {
                     crate::banded_swa_avx2::simd_banded_swa_batch32(
-                        batch,
-                        self.o_del,
-                        self.e_del,
-                        self.o_ins,
-                        self.e_ins,
-                        self.zdrop,
-                        &self.mat,
-                        self.m,
+                        batch, self.o_del, self.e_del, self.o_ins, self.e_ins, self.zdrop,
+                        &self.mat, self.m,
                     )
                 }
             }
@@ -872,20 +930,12 @@ impl BandedPairWiseSW {
                 // Implementation in src/banded_swa_avx512.rs
                 unsafe {
                     crate::banded_swa_avx512::simd_banded_swa_batch64(
-                        batch,
-                        self.o_del,
-                        self.e_del,
-                        self.o_ins,
-                        self.e_ins,
-                        self.zdrop,
-                        &self.mat,
-                        self.m,
+                        batch, self.o_del, self.e_del, self.o_ins, self.e_ins, self.zdrop,
+                        &self.mat, self.m,
                     )
                 }
             }
-            SimdEngineType::Engine128 => {
-                self.simd_banded_swa_batch16(batch)
-            }
+            SimdEngineType::Engine128 => self.simd_banded_swa_batch16(batch),
         }
     }
 
@@ -898,7 +948,7 @@ impl BandedPairWiseSW {
         &self,
         batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
     ) -> Vec<AlignmentResult> {
-        use crate::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+        use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 
         let engine = detect_optimal_simd_engine();
 
@@ -915,9 +965,7 @@ impl BandedPairWiseSW {
                 // TODO(AVX-512): Same as AVX2 notes above
                 self.simd_banded_swa_batch16_with_cigar(batch)
             }
-            SimdEngineType::Engine128 => {
-                self.simd_banded_swa_batch16_with_cigar(batch)
-            }
+            SimdEngineType::Engine128 => self.simd_banded_swa_batch16_with_cigar(batch),
         }
     }
 }
@@ -931,17 +979,17 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
 
         // Check diagonal (matches)
-        assert_eq!(mat[0], 1);  // A-A
-        assert_eq!(mat[6], 1);  // C-C
+        assert_eq!(mat[0], 1); // A-A
+        assert_eq!(mat[6], 1); // C-C
         assert_eq!(mat[12], 1); // G-G
         assert_eq!(mat[18], 1); // T-T
 
         // Check mismatches
-        assert_eq!(mat[1], -4);  // A-C
-        assert_eq!(mat[5], -4);  // C-A
+        assert_eq!(mat[1], -4); // A-C
+        assert_eq!(mat[5], -4); // C-A
 
         // Check ambiguous bases
-        assert_eq!(mat[4], -1);  // A-N
+        assert_eq!(mat[4], -1); // A-N
         assert_eq!(mat[24], -1); // N-N
     }
 
@@ -951,13 +999,16 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
-        let query = vec![0u8, 1, 2, 3];    // ACGT
-        let target = vec![0u8, 1, 2, 3];   // ACGT
+        let query = vec![0u8, 1, 2, 3]; // ACGT
+        let target = vec![0u8, 1, 2, 3]; // ACGT
 
         let (out_score, cigar) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
         // Should have perfect match score: 4 bases * 1 = 4
-        assert!(out_score.score > 0, "Score should be positive for exact match");
+        assert!(
+            out_score.score > 0,
+            "Score should be positive for exact match"
+        );
         assert_eq!(out_score.qle, 4, "Query should align to end");
         assert_eq!(out_score.tle, 4, "Target should align to end");
 
@@ -973,8 +1024,8 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
-        let query = vec![0u8, 1, 2, 3];    // ACGT
-        let target = vec![0u8, 1, 1, 3];   // ACCT
+        let query = vec![0u8, 1, 2, 3]; // ACGT
+        let target = vec![0u8, 1, 1, 3]; // ACCT
 
         let (out_score, cigar) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
@@ -992,8 +1043,8 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
-        let query = vec![0u8, 1, 2, 2, 3];  // ACGGT
-        let target = vec![0u8, 1, 2, 3];     // ACGT
+        let query = vec![0u8, 1, 2, 2, 3]; // ACGGT
+        let target = vec![0u8, 1, 2, 3]; // ACGT
 
         let (out_score, cigar) = bsw.scalar_banded_swa(5, &query, 4, &target, 100, 0);
 
@@ -1013,8 +1064,8 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
-        let query = vec![0u8, 1, 3];        // ACT
-        let target = vec![0u8, 1, 2, 3];    // ACGT
+        let query = vec![0u8, 1, 3]; // ACT
+        let target = vec![0u8, 1, 2, 3]; // ACGT
 
         let (out_score, cigar) = bsw.scalar_banded_swa(3, &query, 4, &target, 100, 0);
 
@@ -1033,13 +1084,16 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
-        let query = vec![0u8];   // Single A
-        let target = vec![1u8, 2, 3];  // CGT (no match)
+        let query = vec![0u8]; // Single A
+        let target = vec![1u8, 2, 3]; // CGT (no match)
 
         let (out_score, _cigar) = bsw.scalar_banded_swa(1, &query, 3, &target, 100, 0);
 
         // Single base with no match should have zero or minimal score
-        assert_eq!(out_score.score, 0, "Mismatched single base should have zero score");
+        assert_eq!(
+            out_score.score, 0,
+            "Mismatched single base should have zero score"
+        );
     }
 
     #[test]
@@ -1064,8 +1118,8 @@ mod tests {
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
-        let query = vec![0u8, 1, 4, 3];    // ACNT
-        let target = vec![0u8, 1, 2, 3];   // ACGT
+        let query = vec![0u8, 1, 4, 3]; // ACNT
+        let target = vec![0u8, 1, 2, 3]; // ACGT
 
         let (out_score, _cigar) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
@@ -1080,8 +1134,8 @@ mod tests {
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 10, 5, mat, 1, 4); // zdrop = 10
 
         // Create sequences with good match at start, then many mismatches
-        let query = vec![0u8, 1, 2, 3, 3, 3, 3, 3];     // ACGTTTTT
-        let target = vec![0u8, 1, 2, 3, 0, 0, 0, 0];    // ACGTAAAA
+        let query = vec![0u8, 1, 2, 3, 3, 3, 3, 3]; // ACGTTTTT
+        let target = vec![0u8, 1, 2, 3, 0, 0, 0, 0]; // ACGTAAAA
 
         let (out_score, cigar) = bsw.scalar_banded_swa(8, &query, 8, &target, 100, 0);
 
@@ -1090,7 +1144,10 @@ mod tests {
 
         // The alignment should not extend to full length due to zdrop
         let total_ops: i32 = cigar.iter().map(|(_, count)| count).sum();
-        println!("Total CIGAR operations: {}, Score: {}", total_ops, out_score.score);
+        println!(
+            "Total CIGAR operations: {}, Score: {}",
+            total_ops, out_score.score
+        );
     }
 
     #[test]
@@ -1127,8 +1184,10 @@ mod tests {
         let (score2, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 10);
 
         // Score with higher h0 should be at least as good
-        assert!(score2.score >= score1.score,
-                "Higher initial score should not decrease final score");
+        assert!(
+            score2.score >= score1.score,
+            "Higher initial score should not decrease final score"
+        );
     }
 
     // ========================================================================
@@ -1142,7 +1201,7 @@ mod tests {
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
         // Create 100bp sequences (repeat ACGT 25 times)
-        let pattern = vec![0u8, 1, 2, 3];  // ACGT
+        let pattern = vec![0u8, 1, 2, 3]; // ACGT
         let mut query = Vec::new();
         let mut target = Vec::new();
         for _ in 0..25 {
@@ -1156,14 +1215,22 @@ mod tests {
         let (out_score, cigar) = bsw.scalar_banded_swa(100, &query, 100, &target, 100, 0);
 
         // Should have high score for perfect match
-        assert!(out_score.score >= 90, "Score should be high for 100bp exact match, got {}", out_score.score);
+        assert!(
+            out_score.score >= 90,
+            "Score should be high for 100bp exact match, got {}",
+            out_score.score
+        );
 
         // CIGAR should be 100M (all matches)
-        let total_match_ops: i32 = cigar.iter()
+        let total_match_ops: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == 'M' as u8)
             .map(|(_, count)| count)
             .sum();
-        assert_eq!(total_match_ops, 100, "Should have 100M in CIGAR for exact match");
+        assert_eq!(
+            total_match_ops, 100,
+            "Should have 100M in CIGAR for exact match"
+        );
     }
 
     #[test]
@@ -1173,7 +1240,7 @@ mod tests {
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
         // Create 100bp target (repeat ACGT)
-        let pattern = vec![0u8, 1, 2, 3];  // ACGT
+        let pattern = vec![0u8, 1, 2, 3]; // ACGT
         let mut target = Vec::new();
         for _ in 0..25 {
             target.extend_from_slice(&pattern);
@@ -1195,19 +1262,30 @@ mod tests {
         let (out_score, cigar) = bsw.scalar_banded_swa(100, &query, 100, &target, 100, 0);
 
         // Should still align but with lower score
-        assert!(out_score.score > 0, "Should find alignment even with mismatches");
+        assert!(
+            out_score.score > 0,
+            "Should find alignment even with mismatches"
+        );
 
         // CIGAR should contain X for mismatches
         let has_mismatch = cigar.iter().any(|(op, _)| *op == 'X' as u8);
-        assert!(has_mismatch, "CIGAR should contain X for mismatches: {:?}", cigar);
+        assert!(
+            has_mismatch,
+            "CIGAR should contain X for mismatches: {:?}",
+            cigar
+        );
 
         // Count total mismatches in CIGAR
-        let total_mismatches: i32 = cigar.iter()
+        let total_mismatches: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == 'X' as u8)
             .map(|(_, count)| count)
             .sum();
-        assert!(total_mismatches >= 8 && total_mismatches <= 12,
-               "Should have ~10 mismatches, found {}", total_mismatches);
+        assert!(
+            total_mismatches >= 8 && total_mismatches <= 12,
+            "Should have ~10 mismatches, found {}",
+            total_mismatches
+        );
     }
 
     #[test]
@@ -1239,7 +1317,11 @@ mod tests {
 
         // CIGAR should contain 'I' for insertion
         let has_insertion = cigar.iter().any(|(op, _)| *op == 'I' as u8);
-        assert!(has_insertion, "CIGAR should contain I for insertion: {:?}", cigar);
+        assert!(
+            has_insertion,
+            "CIGAR should contain I for insertion: {:?}",
+            cigar
+        );
     }
 
     #[test]
@@ -1270,7 +1352,11 @@ mod tests {
 
         // CIGAR should contain 'D' for deletion
         let has_deletion = cigar.iter().any(|(op, _)| *op == 'D' as u8);
-        assert!(has_deletion, "CIGAR should contain D for deletion: {:?}", cigar);
+        assert!(
+            has_deletion,
+            "CIGAR should contain D for deletion: {:?}",
+            cigar
+        );
     }
 
     #[test]
@@ -1288,26 +1374,42 @@ mod tests {
         target.extend_from_slice(&[0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]); // 60bp total
 
         // Query: 20bp match + 3bp insertion + 15bp match + 5bp deletion + 20bp match
-        let mut query = target[0..20].to_vec();        // 20bp match
-        query.extend_from_slice(&[3, 3, 3]);            // 3bp insertion (TTT)
-        query.extend_from_slice(&target[20..35]);       // 15bp match
+        let mut query = target[0..20].to_vec(); // 20bp match
+        query.extend_from_slice(&[3, 3, 3]); // 3bp insertion (TTT)
+        query.extend_from_slice(&target[20..35]); // 15bp match
         // Skip 5bp (deletion)
-        query.extend_from_slice(&target[40..60]);       // 20bp match
+        query.extend_from_slice(&target[40..60]); // 20bp match
 
         let query_len = query.len(); // Should be 20 + 3 + 15 + 20 = 58bp
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(query_len as i32, &query, 60, &target, 100, 0);
+        let (out_score, cigar) =
+            bsw.scalar_banded_swa(query_len as i32, &query, 60, &target, 100, 0);
 
         // Should find alignment
-        assert!(out_score.score > 0, "Should find alignment with complex indels");
+        assert!(
+            out_score.score > 0,
+            "Should find alignment with complex indels"
+        );
 
         // CIGAR should contain multiple operation types
-        let has_match = cigar.iter().any(|(op, _)| *op == 'M' as u8 || *op == 'X' as u8);
-        assert!(has_match, "CIGAR should contain M or X for matches: {:?}", cigar);
+        let has_match = cigar
+            .iter()
+            .any(|(op, _)| *op == 'M' as u8 || *op == 'X' as u8);
+        assert!(
+            has_match,
+            "CIGAR should contain M or X for matches: {:?}",
+            cigar
+        );
 
         // At least one of insertion or deletion should be detected
-        let has_indel = cigar.iter().any(|(op, _)| *op == 'I' as u8 || *op == 'D' as u8);
-        assert!(has_indel, "CIGAR should contain I or D for indels: {:?}", cigar);
+        let has_indel = cigar
+            .iter()
+            .any(|(op, _)| *op == 'I' as u8 || *op == 'D' as u8);
+        assert!(
+            has_indel,
+            "CIGAR should contain I or D for indels: {:?}",
+            cigar
+        );
     }
 
     #[test]
@@ -1329,21 +1431,33 @@ mod tests {
         let mut query = target.clone();
         for i in (2..60).step_by(3) {
             query[i] = match query[i] {
-                0 => 3, 1 => 2, 2 => 1, 3 => 0, _ => 4,
+                0 => 3,
+                1 => 2,
+                2 => 1,
+                3 => 0,
+                _ => 4,
             };
         }
 
         let (out_score, cigar) = bsw.scalar_banded_swa(60, &query, 60, &target, 100, 0);
 
         // Should still find some alignment
-        assert!(out_score.score > 0, "Should find alignment even with 30% mismatches");
+        assert!(
+            out_score.score > 0,
+            "Should find alignment even with 30% mismatches"
+        );
 
         // Should have many mismatches in CIGAR
-        let total_mismatches: i32 = cigar.iter()
+        let total_mismatches: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == 'X' as u8)
             .map(|(_, count)| count)
             .sum();
-        assert!(total_mismatches >= 15, "Should have at least 15 mismatches, found {}", total_mismatches);
+        assert!(
+            total_mismatches >= 15,
+            "Should have at least 15 mismatches, found {}",
+            total_mismatches
+        );
     }
 
     #[test]
@@ -1354,61 +1468,144 @@ mod tests {
 
         // Create 4 different alignment scenarios to test in batch
         // Test 1: Perfect match
-        let query1 = vec![0u8, 1, 2, 3, 0, 1, 2, 3];  // ACGTACGT
+        let query1 = vec![0u8, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGT
         let target1 = vec![0u8, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGT
 
         // Test 2: Single mismatch
-        let query2 = vec![0u8, 1, 2, 3, 0, 1, 2, 3];  // ACGTACGT
+        let query2 = vec![0u8, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGT
         let target2 = vec![0u8, 1, 2, 2, 0, 1, 2, 3]; // ACGGACGT (T->G at pos 3)
 
         // Test 3: Longer sequence
-        let query3 = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3];  // ACGTACGTACGT (12bp)
+        let query3 = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT (12bp)
         let target3 = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT
 
         // Test 4: With gap
-        let query4 = vec![0u8, 1, 2, 0, 1, 2, 3];     // ACGACGT (7bp)
+        let query4 = vec![0u8, 1, 2, 0, 1, 2, 3]; // ACGACGT (7bp)
         let target4 = vec![0u8, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGT (8bp)
 
         // Get scalar results for comparison
-        let (scalar1, _) = bsw.scalar_banded_swa(query1.len() as i32, &query1, target1.len() as i32, &target1, 100, 0);
-        let (scalar2, _) = bsw.scalar_banded_swa(query2.len() as i32, &query2, target2.len() as i32, &target2, 100, 0);
-        let (scalar3, _) = bsw.scalar_banded_swa(query3.len() as i32, &query3, target3.len() as i32, &target3, 100, 0);
-        let (scalar4, _) = bsw.scalar_banded_swa(query4.len() as i32, &query4, target4.len() as i32, &target4, 100, 0);
+        let (scalar1, _) = bsw.scalar_banded_swa(
+            query1.len() as i32,
+            &query1,
+            target1.len() as i32,
+            &target1,
+            100,
+            0,
+        );
+        let (scalar2, _) = bsw.scalar_banded_swa(
+            query2.len() as i32,
+            &query2,
+            target2.len() as i32,
+            &target2,
+            100,
+            0,
+        );
+        let (scalar3, _) = bsw.scalar_banded_swa(
+            query3.len() as i32,
+            &query3,
+            target3.len() as i32,
+            &target3,
+            100,
+            0,
+        );
+        let (scalar4, _) = bsw.scalar_banded_swa(
+            query4.len() as i32,
+            &query4,
+            target4.len() as i32,
+            &target4,
+            100,
+            0,
+        );
 
         // Prepare batch input
         let batch = vec![
-            (query1.len() as i32, query1.as_slice(), target1.len() as i32, target1.as_slice(), 100, 0),
-            (query2.len() as i32, query2.as_slice(), target2.len() as i32, target2.as_slice(), 100, 0),
-            (query3.len() as i32, query3.as_slice(), target3.len() as i32, target3.as_slice(), 100, 0),
-            (query4.len() as i32, query4.as_slice(), target4.len() as i32, target4.as_slice(), 100, 0),
+            (
+                query1.len() as i32,
+                query1.as_slice(),
+                target1.len() as i32,
+                target1.as_slice(),
+                100,
+                0,
+            ),
+            (
+                query2.len() as i32,
+                query2.as_slice(),
+                target2.len() as i32,
+                target2.as_slice(),
+                100,
+                0,
+            ),
+            (
+                query3.len() as i32,
+                query3.as_slice(),
+                target3.len() as i32,
+                target3.as_slice(),
+                100,
+                0,
+            ),
+            (
+                query4.len() as i32,
+                query4.as_slice(),
+                target4.len() as i32,
+                target4.as_slice(),
+                100,
+                0,
+            ),
         ];
 
         // Run batched SIMD version
         let batch_results = bsw.simd_banded_swa_batch16(&batch);
 
         // Compare results
-        println!("Test 1 (perfect match): scalar={}, batch={}", scalar1.score, batch_results[0].score);
-        println!("Test 2 (1 mismatch): scalar={}, batch={}", scalar2.score, batch_results[1].score);
-        println!("Test 3 (longer): scalar={}, batch={}", scalar3.score, batch_results[2].score);
-        println!("Test 4 (gap): scalar={}, batch={}", scalar4.score, batch_results[3].score);
+        println!(
+            "Test 1 (perfect match): scalar={}, batch={}",
+            scalar1.score, batch_results[0].score
+        );
+        println!(
+            "Test 2 (1 mismatch): scalar={}, batch={}",
+            scalar2.score, batch_results[1].score
+        );
+        println!(
+            "Test 3 (longer): scalar={}, batch={}",
+            scalar3.score, batch_results[2].score
+        );
+        println!(
+            "Test 4 (gap): scalar={}, batch={}",
+            scalar4.score, batch_results[3].score
+        );
 
         // Test 1: Perfect match - should be identical
-        assert_eq!(batch_results[0].score, scalar1.score, "Test 1 (perfect match) scores should match");
+        assert_eq!(
+            batch_results[0].score, scalar1.score,
+            "Test 1 (perfect match) scores should match"
+        );
 
         // Test 2: Single mismatch - batched finds better score!
         // Scalar stops early (m_val==0 optimization at line 220) and finds score=3 (ACG prefix)
         // Batched continues and finds score=4 (ACGT suffix after zero region)
         // Both are valid, but batched is more thorough
-        assert!(batch_results[1].score >= scalar2.score,
-            "Test 2: batched ({}) should be >= scalar ({})", batch_results[1].score, scalar2.score);
+        assert!(
+            batch_results[1].score >= scalar2.score,
+            "Test 2: batched ({}) should be >= scalar ({})",
+            batch_results[1].score,
+            scalar2.score
+        );
 
         // Test 3: Longer sequence - should be identical
-        assert_eq!(batch_results[2].score, scalar3.score, "Test 3 (longer) scores should match");
+        assert_eq!(
+            batch_results[2].score, scalar3.score,
+            "Test 3 (longer) scores should match"
+        );
 
         // Test 4: Gap - should be identical
-        assert_eq!(batch_results[3].score, scalar4.score, "Test 4 (gap) scores should match");
+        assert_eq!(
+            batch_results[3].score, scalar4.score,
+            "Test 4 (gap) scores should match"
+        );
 
-        println!("✅ All tests passed! Note: Test 2 shows batched SIMD finds better alignment (no early termination)");
+        println!(
+            "✅ All tests passed! Note: Test 2 shows batched SIMD finds better alignment (no early termination)"
+        );
     }
 
     #[test]
@@ -1418,11 +1615,11 @@ mod tests {
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
 
         // Create test data
-        let query1 = vec![0u8, 1, 2, 3];      // ACGT
-        let target1 = vec![0u8, 1, 2, 3];     // ACGT (perfect match)
+        let query1 = vec![0u8, 1, 2, 3]; // ACGT
+        let target1 = vec![0u8, 1, 2, 3]; // ACGT (perfect match)
 
-        let query2 = vec![0u8, 1, 2, 3];      // ACGT
-        let target2 = vec![0u8, 1, 1, 3];     // ACCT (one mismatch)
+        let query2 = vec![0u8, 1, 2, 3]; // ACGT
+        let target2 = vec![0u8, 1, 1, 3]; // ACCT (one mismatch)
 
         let batch = vec![
             (4, query1.as_slice(), 4, target1.as_slice(), 100, 0),
@@ -1440,18 +1637,33 @@ mod tests {
         assert_eq!(batch_results.len(), 2, "Should return 2 results");
 
         // Test 1: Perfect match
-        assert_eq!(batch_results[0].score.score, scalar1.score, "Scores should match for perfect match");
-        assert_eq!(batch_results[0].cigar, cigar1, "CIGARs should match for perfect match");
+        assert_eq!(
+            batch_results[0].score.score, scalar1.score,
+            "Scores should match for perfect match"
+        );
+        assert_eq!(
+            batch_results[0].cigar, cigar1,
+            "CIGARs should match for perfect match"
+        );
         // Should be 4M
         assert_eq!(batch_results[0].cigar.len(), 1);
         assert_eq!(batch_results[0].cigar[0].0, b'M');
         assert_eq!(batch_results[0].cigar[0].1, 4);
 
         // Test 2: One mismatch
-        assert_eq!(batch_results[1].score.score, scalar2.score, "Scores should match for mismatch");
-        assert_eq!(batch_results[1].cigar, cigar2, "CIGARs should match for mismatch");
+        assert_eq!(
+            batch_results[1].score.score, scalar2.score,
+            "Scores should match for mismatch"
+        );
+        assert_eq!(
+            batch_results[1].cigar, cigar2,
+            "CIGARs should match for mismatch"
+        );
         // CIGAR should have M and X operations
-        assert!(!batch_results[1].cigar.is_empty(), "CIGAR should not be empty");
+        assert!(
+            !batch_results[1].cigar.is_empty(),
+            "CIGAR should not be empty"
+        );
 
         println!("✅ Batched CIGAR generation test passed!");
     }
@@ -1494,14 +1706,7 @@ mod tests {
 
         // Build batch
         for i in 0..16 {
-            batch.push((
-                4,
-                queries[i].as_slice(),
-                4,
-                targets[i].as_slice(),
-                100,
-                0,
-            ));
+            batch.push((4, queries[i].as_slice(), 4, targets[i].as_slice(), 100, 0));
         }
 
         // Run batched alignment
@@ -1555,10 +1760,10 @@ mod tests {
 
         // Create test sequences (ACGT encoding: A=0, C=1, G=2, T=3)
         let test_cases = vec![
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]), // Perfect match
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3]), // One mismatch
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]),    // Perfect match
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3]),    // One mismatch
             (vec![0u8, 1, 2, 2, 3], vec![0u8, 1, 2, 3]), // Insertion in query
-            (vec![0u8, 1, 3], vec![0u8, 1, 2, 3]), // Deletion in query
+            (vec![0u8, 1, 3], vec![0u8, 1, 2, 3]),       // Deletion in query
             (
                 vec![0u8, 1, 2, 3, 0, 1, 2, 3],
                 vec![0u8, 1, 2, 3, 0, 1, 2, 3],
@@ -1585,23 +1790,21 @@ mod tests {
             // Run with AVX2 (batch32) - directly call AVX2 kernel
             let avx2_results = unsafe {
                 crate::banded_swa_avx2::simd_banded_swa_batch32(
-                    &batch32,
-                    bsw.o_del,
-                    bsw.e_del,
-                    bsw.o_ins,
-                    bsw.e_ins,
-                    bsw.zdrop,
-                    &bsw.mat,
+                    &batch32, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                     bsw.m,
                 )
             };
 
             // Debug output for first test case
             if idx == 0 {
-                println!("SSE result: score={}, qle={}, tle={}",
-                    sse_results[0].score, sse_results[0].qle, sse_results[0].tle);
-                println!("AVX2 result: score={}, qle={}, tle={}",
-                    avx2_results[0].score, avx2_results[0].qle, avx2_results[0].tle);
+                println!(
+                    "SSE result: score={}, qle={}, tle={}",
+                    sse_results[0].score, sse_results[0].qle, sse_results[0].tle
+                );
+                println!(
+                    "AVX2 result: score={}, qle={}, tle={}",
+                    avx2_results[0].score, avx2_results[0].qle, avx2_results[0].tle
+                );
                 println!("Scoring matrix check:");
                 println!("  A-A (mat[0]): {}", bsw.mat[0]);
                 println!("  C-C (mat[6]): {}", bsw.mat[6]);
@@ -1611,34 +1814,28 @@ mod tests {
 
             // Compare first result (all results in batch should be identical)
             assert_eq!(
-                sse_results[0].score,
-                avx2_results[0].score,
+                sse_results[0].score, avx2_results[0].score,
                 "Test case {}: SSE score {} != AVX2 score {}",
-                idx,
-                sse_results[0].score,
-                avx2_results[0].score
+                idx, sse_results[0].score, avx2_results[0].score
             );
 
             assert_eq!(
-                sse_results[0].qle,
-                avx2_results[0].qle,
+                sse_results[0].qle, avx2_results[0].qle,
                 "Test case {}: SSE query end {} != AVX2 query end {}",
-                idx,
-                sse_results[0].qle,
-                avx2_results[0].qle
+                idx, sse_results[0].qle, avx2_results[0].qle
             );
 
             assert_eq!(
-                sse_results[0].tle,
-                avx2_results[0].tle,
+                sse_results[0].tle, avx2_results[0].tle,
                 "Test case {}: SSE target end {} != AVX2 target end {}",
-                idx,
-                sse_results[0].tle,
-                avx2_results[0].tle
+                idx, sse_results[0].tle, avx2_results[0].tle
             );
         }
 
-        println!("✅ SSE vs AVX2 correctness test passed ({} test cases)", test_cases.len());
+        println!(
+            "✅ SSE vs AVX2 correctness test passed ({} test cases)",
+            test_cases.len()
+        );
     }
 
     /// Test that SSE and AVX-512 produce identical alignment scores
@@ -1655,10 +1852,10 @@ mod tests {
 
         // Create test sequences
         let test_cases = vec![
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]), // Perfect match
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3]), // One mismatch
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]),    // Perfect match
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3]),    // One mismatch
             (vec![0u8, 1, 2, 2, 3], vec![0u8, 1, 2, 3]), // Insertion
-            (vec![0u8, 1, 3], vec![0u8, 1, 2, 3]), // Deletion
+            (vec![0u8, 1, 3], vec![0u8, 1, 2, 3]),       // Deletion
         ];
 
         for (idx, (query, target)) in test_cases.iter().enumerate() {
@@ -1681,47 +1878,35 @@ mod tests {
             // Run with AVX-512 (batch64) - directly call AVX-512 kernel
             let avx512_results = unsafe {
                 crate::banded_swa_avx512::simd_banded_swa_batch64(
-                    &batch64,
-                    bsw.o_del,
-                    bsw.e_del,
-                    bsw.o_ins,
-                    bsw.e_ins,
-                    bsw.zdrop,
-                    &bsw.mat,
+                    &batch64, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                     bsw.m,
                 )
             };
 
             // Compare results
             assert_eq!(
-                sse_results[0].score,
-                avx512_results[0].score,
+                sse_results[0].score, avx512_results[0].score,
                 "Test case {}: SSE score {} != AVX-512 score {}",
-                idx,
-                sse_results[0].score,
-                avx512_results[0].score
+                idx, sse_results[0].score, avx512_results[0].score
             );
 
             assert_eq!(
-                sse_results[0].qle,
-                avx512_results[0].qle,
+                sse_results[0].qle, avx512_results[0].qle,
                 "Test case {}: SSE query end {} != AVX-512 query end {}",
-                idx,
-                sse_results[0].qle,
-                avx512_results[0].qle
+                idx, sse_results[0].qle, avx512_results[0].qle
             );
 
             assert_eq!(
-                sse_results[0].tle,
-                avx512_results[0].tle,
+                sse_results[0].tle, avx512_results[0].tle,
                 "Test case {}: SSE target end {} != AVX-512 target end {}",
-                idx,
-                sse_results[0].tle,
-                avx512_results[0].tle
+                idx, sse_results[0].tle, avx512_results[0].tle
             );
         }
 
-        println!("✅ SSE vs AVX-512 correctness test passed ({} test cases)", test_cases.len());
+        println!(
+            "✅ SSE vs AVX-512 correctness test passed ({} test cases)",
+            test_cases.len()
+        );
     }
 
     /// Test that all three engines produce identical results on a comprehensive batch
@@ -1738,14 +1923,14 @@ mod tests {
 
         // Create a diverse set of test sequences
         let test_sequences = vec![
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]),          // Perfect match
-            (vec![0u8, 1, 2, 3], vec![3u8, 2, 1, 0]),          // Reverse
-            (vec![0u8, 0, 0, 0], vec![1u8, 1, 1, 1]),          // All mismatch
-            (vec![0u8, 1, 2, 3, 0, 1], vec![0u8, 1, 2, 3]),    // Query longer
-            (vec![0u8, 1, 2], vec![0u8, 1, 2, 3, 0, 1]),       // Target longer
-            (vec![0u8, 1, 1, 2, 3], vec![0u8, 1, 2, 3]),       // Insertion
-            (vec![0u8, 2, 3], vec![0u8, 1, 2, 3]),             // Deletion
-            (vec![0u8; 8], vec![0u8; 8]),                      // Long perfect match
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3]), // Perfect match
+            (vec![0u8, 1, 2, 3], vec![3u8, 2, 1, 0]), // Reverse
+            (vec![0u8, 0, 0, 0], vec![1u8, 1, 1, 1]), // All mismatch
+            (vec![0u8, 1, 2, 3, 0, 1], vec![0u8, 1, 2, 3]), // Query longer
+            (vec![0u8, 1, 2], vec![0u8, 1, 2, 3, 0, 1]), // Target longer
+            (vec![0u8, 1, 1, 2, 3], vec![0u8, 1, 2, 3]), // Insertion
+            (vec![0u8, 2, 3], vec![0u8, 1, 2, 3]),    // Deletion
+            (vec![0u8; 8], vec![0u8; 8]),             // Long perfect match
         ];
 
         // Pad to ensure we have 64 sequences (for AVX-512 full batch test)
@@ -1803,12 +1988,9 @@ mod tests {
             // Compare first 16 results (overlap with SSE batch)
             for i in 0..16 {
                 assert_eq!(
-                    sse_results[i].score,
-                    avx2_results[i].score,
+                    sse_results[i].score, avx2_results[i].score,
                     "Sequence {}: SSE score {} != AVX2 score {}",
-                    i,
-                    sse_results[i].score,
-                    avx2_results[i].score
+                    i, sse_results[i].score, avx2_results[i].score
                 );
             }
 
@@ -1848,12 +2030,9 @@ mod tests {
                 // Compare first 16 results (overlap with SSE batch)
                 for i in 0..16 {
                     assert_eq!(
-                        sse_results[i].score,
-                        avx512_results[i].score,
+                        sse_results[i].score, avx512_results[i].score,
                         "Sequence {}: SSE score {} != AVX-512 score {}",
-                        i,
-                        sse_results[i].score,
-                        avx512_results[i].score
+                        i, sse_results[i].score, avx512_results[i].score
                     );
                 }
 
@@ -1911,25 +2090,16 @@ mod tests {
 
             let avx2_results = unsafe {
                 crate::banded_swa_avx2::simd_banded_swa_batch32(
-                    &batch32,
-                    bsw.o_del,
-                    bsw.e_del,
-                    bsw.o_ins,
-                    bsw.e_ins,
-                    bsw.zdrop,
-                    &bsw.mat,
+                    &batch32, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                     bsw.m,
                 )
             };
 
             for i in 0..sequences.len() {
                 assert_eq!(
-                    sse_results[i].score,
-                    avx2_results[i].score,
+                    sse_results[i].score, avx2_results[i].score,
                     "Random sequence {}: SSE score {} != AVX2 score {}",
-                    i,
-                    sse_results[i].score,
-                    avx2_results[i].score
+                    i, sse_results[i].score, avx2_results[i].score
                 );
             }
 
@@ -1948,25 +2118,16 @@ mod tests {
 
                 let avx512_results = unsafe {
                     crate::banded_swa_avx512::simd_banded_swa_batch64(
-                        &batch64,
-                        bsw.o_del,
-                        bsw.e_del,
-                        bsw.o_ins,
-                        bsw.e_ins,
-                        bsw.zdrop,
-                        &bsw.mat,
+                        &batch64, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                         bsw.m,
                     )
                 };
 
                 for i in 0..sequences.len() {
                     assert_eq!(
-                        sse_results[i].score,
-                        avx512_results[i].score,
+                        sse_results[i].score, avx512_results[i].score,
                         "Random sequence {}: SSE score {} != AVX-512 score {}",
-                        i,
-                        sse_results[i].score,
-                        avx512_results[i].score
+                        i, sse_results[i].score, avx512_results[i].score
                     );
                 }
 

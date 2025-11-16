@@ -1,7 +1,7 @@
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
-use ferrous_align::{mem, bwa_index, mem_opt::MemOpt};
+use ferrous_align::{bwa_index, mem, mem_opt::MemOpt};
 
 #[derive(Parser)]
 #[command(name = "ferrous-align")]
@@ -189,18 +189,21 @@ fn parse_xa_hits(s: &str) -> Result<(i32, i32), String> {
     let parts: Vec<&str> = s.split(',').collect();
     match parts.len() {
         1 => {
-            let val = parts[0].parse::<i32>()
+            let val = parts[0]
+                .parse::<i32>()
                 .map_err(|_| format!("Invalid XA hits value: {}", s))?;
             Ok((val, 200)) // Default alt hits to 200
         }
         2 => {
-            let primary = parts[0].parse::<i32>()
+            let primary = parts[0]
+                .parse::<i32>()
                 .map_err(|_| format!("Invalid primary XA hits: {}", parts[0]))?;
-            let alt = parts[1].parse::<i32>()
+            let alt = parts[1]
+                .parse::<i32>()
                 .map_err(|_| format!("Invalid alt XA hits: {}", parts[1]))?;
             Ok((primary, alt))
         }
-        _ => Err(format!("XA hits must be INT or INT,INT: {}", s))
+        _ => Err(format!("XA hits must be INT or INT,INT: {}", s)),
     }
 }
 
@@ -286,7 +289,7 @@ fn main() {
             env_logger::Builder::from_default_env()
                 .filter_level(log_level)
                 .format_timestamp(None) // Don't show timestamps
-                .format_target(false)   // Don't show module names
+                .format_target(false) // Don't show module names
                 .init();
 
             log::info!("Aligning reads to index: {}", index.display());
@@ -387,8 +390,12 @@ fn main() {
             // Reasonable upper bound to prevent accidental resource exhaustion
             let max_threads = num_cpus::get() * 2;
             if num_threads > max_threads {
-                log::warn!("Thread count {} exceeds recommended maximum {}, capping at {}",
-                         num_threads, max_threads, max_threads);
+                log::warn!(
+                    "Thread count {} exceeds recommended maximum {}, capping at {}",
+                    num_threads,
+                    max_threads,
+                    max_threads
+                );
                 num_threads = max_threads;
             }
 
@@ -401,7 +408,11 @@ fn main() {
                 log::warn!("Failed to configure thread pool: {}", e);
             }
 
-            let thread_word = if num_threads == 1 { "thread" } else { "threads" };
+            let thread_word = if num_threads == 1 {
+                "thread"
+            } else {
+                "threads"
+            };
             log::info!("Using {} {}", num_threads, thread_word);
 
             // Print key parameter values if verbosity >= 3
@@ -414,10 +425,19 @@ fn main() {
                 log::info!("  Re-seed factor: {}", opt.split_factor);
                 log::info!("Scoring parameters:");
                 log::info!("  Match: {}, Mismatch: {}", opt.a, opt.b);
-                log::info!("  Gap open: ({},{}), Gap extend: ({},{})",
-                         opt.o_del, opt.o_ins, opt.e_del, opt.e_ins);
-                log::info!("  Clipping: ({},{}), Unpaired: {}",
-                         opt.pen_clip5, opt.pen_clip3, opt.pen_unpaired);
+                log::info!(
+                    "  Gap open: ({},{}), Gap extend: ({},{})",
+                    opt.o_del,
+                    opt.o_ins,
+                    opt.e_del,
+                    opt.e_ins
+                );
+                log::info!(
+                    "  Clipping: ({},{}), Unpaired: {}",
+                    opt.pen_clip5,
+                    opt.pen_clip3,
+                    opt.pen_unpaired
+                );
             }
 
             // Phase 6: Output and formatting options
@@ -441,8 +461,13 @@ fn main() {
                 match MemOpt::parse_insert_size(insert_str) {
                     Ok(is_override) => {
                         if verbosity >= 3 {
-                            log::info!("Insert size override: mean={:.1}, std={:.1}, max={}, min={}",
-                                     is_override.mean, is_override.stddev, is_override.max, is_override.min);
+                            log::info!(
+                                "Insert size override: mean={:.1}, std={:.1}, max={}, min={}",
+                                is_override.mean,
+                                is_override.stddev,
+                                is_override.max,
+                                is_override.min
+                            );
                         }
                         opt.insert_size_override = Some(is_override);
                     }
@@ -472,7 +497,8 @@ fn main() {
             let _soft_clip_supplementary = soft_clip_supplementary;
             let _mark_secondary = mark_secondary;
 
-            let read_files: Vec<String> = reads.iter()
+            let read_files: Vec<String> = reads
+                .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 

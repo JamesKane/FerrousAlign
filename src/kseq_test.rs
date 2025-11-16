@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kseq::{KStream, KSeq, KSEQ_BUF_SIZE};
+    use crate::kseq::{KSEQ_BUF_SIZE, KSeq, KStream};
     use std::io::{self, Cursor};
 
     // --- KStream Tests ---
@@ -22,8 +22,7 @@ mod tests {
     fn test_kstream_getc_empty() -> io::Result<()> {
         let reader = Cursor::new(b"");
         let mut ks = KStream::new(Box::new(reader));
-        assert_eq!(ks.getc()?,
-                   None);
+        assert_eq!(ks.getc()?, None);
         assert!(ks.is_eof);
         Ok(())
     }
@@ -32,10 +31,8 @@ mod tests {
     fn test_kstream_getc_single_char() -> io::Result<()> {
         let reader = Cursor::new(b"A");
         let mut ks = KStream::new(Box::new(reader));
-        assert_eq!(ks.getc()?,
-                   Some(b'A'));
-        assert_eq!(ks.getc()?,
-                   None);
+        assert_eq!(ks.getc()?, Some(b'A'));
+        assert_eq!(ks.getc()?, None);
         Ok(())
     }
 
@@ -43,14 +40,10 @@ mod tests {
     fn test_kstream_getc_multiple_chars() -> io::Result<()> {
         let reader = Cursor::new(b"ABC");
         let mut ks = KStream::new(Box::new(reader));
-        assert_eq!(ks.getc()?,
-                   Some(b'A'));
-        assert_eq!(ks.getc()?,
-                   Some(b'B'));
-        assert_eq!(ks.getc()?,
-                   Some(b'C'));
-        assert_eq!(ks.getc()?,
-                   None);
+        assert_eq!(ks.getc()?, Some(b'A'));
+        assert_eq!(ks.getc()?, Some(b'B'));
+        assert_eq!(ks.getc()?, Some(b'C'));
+        assert_eq!(ks.getc()?, None);
         Ok(())
     }
 
@@ -59,8 +52,7 @@ mod tests {
         let reader = Cursor::new(b"");
         let mut ks = KStream::new(Box::new(reader));
         let mut s = String::new();
-        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, false)?,
-                   None);
+        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, false)?, None);
         assert!(s.is_empty());
         Ok(())
     }
@@ -70,11 +62,9 @@ mod tests {
         let reader = Cursor::new(b"hello\nworld");
         let mut ks = KStream::new(Box::new(reader));
         let mut s = String::new();
-        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, false)?,
-                   Some(b'\n'));
+        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, false)?, Some(b'\n'));
         assert_eq!(s, "hello");
-        assert_eq!(ks.getc()?,
-                   Some(b'w')); // Check if it moved past newline
+        assert_eq!(ks.getc()?, Some(b'w')); // Check if it moved past newline
         Ok(())
     }
 
@@ -83,11 +73,9 @@ mod tests {
         let reader = Cursor::new(b"hello world\n");
         let mut ks = KStream::new(Box::new(reader));
         let mut s = String::new();
-        assert_eq!(ks.getuntil(0, &mut s, false)?,
-                   Some(b' ')); // 0 for KS_SEP_SPACE
+        assert_eq!(ks.getuntil(0, &mut s, false)?, Some(b' ')); // 0 for KS_SEP_SPACE
         assert_eq!(s, "hello");
-        assert_eq!(ks.getc()?,
-                   Some(b'w')); // Check if it moved past space
+        assert_eq!(ks.getc()?, Some(b'w')); // Check if it moved past space
         Ok(())
     }
 
@@ -96,11 +84,9 @@ mod tests {
         let reader = Cursor::new(b"part1\npart2\n");
         let mut ks = KStream::new(Box::new(reader));
         let mut s = String::from("initial");
-        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, true)?,
-                   Some(b'\n'));
+        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, true)?, Some(b'\n'));
         assert_eq!(s, "initialpart1");
-        assert_eq!(ks.getc()?,
-                   Some(b'p'));
+        assert_eq!(ks.getc()?, Some(b'p'));
         Ok(())
     }
 
@@ -109,8 +95,7 @@ mod tests {
         let reader = Cursor::new(b"no delimiter here");
         let mut ks = KStream::new(Box::new(reader));
         let mut s = String::new();
-        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, false)?,
-                   None);
+        assert_eq!(ks.getuntil(b'\n' as i32, &mut s, false)?, None);
         assert_eq!(s, "no delimiter here");
         assert!(ks.is_eof);
         Ok(())

@@ -1,12 +1,12 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use flate2::read::GzDecoder;
 use libc;
 use std::fs::OpenOptions;
 use std::io::{self, BufReader, Read, Write, stdin};
 use std::path::Path;
-use flate2::read::GzDecoder;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-
-#[path = "utils_test.rs"] mod utils_test;
+#[path = "utils_test.rs"]
+mod utils_test;
 
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(C)]
@@ -42,8 +42,8 @@ pub fn cputime() -> f64 {
     };
     let user_time = rusage.ru_utime;
     let sys_time = rusage.ru_stime;
-    (user_time.tv_sec as f64 + user_time.tv_usec as f64 * 1e-6) +
-    (sys_time.tv_sec as f64 + sys_time.tv_usec as f64 * 1e-6)
+    (user_time.tv_sec as f64 + user_time.tv_usec as f64 * 1e-6)
+        + (sys_time.tv_sec as f64 + sys_time.tv_usec as f64 * 1e-6)
 }
 
 pub fn err_fatal<S: AsRef<str>>(header: S, msg: &str) -> ! {

@@ -14,7 +14,7 @@ use std::io::{self, BufReader, Read};
 pub struct ReadBatch {
     pub names: Vec<String>,
     pub seqs: Vec<Vec<u8>>,
-    pub quals: Vec<String>,  // Store as String for compatibility with existing code
+    pub quals: Vec<String>, // Store as String for compatibility with existing code
 }
 
 impl ReadBatch {
@@ -89,7 +89,9 @@ impl FastqReader {
                     batch.names.push(record.id().to_string());
                     batch.seqs.push(record.seq().to_vec());
                     // Convert quality bytes to String (ASCII)
-                    batch.quals.push(String::from_utf8_lossy(record.qual()).into_owned());
+                    batch
+                        .quals
+                        .push(String::from_utf8_lossy(record.qual()).into_owned());
                 }
                 Some(Err(e)) => {
                     return Err(io::Error::new(io::ErrorKind::Other, e));

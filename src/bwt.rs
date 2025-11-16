@@ -1,8 +1,6 @@
-
-
+use crate::align::{CP_SHIFT, CpOcc};
 use std::io::{self, Write};
-use std::path::Path;
-use crate::align::{CpOcc, CP_SHIFT}; // Import CpOcc and CP_SHIFT
+use std::path::Path; // Import CpOcc and CP_SHIFT
 
 pub type BwtInt = u64;
 
@@ -15,12 +13,13 @@ pub struct Bwt {
     pub cnt_table: [u32; 256], // This will be skipped in serialization/deserialization
     pub sa_intv: i32,
     pub n_sa: BwtInt,
-    pub bwt_data: Vec<u8>, // Store the packed BWT data
-    pub sa_ms_byte: Vec<i8>, // Suffix array most significant byte
+    pub bwt_data: Vec<u8>,    // Store the packed BWT data
+    pub sa_ms_byte: Vec<i8>,  // Suffix array most significant byte
     pub sa_ls_word: Vec<u32>, // Suffix array least significant word
 }
 
-#[path = "bwt_test.rs"] mod bwt_test;
+#[path = "bwt_test.rs"]
+mod bwt_test;
 
 impl Default for Bwt {
     fn default() -> Self {
@@ -94,9 +93,6 @@ impl Bwt {
         Ok(())
     }
 
-
-
-
     pub fn bwt_cal_sa(&mut self, sa_intv: i32, sa_temp: &[i32]) {
         self.sa_intv = sa_intv;
         self.n_sa = (self.seq_len + sa_intv as u64 - 1) / sa_intv as u64;
@@ -136,14 +132,15 @@ impl Bwt {
 
         // Initialize the first CpOcc entry (for position 0)
         cp_occ.push(CpOcc {
-            cp_count: [0; 4], // Counts before position 0 are all 0
+            cp_count: [0; 4],        // Counts before position 0 are all 0
             one_hot_bwt_str: [0; 4], // Bitmask for the first block
         });
 
-        let mut checkpoint_index = 0;  // Track which checkpoint we're in
+        let mut checkpoint_index = 0; // Track which checkpoint we're in
 
         for (_byte_idx, &byte) in self.bwt_data.iter().enumerate() {
-            for bit_offset in (0..8).step_by(2) { // Iterate through 2-bit bases in the byte
+            for bit_offset in (0..8).step_by(2) {
+                // Iterate through 2-bit bases in the byte
                 if current_pos >= self.seq_len {
                     break; // Reached end of sequence
                 }

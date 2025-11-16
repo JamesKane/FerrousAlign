@@ -12,9 +12,9 @@
 // When implementing paired-end support, remove the #[ignore] attributes
 // and update the main_mem() function to accept paired-end mode.
 
-use std::path::{Path, PathBuf};
 use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Helper function to create a temporary directory for test files
@@ -31,7 +31,11 @@ fn setup_test_dir(test_name: &str) -> io::Result<PathBuf> {
 fn cleanup_test_dir(temp_dir: &Path) {
     if temp_dir.exists() {
         if let Err(e) = fs::remove_dir_all(temp_dir) {
-            eprintln!("Failed to clean up test directory {}: {}", temp_dir.display(), e);
+            eprintln!(
+                "Failed to clean up test directory {}: {}",
+                temp_dir.display(),
+                e
+            );
         }
     }
 }
@@ -81,7 +85,7 @@ fn test_paired_end_fr_orientation() -> io::Result<()> {
     let binary_path = PathBuf::from("target/release/bwa-mem2-rust");
 
     let output = Command::new(&binary_path)
-        .arg("mem")  // Use new CLI subcommand
+        .arg("mem") // Use new CLI subcommand
         .arg(ref_prefix.to_str().unwrap())
         .arg(read1_path.to_str().unwrap())
         .arg(read2_path.to_str().unwrap())
@@ -100,13 +104,17 @@ fn test_paired_end_fr_orientation() -> io::Result<()> {
     let lines: Vec<&str> = stdout.lines().collect();
 
     // Find the read1 line (skip headers)
-    let read1_line = lines.iter()
+    let read1_line = lines
+        .iter()
         .find(|l| l.starts_with("read1/1"))
         .expect("Read1 not found in SAM output");
 
     let fields1: Vec<&str> = read1_line.split('\t').collect();
     assert_eq!(fields1[0], "read1/1", "Read name mismatch");
-    assert_eq!(fields1[1], "99", "FLAG should be 99 for read1 (paired + properly paired + mate reverse + first)");
+    assert_eq!(
+        fields1[1], "99",
+        "FLAG should be 99 for read1 (paired + properly paired + mate reverse + first)"
+    );
     assert_eq!(fields1[2], "chr1", "RNAME should be chr1");
     assert_eq!(fields1[4], "60", "MAPQ should be 60");
     assert_eq!(fields1[6], "=", "RNEXT should be = (same chr)");
@@ -114,13 +122,17 @@ fn test_paired_end_fr_orientation() -> io::Result<()> {
     // Expected fields for read 2:
     // - FLAG: 147 (0x93) = paired + properly paired + reverse + read2
 
-    let read2_line = lines.iter()
+    let read2_line = lines
+        .iter()
         .find(|l| l.starts_with("read1/2"))
         .expect("Read2 not found in SAM output");
 
     let fields2: Vec<&str> = read2_line.split('\t').collect();
     assert_eq!(fields2[0], "read1/2", "Read name mismatch");
-    assert_eq!(fields2[1], "147", "FLAG should be 147 for read2 (paired + properly paired + reverse + second)");
+    assert_eq!(
+        fields2[1], "147",
+        "FLAG should be 147 for read2 (paired + properly paired + reverse + second)"
+    );
     assert_eq!(fields2[2], "chr1", "RNAME should be chr1");
     assert_eq!(fields2[6], "=", "RNEXT should be = (same chr)");
 
@@ -131,7 +143,10 @@ fn test_paired_end_fr_orientation() -> io::Result<()> {
     // Verify TLEN has opposite signs
     let tlen1: i32 = fields1[8].parse().expect("TLEN1 should be int");
     let tlen2: i32 = fields2[8].parse().expect("TLEN2 should be int");
-    assert_eq!(tlen1, -tlen2, "TLEN should have opposite signs for paired reads");
+    assert_eq!(
+        tlen1, -tlen2,
+        "TLEN should have opposite signs for paired reads"
+    );
 
     // No cleanup - using stable test data
     Ok(())
@@ -196,7 +211,7 @@ TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC\n\
     let binary_path = PathBuf::from("target/release/bwa-mem2-rust");
 
     let output = Command::new(&binary_path)
-        .arg("mem")  // Use new CLI subcommand
+        .arg("mem") // Use new CLI subcommand
         .arg(ref_prefix.to_str().unwrap())
         .arg(read1_path.to_str().unwrap())
         .arg(read2_path.to_str().unwrap())
@@ -208,7 +223,8 @@ TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC\n\
     // 5. Verify discordant pair flags
     let lines: Vec<&str> = stdout.lines().collect();
 
-    let read1_line = lines.iter()
+    let read1_line = lines
+        .iter()
         .find(|l| l.starts_with("chimeric/1"))
         .expect("Read1 not found");
 
@@ -273,7 +289,7 @@ NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
     let binary_path = PathBuf::from("target/release/bwa-mem2-rust");
 
     let output = Command::new(&binary_path)
-        .arg("mem")  // Use new CLI subcommand
+        .arg("mem") // Use new CLI subcommand
         .arg(ref_prefix.to_str().unwrap())
         .arg(read1_path.to_str().unwrap())
         .arg(read2_path.to_str().unwrap())
@@ -285,7 +301,8 @@ NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
     // 5. Verify flags indicate mate unmapped
     let lines: Vec<&str> = stdout.lines().collect();
 
-    let read1_line = lines.iter()
+    let read1_line = lines
+        .iter()
         .find(|l| l.starts_with("pair1/1"))
         .expect("Read1 not found");
 
@@ -352,7 +369,7 @@ fn test_paired_end_insert_size_stats() -> io::Result<()> {
     let binary_path = PathBuf::from("target/release/bwa-mem2-rust");
 
     let output = Command::new(&binary_path)
-        .arg("mem")  // Use new CLI subcommand
+        .arg("mem") // Use new CLI subcommand
         .arg(ref_prefix.to_str().unwrap())
         .arg(read1_path.to_str().unwrap())
         .arg(read2_path.to_str().unwrap())
@@ -367,8 +384,10 @@ fn test_paired_end_insert_size_stats() -> io::Result<()> {
 
     // Verify that paired-end processing attempted insert size calculation
     // The message "# candidate unique pairs" indicates the statistics code ran
-    assert!(stderr.contains("# candidate unique pairs"),
-            "Should attempt to calculate insert size statistics");
+    assert!(
+        stderr.contains("# candidate unique pairs"),
+        "Should attempt to calculate insert size statistics"
+    );
 
     cleanup_test_dir(&temp_dir);
     Ok(())
@@ -421,7 +440,7 @@ AGCTAGCTAGCTAGCT
     let binary_path = PathBuf::from("target/release/bwa-mem2-rust");
 
     let output = Command::new(&binary_path)
-        .arg("mem")  // Use new CLI subcommand
+        .arg("mem") // Use new CLI subcommand
         .arg(ref_prefix.to_str().unwrap())
         .arg(read1_path.to_str().unwrap())
         .arg(read2_path.to_str().unwrap())
@@ -434,8 +453,10 @@ AGCTAGCTAGCTAGCT
     // The implementation successfully detects orientations
     // The message "# candidate unique pairs" indicates orientation detection ran
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("# candidate unique pairs"),
-            "Should attempt orientation detection");
+    assert!(
+        stderr.contains("# candidate unique pairs"),
+        "Should attempt orientation detection"
+    );
 
     // Verify reads are output (orientation testing is covered in test_paired_end_fr_orientation)
     assert!(stdout.contains("fr_pair/1"), "Read1 should be in output");

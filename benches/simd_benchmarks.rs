@@ -1,27 +1,31 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ferrous_align::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
 
 fn generate_random_sequence(len: usize, seed: u64) -> Vec<u8> {
     // Simple LCG random number generator for reproducible sequences
     let mut rng = seed;
-    (0..len).map(|_| {
-        rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
-        (rng / 65536) as u8 % 4  // Generate bases 0-3 (A, C, G, T)
-    }).collect()
+    (0..len)
+        .map(|_| {
+            rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            (rng / 65536) as u8 % 4 // Generate bases 0-3 (A, C, G, T)
+        })
+        .collect()
 }
 
 fn generate_sequence_with_mutations(seq: &[u8], mutation_rate: f64, seed: u64) -> Vec<u8> {
     let mut rng = seed;
-    seq.iter().map(|&base| {
-        rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
-        let rand_val = (rng % 1000) as f64 / 1000.0;
-        if rand_val < mutation_rate {
-            // Mutate to a different base
-            ((base + 1 + ((rng / 1000) % 3) as u8) % 4)
-        } else {
-            base
-        }
-    }).collect()
+    seq.iter()
+        .map(|&base| {
+            rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            let rand_val = (rng % 1000) as f64 / 1000.0;
+            if rand_val < mutation_rate {
+                // Mutate to a different base
+                ((base + 1 + ((rng / 1000) % 3) as u8) % 4)
+            } else {
+                base
+            }
+        })
+        .collect()
 }
 
 /// Benchmark scalar vs batched SIMD for varying sequence lengths
@@ -38,37 +42,38 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
 
         // Benchmark scalar version
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("scalar", seq_len),
-            seq_len,
-            |b, &_size| {
-                b.iter(|| {
-                    bsw.scalar_banded_swa(
-                        black_box(query.len() as i32),
-                        black_box(&query),
-                        black_box(target.len() as i32),
-                        black_box(&target),
-                        black_box(100),
-                        black_box(0)
-                    )
-                })
-            }
-        );
+        group.bench_with_input(BenchmarkId::new("scalar", seq_len), seq_len, |b, &_size| {
+            b.iter(|| {
+                bsw.scalar_banded_swa(
+                    black_box(query.len() as i32),
+                    black_box(&query),
+                    black_box(target.len() as i32),
+                    black_box(&target),
+                    black_box(100),
+                    black_box(0),
+                )
+            })
+        });
 
         // Benchmark batched SIMD version (batch of 16 identical alignments)
-        let batch: Vec<_> = (0..16).map(|_| {
-            (query.len() as i32, query.as_slice(), target.len() as i32, target.as_slice(), 100i32, 0i32)
-        }).collect();
+        let batch: Vec<_> = (0..16)
+            .map(|_| {
+                (
+                    query.len() as i32,
+                    query.as_slice(),
+                    target.len() as i32,
+                    target.as_slice(),
+                    100i32,
+                    0i32,
+                )
+            })
+            .collect();
 
         group.throughput(Throughput::Elements(16));
         group.bench_with_input(
             BenchmarkId::new("batched_simd", seq_len),
             seq_len,
-            |b, &_size| {
-                b.iter(|| {
-                    bsw.simd_banded_swa_batch16(black_box(&batch))
-                })
-            }
+            |b, &_size| b.iter(|| bsw.simd_banded_swa_batch16(black_box(&batch))),
         );
     }
 
@@ -86,11 +91,13 @@ fn bench_batch_sizes(c: &mut Criterion) {
     let num_alignments = 128; // Total alignments to process
 
     // Generate diverse set of alignments
-    let alignments: Vec<(Vec<u8>, Vec<u8>)> = (0..num_alignments).map(|i| {
-        let query = generate_random_sequence(seq_len, 42 + i as u64);
-        let target = generate_sequence_with_mutations(&query, 0.05, 123 + i as u64);
-        (query, target)
-    }).collect();
+    let alignments: Vec<(Vec<u8>, Vec<u8>)> = (0..num_alignments)
+        .map(|i| {
+            let query = generate_random_sequence(seq_len, 42 + i as u64);
+            let target = generate_sequence_with_mutations(&query, 0.05, 123 + i as u64);
+            (query, target)
+        })
+        .collect();
 
     // Benchmark scalar: process all alignments one by one
     group.throughput(Throughput::Elements(num_alignments));
@@ -103,7 +110,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
                     target.len() as i32,
                     target,
                     100,
-                    0
+                    0,
                 ));
             }
         })
@@ -114,17 +121,33 @@ fn bench_batch_sizes(c: &mut Criterion) {
     group.bench_function("batched_simd_128x", |b| {
         b.iter(|| {
             for chunk_start in (0..num_alignments).step_by(16) {
-                let batch: Vec<_> = (0..16.min(num_alignments - chunk_start)).map(|i| {
-                    let idx = chunk_start + i as u64;
-                    let (query, target) = &alignments[idx as usize];
-                    (query.len() as i32, query.as_slice(), target.len() as i32, target.as_slice(), 100i32, 0i32)
-                }).collect();
+                let batch: Vec<_> = (0..16.min(num_alignments - chunk_start))
+                    .map(|i| {
+                        let idx = chunk_start + i as u64;
+                        let (query, target) = &alignments[idx as usize];
+                        (
+                            query.len() as i32,
+                            query.as_slice(),
+                            target.len() as i32,
+                            target.as_slice(),
+                            100i32,
+                            0i32,
+                        )
+                    })
+                    .collect();
 
                 // Pad to 16 if needed
                 let mut padded_batch = batch;
                 while padded_batch.len() < 16 {
                     let (query, target) = &alignments[0];
-                    padded_batch.push((query.len() as i32, query.as_slice(), target.len() as i32, target.as_slice(), 100i32, 0i32));
+                    padded_batch.push((
+                        query.len() as i32,
+                        query.as_slice(),
+                        target.len() as i32,
+                        target.as_slice(),
+                        100i32,
+                        0i32,
+                    ));
                 }
 
                 black_box(bsw.simd_banded_swa_batch16(&padded_batch));
@@ -159,25 +182,30 @@ fn bench_mutation_rates(c: &mut Criterion) {
                         black_box(target.len() as i32),
                         black_box(&target),
                         black_box(100),
-                        black_box(0)
+                        black_box(0),
                     )
                 })
-            }
+            },
         );
 
         // Batched SIMD
-        let batch: Vec<_> = (0..16).map(|_| {
-            (query.len() as i32, query.as_slice(), target.len() as i32, target.as_slice(), 100i32, 0i32)
-        }).collect();
+        let batch: Vec<_> = (0..16)
+            .map(|_| {
+                (
+                    query.len() as i32,
+                    query.as_slice(),
+                    target.len() as i32,
+                    target.as_slice(),
+                    100i32,
+                    0i32,
+                )
+            })
+            .collect();
 
         group.bench_with_input(
             BenchmarkId::new("batched_simd", format!("{:.0}%", mutation_rate * 100.0)),
             mutation_rate,
-            |b, &_rate| {
-                b.iter(|| {
-                    bsw.simd_banded_swa_batch16(black_box(&batch))
-                })
-            }
+            |b, &_rate| b.iter(|| bsw.simd_banded_swa_batch16(black_box(&batch))),
         );
     }
 
@@ -236,13 +264,17 @@ fn bench_hybrid_with_cigar(c: &mut Criterion) {
 
     // Benchmark: Hybrid batched with CIGAR
     group.bench_function("hybrid_batch16_with_cigar", |b| {
-        b.iter(|| {
-            bsw.simd_banded_swa_batch16_with_cigar(black_box(&batch_data))
-        });
+        b.iter(|| bsw.simd_banded_swa_batch16_with_cigar(black_box(&batch_data)));
     });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_scalar_vs_batched, bench_batch_sizes, bench_mutation_rates, bench_hybrid_with_cigar);
+criterion_group!(
+    benches,
+    bench_scalar_vs_batched,
+    bench_batch_sizes,
+    bench_mutation_rates,
+    bench_hybrid_with_cigar
+);
 criterion_main!(benches);

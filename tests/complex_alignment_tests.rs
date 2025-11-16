@@ -37,8 +37,11 @@ fn run_alignment(ref_path: &Path, query_path: &Path) -> Result<String, Box<dyn s
         .output()?;
 
     if !index_output.status.success() {
-        return Err(format!("Index building failed: {}",
-                          String::from_utf8_lossy(&index_output.stderr)).into());
+        return Err(format!(
+            "Index building failed: {}",
+            String::from_utf8_lossy(&index_output.stderr)
+        )
+        .into());
     }
 
     // Run alignment using new CLI interface (Session 14)
@@ -49,8 +52,11 @@ fn run_alignment(ref_path: &Path, query_path: &Path) -> Result<String, Box<dyn s
         .output()?;
 
     if !align_output.status.success() {
-        return Err(format!("Alignment failed: {}",
-                          String::from_utf8_lossy(&align_output.stderr)).into());
+        return Err(format!(
+            "Alignment failed: {}",
+            String::from_utf8_lossy(&align_output.stderr)
+        )
+        .into());
     }
 
     Ok(String::from_utf8_lossy(&align_output.stdout).to_string())
@@ -79,7 +85,8 @@ fn test_alignment_100bp_exact_match() {
     let sam_output = run_alignment(&ref_path, &query_path).unwrap();
 
     // Parse SAM output
-    let sam_lines: Vec<&str> = sam_output.lines()
+    let sam_lines: Vec<&str> = sam_output
+        .lines()
         .filter(|line| !line.starts_with('@'))
         .collect();
 
@@ -131,7 +138,8 @@ fn test_alignment_100bp_with_scattered_mismatches() {
     let sam_output = run_alignment(&ref_path, &query_path).unwrap();
 
     // Parse SAM output
-    let sam_lines: Vec<&str> = sam_output.lines()
+    let sam_lines: Vec<&str> = sam_output
+        .lines()
         .filter(|line| !line.starts_with('@'))
         .collect();
 
@@ -168,10 +176,12 @@ fn test_alignment_with_insertion() {
 
     // Query: First 50bp of reference + "TT" insertion + last 48bp
     // Total: 50 + 2 + 48 = 100bp query
-    let query_seq = format!("{}{}{}",
-                            &ref_sequence[0..50],
-                            "TT",  // 2bp insertion
-                            &ref_sequence[50..98]);
+    let query_seq = format!(
+        "{}{}{}",
+        &ref_sequence[0..50],
+        "TT", // 2bp insertion
+        &ref_sequence[50..98]
+    );
 
     assert_eq!(query_seq.len(), 100, "Query should be 100bp");
 
@@ -182,7 +192,8 @@ fn test_alignment_with_insertion() {
     let sam_output = run_alignment(&ref_path, &query_path).unwrap();
 
     // Parse SAM output
-    let sam_lines: Vec<&str> = sam_output.lines()
+    let sam_lines: Vec<&str> = sam_output
+        .lines()
         .filter(|line| !line.starts_with('@'))
         .collect();
 
@@ -192,7 +203,11 @@ fn test_alignment_with_insertion() {
     let cigar = fields[5];
 
     // CIGAR should contain 'I' for insertion
-    assert!(cigar.contains('I'), "CIGAR should contain I for insertion: {}", cigar);
+    assert!(
+        cigar.contains('I'),
+        "CIGAR should contain I for insertion: {}",
+        cigar
+    );
 
     // Cleanup
     fs::remove_dir_all(test_dir).ok();
@@ -212,9 +227,7 @@ fn test_alignment_with_deletion() {
 
     // Query: First 50bp + skip 4bp (deletion) + next 50bp = 100bp query covering 104bp of ref
     // Query is shorter than reference span
-    let query_seq = format!("{}{}",
-                            &ref_sequence[0..50],
-                            &ref_sequence[54..104]);  // Skip 4bp
+    let query_seq = format!("{}{}", &ref_sequence[0..50], &ref_sequence[54..104]); // Skip 4bp
 
     assert_eq!(query_seq.len(), 100, "Query should be 100bp");
 
@@ -225,7 +238,8 @@ fn test_alignment_with_deletion() {
     let sam_output = run_alignment(&ref_path, &query_path).unwrap();
 
     // Parse SAM output
-    let sam_lines: Vec<&str> = sam_output.lines()
+    let sam_lines: Vec<&str> = sam_output
+        .lines()
         .filter(|line| !line.starts_with('@'))
         .collect();
 
@@ -235,7 +249,11 @@ fn test_alignment_with_deletion() {
     let cigar = fields[5];
 
     // CIGAR should contain 'D' for deletion
-    assert!(cigar.contains('D'), "CIGAR should contain D for deletion: {}", cigar);
+    assert!(
+        cigar.contains('D'),
+        "CIGAR should contain D for deletion: {}",
+        cigar
+    );
 
     // Cleanup
     fs::remove_dir_all(test_dir).ok();
@@ -276,7 +294,7 @@ fn test_alignment_complex_cigar() {
                   + "T"              // 1 T (mismatch with G)
                   + "GGGG"           // 4 G (match)
                   + "TTTTT"          // 5 T (match, then deletion of next 5 T's)
-                  + "AAAAAAAAAA";    // 10 A (match)
+                  + "AAAAAAAAAA"; // 10 A (match)
 
     let query_path = test_dir.join("query.fq");
     create_query_fastq(&query_path, &[("read1", &query_seq)]).unwrap();
@@ -285,7 +303,8 @@ fn test_alignment_complex_cigar() {
     let sam_output = run_alignment(&ref_path, &query_path).unwrap();
 
     // Parse SAM output
-    let sam_lines: Vec<&str> = sam_output.lines()
+    let sam_lines: Vec<&str> = sam_output
+        .lines()
         .filter(|line| !line.starts_with('@'))
         .collect();
 
@@ -299,7 +318,11 @@ fn test_alignment_complex_cigar() {
     let _has_insertion = cigar.contains('I');
     let _has_deletion = cigar.contains('D');
 
-    assert!(has_match, "CIGAR should contain M or X for matches: {}", cigar);
+    assert!(
+        has_match,
+        "CIGAR should contain M or X for matches: {}",
+        cigar
+    );
     // Note: Insertion and deletion might not be detected perfectly depending on alignment heuristics
     // So we just verify the alignment completes successfully
 
@@ -344,22 +367,33 @@ fn test_alignment_low_quality() {
     let sam_output = run_alignment(&ref_path, &query_path).unwrap();
 
     // Parse SAM output
-    let sam_lines: Vec<&str> = sam_output.lines()
+    let sam_lines: Vec<&str> = sam_output
+        .lines()
         .filter(|line| !line.starts_with('@'))
         .collect();
 
-    assert!(sam_lines.len() >= 1, "Should have at least 1 alignment even with 20% mismatches");
+    assert!(
+        sam_lines.len() >= 1,
+        "Should have at least 1 alignment even with 20% mismatches"
+    );
 
     let fields: Vec<&str> = sam_lines[0].split('\t').collect();
     let cigar = fields[5];
 
     // Should contain many X operators for mismatches
-    assert!(cigar.contains('X'), "CIGAR should contain X for mismatches: {}", cigar);
+    assert!(
+        cigar.contains('X'),
+        "CIGAR should contain X for mismatches: {}",
+        cigar
+    );
 
     // Count X operations in CIGAR (should be around 20)
     let x_count = count_cigar_operation(cigar, 'X');
-    assert!(x_count >= 15 && x_count <= 25,
-           "Should have ~20 mismatches, found {}", x_count);
+    assert!(
+        x_count >= 15 && x_count <= 25,
+        "Should have ~20 mismatches, found {}",
+        x_count
+    );
 
     // Cleanup
     fs::remove_dir_all(test_dir).ok();

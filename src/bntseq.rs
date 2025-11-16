@@ -1,25 +1,17 @@
 use std::fs::File;
-use std::io::{self, Read, Write, BufReader, BufWriter, Seek, SeekFrom, BufRead};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 // From C's bntseq.h
 pub const NST_NT4_TABLE: [u8; 256] = [
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 ];
 
 #[derive(Debug)]
@@ -51,8 +43,8 @@ pub struct BntSeq {
     pub pac_file_path: Option<PathBuf>,
 }
 
-
-#[path = "bntseq_test.rs"] mod bntseq_test;
+#[path = "bntseq_test.rs"]
+mod bntseq_test;
 
 impl BntSeq {
     pub fn new() -> Self {
@@ -84,9 +76,12 @@ impl BntSeq {
 
         loop {
             let len = kseq.read()?; // Reads one sequence
-            if len < 0 { break; } // EOF or error
+            if len < 0 {
+                break;
+            } // EOF or error
 
-            let mut ann = BntAnn1 { // Create a new BntAnn1 for each sequence
+            let mut ann = BntAnn1 {
+                // Create a new BntAnn1 for each sequence
                 offset: packed_base_count,
                 len: kseq.seq.len() as i32,
                 n_ambs: 0, // Will be updated later
@@ -110,7 +105,11 @@ impl BntSeq {
                     pac_len += 1; // Still increment total pac_len for ambiguous base tracking
                 } else {
                     // Ambiguous base
-                    if current_ambs.is_empty() || current_ambs.last().unwrap().offset + current_ambs.last().unwrap().len as u64 != pac_len {
+                    if current_ambs.is_empty()
+                        || current_ambs.last().unwrap().offset
+                            + current_ambs.last().unwrap().len as u64
+                            != pac_len
+                    {
                         current_ambs.push(BntAmb1 {
                             offset: pac_len,
                             len: 1,
@@ -158,8 +157,7 @@ impl BntSeq {
 
         // Dump ambiguous bases
         let amb_file_path = prefix.with_extension("amb");
-        let mut amb_file = BufWriter::new(File::create(&amb_file_path)?)
-;
+        let mut amb_file = BufWriter::new(File::create(&amb_file_path)?);
         writeln!(amb_file, "{} {} {}", self.l_pac, self.n_seqs, self.n_holes)?;
         for p in &self.ambs {
             writeln!(amb_file, "{} {} {}", p.offset, p.len, p.amb)?;
@@ -180,18 +178,36 @@ impl BntSeq {
         let mut lines = ann_file.lines();
 
         // Read first line: l_pac n_seqs seed
-        let first_line = lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing first line in .ann file"))??;
+        let first_line = lines.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Missing first line in .ann file",
+            )
+        })??;
         let parts: Vec<&str> = first_line.split_whitespace().collect();
-        bns.l_pac = parts[0].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid l_pac in .ann"))?;
-        bns.n_seqs = parts[1].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_seqs in .ann"))?;
-        bns.seed = parts[2].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid seed in .ann"))?;
+        bns.l_pac = parts[0]
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid l_pac in .ann"))?;
+        bns.n_seqs = parts[1]
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_seqs in .ann"))?;
+        bns.seed = parts[2]
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid seed in .ann"))?;
 
         bns.anns.reserve(bns.n_seqs as usize);
         for _ in 0..bns.n_seqs {
             // Read name and anno line: gi name [anno]
-            let name_anno_line = lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing name/anno line in .ann file"))??;
+            let name_anno_line = lines.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Missing name/anno line in .ann file",
+                )
+            })??;
             let name_anno_parts: Vec<&str> = name_anno_line.splitn(3, ' ').collect();
-            let gi = name_anno_parts[0].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid gi in .ann"))?;
+            let gi = name_anno_parts[0]
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid gi in .ann"))?;
             let name = name_anno_parts[1].to_string();
             let anno = if name_anno_parts.len() > 2 {
                 name_anno_parts[2].to_string()
@@ -200,11 +216,23 @@ impl BntSeq {
             };
 
             // Read offset, len, n_ambs line
-            let offset_len_ambs_line = lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing offset/len/ambs line in .ann file"))??;
-            let offset_len_ambs_parts: Vec<&str> = offset_len_ambs_line.split_whitespace().collect();
-            let offset = offset_len_ambs_parts[0].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid offset in .ann"))?;
-            let len = offset_len_ambs_parts[1].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid len in .ann"))?;
-            let n_ambs = offset_len_ambs_parts[2].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_ambs in .ann"))?;
+            let offset_len_ambs_line = lines.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Missing offset/len/ambs line in .ann file",
+                )
+            })??;
+            let offset_len_ambs_parts: Vec<&str> =
+                offset_len_ambs_line.split_whitespace().collect();
+            let offset = offset_len_ambs_parts[0].parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "Invalid offset in .ann")
+            })?;
+            let len = offset_len_ambs_parts[1]
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid len in .ann"))?;
+            let n_ambs = offset_len_ambs_parts[2].parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "Invalid n_ambs in .ann")
+            })?;
 
             bns.anns.push(BntAnn1 {
                 offset,
@@ -225,24 +253,38 @@ impl BntSeq {
         let mut amb_lines = amb_file.lines();
 
         // Read first line: l_pac n_seqs n_holes
-        let amb_first_line = amb_lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing first line in .amb file"))??;
+        let amb_first_line = amb_lines.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Missing first line in .amb file",
+            )
+        })??;
         let amb_parts: Vec<&str> = amb_first_line.split_whitespace().collect();
         // We already have l_pac and n_seqs from .ann, so just read n_holes
-        bns.n_holes = amb_parts[2].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_holes in .amb"))?;
+        bns.n_holes = amb_parts[2]
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_holes in .amb"))?;
 
         bns.ambs.reserve(bns.n_holes as usize);
         for _ in 0..bns.n_holes {
-            let amb_data_line = amb_lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing amb data line in .amb file"))??;
+            let amb_data_line = amb_lines.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Missing amb data line in .amb file",
+                )
+            })??;
             let amb_data_parts: Vec<&str> = amb_data_line.split_whitespace().collect();
-            let offset = amb_data_parts[0].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid offset in .amb"))?;
-            let len = amb_data_parts[1].parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid len in .amb"))?;
-            let amb = amb_data_parts[2].chars().next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing amb char in .amb"))?;
+            let offset = amb_data_parts[0].parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "Invalid offset in .amb")
+            })?;
+            let len = amb_data_parts[1]
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid len in .amb"))?;
+            let amb = amb_data_parts[2].chars().next().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "Missing amb char in .amb")
+            })?;
 
-            bns.ambs.push(BntAmb1 {
-                offset,
-                len,
-                amb,
-            });
+            bns.ambs.push(BntAmb1 { offset, len, amb });
         }
 
         bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
@@ -253,7 +295,9 @@ impl BntSeq {
 
     // New method to get a segment of the reference sequence
     pub fn get_reference_segment(&self, start: u64, len: u64) -> io::Result<Vec<u8>> {
-        let pac_file_path = self.pac_file_path.as_ref()
+        let pac_file_path = self
+            .pac_file_path
+            .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PAC file path not set"))?;
 
         let mut pac_file = BufReader::new(File::open(pac_file_path)?);

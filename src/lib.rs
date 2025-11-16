@@ -2,17 +2,17 @@
 #![cfg_attr(feature = "avx512", feature(stdarch_x86_avx512))]
 #![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
 
-pub mod bwt;
-pub mod bntseq;
-pub mod kseq;  // Used for FASTA reference reading during index building
-pub mod fastq_reader;  // FASTQ reader using bio::io::fastq (used for query reads)
 pub mod align;
+pub mod banded_swa;
+pub mod bntseq;
+pub mod bwa_index;
+pub mod bwt;
+pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
+pub mod kseq; // Used for FASTA reference reading during index building
 pub mod mem;
 pub mod mem_opt;
-pub mod banded_swa;
-pub mod utils;
-pub mod bwa_index;
 pub mod simd_abstraction;
+pub mod utils;
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

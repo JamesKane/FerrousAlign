@@ -10,8 +10,8 @@ pub struct KStream {
     is_eof: bool,
 }
 
-
-#[path = "kseq_test.rs"] mod kseq_test;
+#[path = "kseq_test.rs"]
+mod kseq_test;
 
 impl KStream {
     pub fn new(reader: Box<dyn Read>) -> Self {
@@ -47,7 +47,12 @@ impl KStream {
         Ok(Some(c))
     }
 
-    pub fn getuntil(&mut self, delimiter: i32, str: &mut String, append: bool) -> io::Result<Option<u8>> {
+    pub fn getuntil(
+        &mut self,
+        delimiter: i32,
+        str: &mut String,
+        append: bool,
+    ) -> io::Result<Option<u8>> {
         let mut got_any = false;
         if !append {
             str.clear();
@@ -65,26 +70,38 @@ impl KStream {
             let mut i = self.begin;
             let mut found_delimiter = false;
 
-            if delimiter == 0 { // KS_SEP_SPACE
+            if delimiter == 0 {
+                // KS_SEP_SPACE
                 while i < self.end && !self.buf[i].is_ascii_whitespace() {
                     i += 1;
                 }
-                if i < self.end { found_delimiter = true; }
-            } else if delimiter == 1 { // KS_SEP_TAB
+                if i < self.end {
+                    found_delimiter = true;
+                }
+            } else if delimiter == 1 {
+                // KS_SEP_TAB
                 while i < self.end && !(self.buf[i].is_ascii_whitespace() && self.buf[i] != b' ') {
                     i += 1;
                 }
-                if i < self.end { found_delimiter = true; }
-            } else if delimiter == 2 { // KS_SEP_LINE
+                if i < self.end {
+                    found_delimiter = true;
+                }
+            } else if delimiter == 2 {
+                // KS_SEP_LINE
                 while i < self.end && self.buf[i] != b'\n' {
                     i += 1;
                 }
-                if i < self.end { found_delimiter = true; }
-            } else if delimiter > 2 { // Custom delimiter
+                if i < self.end {
+                    found_delimiter = true;
+                }
+            } else if delimiter > 2 {
+                // Custom delimiter
                 while i < self.end && self.buf[i] != delimiter as u8 {
                     i += 1;
                 }
-                if i < self.end { found_delimiter = true; }
+                if i < self.end {
+                    found_delimiter = true;
+                }
             } else {
                 // Should not happen based on C code's KS_SEP_MAX
                 i = 0;
@@ -92,8 +109,10 @@ impl KStream {
 
             // Append to string
             if i > self.begin {
-                str.push_str(std::str::from_utf8(&self.buf[self.begin..i])
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?);
+                str.push_str(
+                    std::str::from_utf8(&self.buf[self.begin..i])
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                );
                 got_any = true;
             }
 
@@ -143,11 +162,16 @@ impl KSeq {
     pub fn read(&mut self) -> io::Result<i64> {
         let mut c: Option<u8>;
 
-        if self.last_char == 0 { // then jump to the next header line
+        if self.last_char == 0 {
+            // then jump to the next header line
             loop {
                 c = self.f.getc()?;
-                if c.is_none() { return Ok(-1); } // EOF
-                if c == Some(b'>') || c == Some(b'@') { break; }
+                if c.is_none() {
+                    return Ok(-1);
+                } // EOF
+                if c == Some(b'>') || c == Some(b'@') {
+                    break;
+                }
             }
             self.last_char = c.unwrap() as i32;
         }
@@ -158,46 +182,69 @@ impl KSeq {
 
         // Read name
         let name_delimiter = self.f.getuntil(0, &mut self.name, false)?; // 0 for KS_SEP_SPACE
-        if name_delimiter.is_none() { return Ok(-1); } // EOF
+        if name_delimiter.is_none() {
+            return Ok(-1);
+        } // EOF
 
         // Read comment if present
-        if name_delimiter.unwrap() != b'\n' { // If name was not terminated by newline, there's a comment
+        if name_delimiter.unwrap() != b'\n' {
+            // If name was not terminated by newline, there's a comment
             let comment_delimiter = self.f.getuntil(2, &mut self.comment, false)?; // 2 for KS_SEP_LINE
-            if comment_delimiter.is_none() { return Ok(-1); } // EOF
+            if comment_delimiter.is_none() {
+                return Ok(-1);
+            } // EOF
         }
 
         // Read sequence
         loop {
             c = self.f.getc()?;
-            if c.is_none() { break; } // EOF
-            if c == Some(b'>') || c == Some(b'+') || c == Some(b'@') { break; }
-            if c == Some(b'\n') { continue; } // skip empty lines
+            if c.is_none() {
+                break;
+            } // EOF
+            if c == Some(b'>') || c == Some(b'+') || c == Some(b'@') {
+                break;
+            }
+            if c == Some(b'\n') {
+                continue;
+            } // skip empty lines
             self.seq.push(c.unwrap() as char);
             self.f.getuntil(2, &mut self.seq, true)?; // 2 for KS_SEP_LINE, append
         }
 
-        if c.is_none() { // If EOF was reached during sequence reading
+        if c.is_none() {
+            // If EOF was reached during sequence reading
             self.last_char = 0; // Reset last_char to indicate EOF
         } else if c.is_some() && (c == Some(b'>') || c == Some(b'@')) {
             self.last_char = c.unwrap() as i32;
         }
 
-        if c == Some(b'+') { // FASTQ format
+        if c == Some(b'+') {
+            // FASTQ format
             // Skip the rest of '+' line
             loop {
                 c = self.f.getc()?;
-                if c.is_none() || c == Some(b'\n') { break; }
+                if c.is_none() || c == Some(b'\n') {
+                    break;
+                }
             }
-            if c.is_none() { return Ok(-2); } // Error: no quality string
+            if c.is_none() {
+                return Ok(-2);
+            } // Error: no quality string
 
             // Read quality string
             loop {
                 let res = self.f.getuntil(2, &mut self.qual, true)?; // 2 for KS_SEP_LINE, append
-                if res.is_none() { break; }
-                if self.qual.len() >= self.seq.len() { break; }
+                if res.is_none() {
+                    break;
+                }
+                if self.qual.len() >= self.seq.len() {
+                    break;
+                }
             }
             self.last_char = 0; // We have not come to the next header line
-            if self.seq.len() != self.qual.len() { return Ok(-2); } // Error: qual string is of a different length
+            if self.seq.len() != self.qual.len() {
+                return Ok(-2);
+            } // Error: qual string is of a different length
         }
 
         Ok(self.seq.len() as i64)

@@ -7,82 +7,82 @@
 #[derive(Debug, Clone)]
 pub struct MemOpt {
     // Scoring parameters
-    pub a: i32,                  // Match score
-    pub b: i32,                  // Mismatch penalty
-    pub o_del: i32,              // Gap open penalty (deletions)
-    pub e_del: i32,              // Gap extension penalty (deletions)
-    pub o_ins: i32,              // Gap open penalty (insertions)
-    pub e_ins: i32,              // Gap extension penalty (insertions)
-    pub pen_unpaired: i32,       // Phred-scaled penalty for unpaired reads
-    pub pen_clip5: i32,          // 5' clipping penalty
-    pub pen_clip3: i32,          // 3' clipping penalty
+    pub a: i32,            // Match score
+    pub b: i32,            // Mismatch penalty
+    pub o_del: i32,        // Gap open penalty (deletions)
+    pub e_del: i32,        // Gap extension penalty (deletions)
+    pub o_ins: i32,        // Gap open penalty (insertions)
+    pub e_ins: i32,        // Gap extension penalty (insertions)
+    pub pen_unpaired: i32, // Phred-scaled penalty for unpaired reads
+    pub pen_clip5: i32,    // 5' clipping penalty
+    pub pen_clip3: i32,    // 3' clipping penalty
 
     // Alignment parameters
-    pub w: i32,                  // Band width for banded alignment
-    pub zdrop: i32,              // Z-dropoff (off-diagonal X-dropoff)
+    pub w: i32,     // Band width for banded alignment
+    pub zdrop: i32, // Z-dropoff (off-diagonal X-dropoff)
 
     // Seeding parameters
-    pub max_mem_intv: u64,       // Maximum MEM interval
-    pub min_seed_len: i32,       // Minimum seed length
-    pub split_factor: f32,       // Split into a seed if MEM is longer than min_seed_len*split_factor
-    pub split_width: i32,        // Split into a seed if its occurrence is smaller than this value
-    pub max_occ: i32,            // Skip a seed if its occurrence is larger than this value
+    pub max_mem_intv: u64, // Maximum MEM interval
+    pub min_seed_len: i32, // Minimum seed length
+    pub split_factor: f32, // Split into a seed if MEM is longer than min_seed_len*split_factor
+    pub split_width: i32,  // Split into a seed if its occurrence is smaller than this value
+    pub max_occ: i32,      // Skip a seed if its occurrence is larger than this value
 
     // Chaining parameters
-    pub min_chain_weight: i32,   // Minimum chain weight
-    pub max_chain_extend: i32,   // Maximum chain extension
-    pub max_chain_gap: i32,      // Do not chain seed if it is max_chain_gap-bp away from closest seed
+    pub min_chain_weight: i32, // Minimum chain weight
+    pub max_chain_extend: i32, // Maximum chain extension
+    pub max_chain_gap: i32,    // Do not chain seed if it is max_chain_gap-bp away from closest seed
 
     // Filtering parameters
-    pub mask_level: f32,         // Regard hit as redundant if overlap with better hit is over mask_level * min length
-    pub drop_ratio: f32,         // Drop chain if seed coverage is below drop_ratio * seed coverage of better chain
-    pub xa_drop_ratio: f32,      // When counting hits for XA tag, ignore alignments with score < xa_drop_ratio * max_score
-    pub mask_level_redun: f32,   // Mask level for redundant hits
+    pub mask_level: f32, // Regard hit as redundant if overlap with better hit is over mask_level * min length
+    pub drop_ratio: f32, // Drop chain if seed coverage is below drop_ratio * seed coverage of better chain
+    pub xa_drop_ratio: f32, // When counting hits for XA tag, ignore alignments with score < xa_drop_ratio * max_score
+    pub mask_level_redun: f32, // Mask level for redundant hits
 
     // Output parameters
-    pub t: i32,                  // Minimum score threshold to output
-    pub max_xa_hits: i32,        // Maximum XA hits to output
-    pub max_xa_hits_alt: i32,    // Maximum XA hits for ALT contigs
+    pub t: i32,               // Minimum score threshold to output
+    pub max_xa_hits: i32,     // Maximum XA hits to output
+    pub max_xa_hits_alt: i32, // Maximum XA hits for ALT contigs
 
     // Paired-end parameters
-    pub max_ins: i32,            // Maximum insert size (when estimating distribution, skip pairs with insert > this)
-    pub max_matesw: i32,         // Perform maximally max_matesw rounds of mate-SW for each end
+    pub max_ins: i32, // Maximum insert size (when estimating distribution, skip pairs with insert > this)
+    pub max_matesw: i32, // Perform maximally max_matesw rounds of mate-SW for each end
 
     // Processing parameters
-    pub n_threads: i32,          // Number of threads
-    pub chunk_size: i64,         // Process chunk_size-bp sequences in a batch
+    pub n_threads: i32,  // Number of threads
+    pub chunk_size: i64, // Process chunk_size-bp sequences in a batch
 
     // Mapping quality parameters
-    pub mapq_coef_len: f32,      // Coefficient length for mapQ calculation
-    pub mapq_coef_fac: i32,      // Coefficient factor for mapQ calculation (log of mapq_coef_len)
+    pub mapq_coef_len: f32, // Coefficient length for mapQ calculation
+    pub mapq_coef_fac: i32, // Coefficient factor for mapQ calculation (log of mapq_coef_len)
 
     // Flags (using bitfield in C++, separate bools in Rust for clarity)
-    pub flag: i32,               // Bitfield for various flags (kept for compatibility)
+    pub flag: i32, // Bitfield for various flags (kept for compatibility)
 
     // Scoring matrix (5x5 for A,C,G,T,N)
-    pub mat: [i8; 25],           // Scoring matrix; mat[0] == 0 if unset
+    pub mat: [i8; 25], // Scoring matrix; mat[0] == 0 if unset
 
     // Output formatting options (Phase 6)
-    pub read_group: Option<String>,  // Read group header line (@RG\tID:foo\tSM:bar)
-    pub header_lines: Vec<String>,   // Additional header lines to insert
+    pub read_group: Option<String>, // Read group header line (@RG\tID:foo\tSM:bar)
+    pub header_lines: Vec<String>,  // Additional header lines to insert
 
     // Advanced options (Phase 7)
     pub insert_size_override: Option<InsertSizeOverride>, // Manual insert size specification
-    pub verbosity: i32,              // Verbosity level (1=error, 2=warning, 3=message, 4+=debug)
+    pub verbosity: i32, // Verbosity level (1=error, 2=warning, 3=message, 4+=debug)
 
     // Advanced flags
-    pub smart_pairing: bool,         // -p: Smart pairing (ignoring in2.fq)
-    pub treat_alt_as_primary: bool,  // -j: Treat ALT contigs as part of primary assembly
-    pub smallest_coord_primary: bool,// -5: For split alignment, take smallest coordinate as primary
+    pub smart_pairing: bool,          // -p: Smart pairing (ignoring in2.fq)
+    pub treat_alt_as_primary: bool,   // -j: Treat ALT contigs as part of primary assembly
+    pub smallest_coord_primary: bool, // -5: For split alignment, take smallest coordinate as primary
 }
 
 /// Manual insert size specification (overrides auto-inference)
 #[derive(Debug, Clone)]
 pub struct InsertSizeOverride {
-    pub mean: f64,     // Mean insert size
-    pub stddev: f64,   // Standard deviation (default: 10% of mean)
-    pub max: i32,      // Maximum insert size (default: mean + 4*stddev)
-    pub min: i32,      // Minimum insert size (default: 0)
+    pub mean: f64,   // Mean insert size
+    pub stddev: f64, // Standard deviation (default: 10% of mean)
+    pub max: i32,    // Maximum insert size (default: mean + 4*stddev)
+    pub min: i32,    // Minimum insert size (default: 0)
 }
 
 impl Default for MemOpt {
@@ -211,18 +211,21 @@ impl MemOpt {
         let parts: Vec<&str> = s.split(',').collect();
         match parts.len() {
             1 => {
-                let val = parts[0].parse::<i32>()
+                let val = parts[0]
+                    .parse::<i32>()
                     .map_err(|_| format!("Invalid gap penalty: {}", s))?;
                 Ok((val, val))
             }
             2 => {
-                let del = parts[0].parse::<i32>()
+                let del = parts[0]
+                    .parse::<i32>()
                     .map_err(|_| format!("Invalid deletion penalty: {}", parts[0]))?;
-                let ins = parts[1].parse::<i32>()
+                let ins = parts[1]
+                    .parse::<i32>()
                     .map_err(|_| format!("Invalid insertion penalty: {}", parts[1]))?;
                 Ok((del, ins))
             }
-            _ => Err(format!("Gap penalty must be INT or INT,INT: {}", s))
+            _ => Err(format!("Gap penalty must be INT or INT,INT: {}", s)),
         }
     }
 
@@ -232,18 +235,21 @@ impl MemOpt {
         let parts: Vec<&str> = s.split(',').collect();
         match parts.len() {
             1 => {
-                let val = parts[0].parse::<i32>()
+                let val = parts[0]
+                    .parse::<i32>()
                     .map_err(|_| format!("Invalid clipping penalty: {}", s))?;
                 Ok((val, val))
             }
             2 => {
-                let clip5 = parts[0].parse::<i32>()
+                let clip5 = parts[0]
+                    .parse::<i32>()
                     .map_err(|_| format!("Invalid 5' clipping penalty: {}", parts[0]))?;
-                let clip3 = parts[1].parse::<i32>()
+                let clip3 = parts[1]
+                    .parse::<i32>()
                     .map_err(|_| format!("Invalid 3' clipping penalty: {}", parts[1]))?;
                 Ok((clip5, clip3))
             }
-            _ => Err(format!("Clipping penalty must be INT or INT,INT: {}", s))
+            _ => Err(format!("Clipping penalty must be INT or INT,INT: {}", s)),
         }
     }
 
@@ -297,11 +303,15 @@ impl MemOpt {
         let parts: Vec<&str> = s.split(',').collect();
 
         if parts.is_empty() || parts.len() > 4 {
-            return Err(format!("Insert size must be FLOAT[,FLOAT[,INT[,INT]]]: {}", s));
+            return Err(format!(
+                "Insert size must be FLOAT[,FLOAT[,INT[,INT]]]: {}",
+                s
+            ));
         }
 
         // Parse mean (required)
-        let mean = parts[0].parse::<f64>()
+        let mean = parts[0]
+            .parse::<f64>()
             .map_err(|_| format!("Invalid insert size mean: {}", parts[0]))?;
 
         if mean <= 0.0 {
@@ -310,7 +320,8 @@ impl MemOpt {
 
         // Parse stddev (default: 10% of mean)
         let stddev = if parts.len() > 1 {
-            parts[1].parse::<f64>()
+            parts[1]
+                .parse::<f64>()
                 .map_err(|_| format!("Invalid insert size stddev: {}", parts[1]))?
         } else {
             mean * 0.1
@@ -318,7 +329,8 @@ impl MemOpt {
 
         // Parse max (default: mean + 4*stddev)
         let max = if parts.len() > 2 {
-            parts[2].parse::<i32>()
+            parts[2]
+                .parse::<i32>()
                 .map_err(|_| format!("Invalid insert size max: {}", parts[2]))?
         } else {
             (mean + 4.0 * stddev) as i32
@@ -326,13 +338,19 @@ impl MemOpt {
 
         // Parse min (default: 0)
         let min = if parts.len() > 3 {
-            parts[3].parse::<i32>()
+            parts[3]
+                .parse::<i32>()
                 .map_err(|_| format!("Invalid insert size min: {}", parts[3]))?
         } else {
             0
         };
 
-        Ok(InsertSizeOverride { mean, stddev, max, min })
+        Ok(InsertSizeOverride {
+            mean,
+            stddev,
+            max,
+            min,
+        })
     }
 }
 
@@ -427,6 +445,9 @@ mod tests {
     fn test_mapq_coef_fac() {
         let opt = MemOpt::default();
         // ln(50) ≈ 3.912, should be truncated to 3
-        assert_eq!(opt.mapq_coef_fac, 3, "mapq_coef_fac should be ln(50) truncated");
+        assert_eq!(
+            opt.mapq_coef_fac, 3,
+            "mapq_coef_fac should be ln(50) truncated"
+        );
     }
 }

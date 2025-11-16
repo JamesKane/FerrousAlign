@@ -3,9 +3,9 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bntseq::{BntSeq, BntAnn1, BntAmb1, NST_NT4_TABLE};
-    use std::io::{self, Cursor, Read, BufReader, BufRead};
+    use crate::bntseq::{BntAmb1, BntAnn1, BntSeq, NST_NT4_TABLE};
     use std::fs;
+    use std::io::{self, BufRead, BufReader, Cursor, Read};
     use std::path::{Path, PathBuf};
 
     const TEST_PREFIX: &str = "test_bntseq";
@@ -35,7 +35,11 @@ AGCT
     fn cleanup_test_files(path: &Path) {
         if path.exists() {
             if let Err(e) = fs::remove_dir_all(&path) {
-                eprintln!("Failed to clean up test directory {}: {}", path.display(), e);
+                eprintln!(
+                    "Failed to clean up test directory {}: {}",
+                    path.display(),
+                    e
+                );
             }
         }
     }
@@ -187,7 +191,7 @@ AGCT
             assert_eq!(original_bns.ambs[i].len, restored_bns.ambs[i].len);
             assert_eq!(original_bns.ambs[i].amb, restored_bns.ambs[i].amb);
         }
-        
+
         cleanup_test_files(&test_dir);
         Ok(())
     }
