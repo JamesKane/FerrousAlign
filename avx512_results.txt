@@ -1,0 +1,1045 @@
+   Compiling ferrous-align v0.5.0 (/home/jkane/RustroverProjects/FerrousAlign)
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1225:18
+     |
+1225 |         unsafe { simd_arch::_mm512_setzero_si512() }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1230:18
+     |
+1230 |         unsafe { simd_arch::_mm512_setzero_si512() }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1235:18
+     |
+1235 |         unsafe { simd_arch::_mm512_set1_epi8(a) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1240:18
+     |
+1240 |         unsafe { simd_arch::_mm512_set1_epi16(a) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1245:18
+     |
+1245 |         unsafe { simd_arch::_mm512_set1_epi32(a) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1250:18
+     |
+1250 |         unsafe { simd_arch::_mm512_add_epi8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1255:18
+     |
+1255 |         unsafe { simd_arch::_mm512_sub_epi8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1260:18
+     |
+1260 |         unsafe { simd_arch::_mm512_subs_epu8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1265:18
+     |
+1265 |         unsafe { simd_arch::_mm512_subs_epi8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1270:18
+     |
+1270 |         unsafe { simd_arch::_mm512_adds_epi8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1275:18
+     |
+1275 |         unsafe { simd_arch::_mm512_adds_epu8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1280:18
+     |
+1280 |         unsafe { simd_arch::_mm512_max_epi8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1285:18
+     |
+1285 |         unsafe { simd_arch::_mm512_max_epu8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1290:18
+     |
+1290 |         unsafe { simd_arch::_mm512_min_epu8(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1295:18
+     |
+1295 |         unsafe { simd_arch::_mm512_add_epi16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1300:18
+     |
+1300 |         unsafe { simd_arch::_mm512_sub_epi16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1305:18
+     |
+1305 |         unsafe { simd_arch::_mm512_adds_epi16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1310:18
+     |
+1310 |         unsafe { simd_arch::_mm512_subs_epu16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1315:18
+     |
+1315 |         unsafe { simd_arch::_mm512_subs_epi16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1320:18
+     |
+1320 |         unsafe { simd_arch::_mm512_max_epi16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1325:18
+     |
+1325 |         unsafe { simd_arch::_mm512_min_epi16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1330:18
+     |
+1330 |         unsafe { simd_arch::_mm512_max_epu16(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1336:24
+     |
+1336 |             let mask = simd_arch::_mm512_cmpeq_epi8_mask(a, b);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1337:13
+     |
+1337 |             simd_arch::_mm512_maskz_set1_epi8(mask, -1i8)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1344:24
+     |
+1344 |             let mask = simd_arch::_mm512_cmpgt_epi8_mask(a, b);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1345:13
+     |
+1345 |             simd_arch::_mm512_maskz_set1_epi8(mask, -1i8)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1352:24
+     |
+1352 |             let mask = simd_arch::_mm512_cmpeq_epi16_mask(a, b);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1353:13
+     |
+1353 |             simd_arch::_mm512_maskz_set1_epi16(mask, -1i16)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1360:24
+     |
+1360 |             let mask = simd_arch::_mm512_cmpgt_epi16_mask(a, b);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1361:13
+     |
+1361 |             simd_arch::_mm512_maskz_set1_epi16(mask, -1i16)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1369:25
+     |
+1369 |             let kmask = simd_arch::_mm512_movepi8_mask(mask);
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1370:13
+     |
+1370 |             simd_arch::_mm512_mask_blend_epi8(kmask, a, b)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1376:18
+     |
+1376 |         unsafe { simd_arch::_mm512_and_si512(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1381:18
+     |
+1381 |         unsafe { simd_arch::_mm512_or_si512(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1386:18
+     |
+1386 |         unsafe { simd_arch::_mm512_andnot_si512(a, b) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/lib.rs:1:1
+     |
+1    | / pub mod bwt;
+2    | | pub mod bntseq;
+3    | | pub mod kseq;  // Used for FASTA reference reading during index building
+4    | | pub mod fastq_reader;  // FASTQ reader using bio::io::fastq (used for query reads)
+...    |
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1418:18
+     |
+1418 |         unsafe { simd_arch::_mm512_load_si512(p) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1423:18
+     |
+1423 |         unsafe { simd_arch::_mm512_store_si512(p, a) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1428:18
+     |
+1428 |         unsafe { simd_arch::_mm512_loadu_si512(p) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `stdarch_x86_avx512`
+    --> src/simd_abstraction.rs:1433:18
+     |
+1433 |         unsafe { simd_arch::_mm512_storeu_si512(p, a) }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #111137 <https://github.com/rust-lang/rust/issues/111137> for more information
+     = help: add `#![feature(stdarch_x86_avx512)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1223:22
+     |
+1223 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1228:22
+     |
+1228 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1233:22
+     |
+1233 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1238:22
+     |
+1238 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1243:22
+     |
+1243 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1248:22
+     |
+1248 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1253:22
+     |
+1253 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1258:22
+     |
+1258 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1263:22
+     |
+1263 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1268:22
+     |
+1268 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1273:22
+     |
+1273 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1278:22
+     |
+1278 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1283:22
+     |
+1283 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1288:22
+     |
+1288 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1293:22
+     |
+1293 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1298:22
+     |
+1298 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1303:22
+     |
+1303 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1308:22
+     |
+1308 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1313:22
+     |
+1313 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1318:22
+     |
+1318 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1323:22
+     |
+1323 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1328:22
+     |
+1328 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1333:22
+     |
+1333 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1341:22
+     |
+1341 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1349:22
+     |
+1349 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1357:22
+     |
+1357 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1365:22
+     |
+1365 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1374:22
+     |
+1374 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1379:22
+     |
+1379 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1384:22
+     |
+1384 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1389:22
+     |
+1389 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1406:22
+     |
+1406 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1411:22
+     |
+1411 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1416:22
+     |
+1416 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1421:22
+     |
+1421 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1426:22
+     |
+1426 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error[E0658]: the target feature `avx512bw` is currently unstable
+    --> src/simd_abstraction.rs:1431:22
+     |
+1431 |     #[target_feature(enable = "avx512bw")]
+     |                      ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: see issue #44839 <https://github.com/rust-lang/rust/issues/44839> for more information
+     = help: add `#![feature(avx512_target_feature)]` to the crate attributes to enable
+     = note: this compiler was built on 2025-04-30; consider upgrading it if it is out of date
+
+error: the feature named `avx512` is not valid for this target
+  --> src/banded_swa_avx512.rs:30:18
+   |
+30 | #[target_feature(enable = "avx512")]
+   |                  ^^^^^^^^^^^^^^^^^ `avx512` is not valid for this target
+
+warning: unnecessary `unsafe` block
+   --> src/simd_abstraction.rs:997:9
+    |
+997 |         unsafe { simd_arch::_mm256_setzero_si256() }
+    |         ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` on by default
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1002:9
+     |
+1002 |         unsafe { simd_arch::_mm256_setzero_si256() }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1007:9
+     |
+1007 |         unsafe { simd_arch::_mm256_set1_epi8(a) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1012:9
+     |
+1012 |         unsafe { simd_arch::_mm256_set1_epi16(a) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1017:9
+     |
+1017 |         unsafe { simd_arch::_mm256_set1_epi32(a) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1024:9
+     |
+1024 |         unsafe { simd_arch::_mm256_add_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1029:9
+     |
+1029 |         unsafe { simd_arch::_mm256_sub_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1034:9
+     |
+1034 |         unsafe { simd_arch::_mm256_subs_epu8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1039:9
+     |
+1039 |         unsafe { simd_arch::_mm256_subs_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1044:9
+     |
+1044 |         unsafe { simd_arch::_mm256_adds_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1049:9
+     |
+1049 |         unsafe { simd_arch::_mm256_adds_epu8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1054:9
+     |
+1054 |         unsafe { simd_arch::_mm256_max_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1059:9
+     |
+1059 |         unsafe { simd_arch::_mm256_max_epu8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1064:9
+     |
+1064 |         unsafe { simd_arch::_mm256_min_epu8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1071:9
+     |
+1071 |         unsafe { simd_arch::_mm256_add_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1076:9
+     |
+1076 |         unsafe { simd_arch::_mm256_sub_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1081:9
+     |
+1081 |         unsafe { simd_arch::_mm256_adds_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1086:9
+     |
+1086 |         unsafe { simd_arch::_mm256_subs_epu16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1091:9
+     |
+1091 |         unsafe { simd_arch::_mm256_subs_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1096:9
+     |
+1096 |         unsafe { simd_arch::_mm256_max_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1101:9
+     |
+1101 |         unsafe { simd_arch::_mm256_min_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1106:9
+     |
+1106 |         unsafe { simd_arch::_mm256_max_epu16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1113:9
+     |
+1113 |         unsafe { simd_arch::_mm256_cmpeq_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1118:9
+     |
+1118 |         unsafe { simd_arch::_mm256_cmpgt_epi8(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1123:9
+     |
+1123 |         unsafe { simd_arch::_mm256_cmpeq_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1128:9
+     |
+1128 |         unsafe { simd_arch::_mm256_cmpgt_epi16(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1135:9
+     |
+1135 |         unsafe { simd_arch::_mm256_blendv_epi8(a, b, mask) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1142:9
+     |
+1142 |         unsafe { simd_arch::_mm256_and_si256(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1147:9
+     |
+1147 |         unsafe { simd_arch::_mm256_or_si256(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1152:9
+     |
+1152 |         unsafe { simd_arch::_mm256_andnot_si256(a, b) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1162:18
+     |
+1162 |             1 => unsafe { simd_arch::_mm256_slli_epi16(a, 1) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1163:18
+     |
+1163 |             2 => unsafe { simd_arch::_mm256_slli_epi16(a, 2) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1164:18
+     |
+1164 |             3 => unsafe { simd_arch::_mm256_slli_epi16(a, 3) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1165:18
+     |
+1165 |             4 => unsafe { simd_arch::_mm256_slli_epi16(a, 4) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1166:18
+     |
+1166 |             5 => unsafe { simd_arch::_mm256_slli_epi16(a, 5) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1167:18
+     |
+1167 |             6 => unsafe { simd_arch::_mm256_slli_epi16(a, 6) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1168:18
+     |
+1168 |             7 => unsafe { simd_arch::_mm256_slli_epi16(a, 7) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1169:18
+     |
+1169 |             8 => unsafe { simd_arch::_mm256_slli_epi16(a, 8) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1170:18
+     |
+1170 |             _ => unsafe { simd_arch::_mm256_slli_epi16(a, 0) },
+     |                  ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1176:9
+     |
+1176 |         unsafe { simd_arch::_mm256_srli_si256(a, 2) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/simd_abstraction.rs:1181:9
+     |
+1181 |         unsafe { simd_arch::_mm256_alignr_epi8(a, b, 1) }
+     |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `zdrop`
+  --> src/banded_swa_avx2.rs:38:5
+   |
+38 |     zdrop: i32,      // Z-drop threshold for early termination
+   |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_zdrop`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `zdrop`
+  --> src/banded_swa_avx512.rs:38:5
+   |
+38 |     zdrop: i32,      // Z-drop threshold for early termination
+   |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_zdrop`
+
+For more information about this error, try `rustc --explain E0658`.
+warning: `ferrous-align` (lib) generated 43 warnings
+error: could not compile `ferrous-align` (lib) due to 88 previous errors; 43 warnings emitted

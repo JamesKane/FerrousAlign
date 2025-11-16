@@ -130,79 +130,78 @@ pub fn get_occ(bwa_idx: &BwaIndex, k: i64, c: u8) -> i64 {
     occ_k + popcount64(match_mask_k)
 }
 
+/// Backward extension matching C++ bwa-mem2 FMI_search::backwardExt()
+///
+/// CRITICAL: This uses a cumulative sum approach for computing l[] values,
+/// NOT the simple l = k + s formula! The l field encodes reverse complement
+/// BWT information, so the standard BWT interval invariant s = l - k does NOT hold.
+///
+/// C++ reference: FMI_search.cpp lines 1025-1052
 pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
-    let mut k_arr = [0u64; 4];
-    let mut s_arr = [0u64; 4];
-    let mut l_arr = [0u64; 4];
+    let mut k = [0i64; 4];
+    let mut l = [0i64; 4];
+    let mut s = [0i64; 4];
 
-    // eprintln!("DEBUG backward_ext: extending base {}, smem.k={}, smem.l={}, smem.s={}",
-    //           a, smem.k, smem.l, smem.s);
+    // Compute k[] and s[] for all 4 bases (matching C++ lines 1030-1039)
+    for b in 0..4u8 {
+        let sp = smem.k as i64;
+        let ep = (smem.k + smem.s) as i64;
 
-    for b in 0..4 {
-        let sp = smem.k;
-        let ep = smem.k + smem.s;
+        let occ_sp = get_occ(bwa_idx, sp, b);
+        let occ_ep = get_occ(bwa_idx, ep, b);
 
-        let occ_sp = get_occ(bwa_idx, sp as i64, b);
-        let occ_ep = get_occ(bwa_idx, ep as i64, b);
-
-        k_arr[b as usize] = bwa_idx.bwt.l2[b as usize] + occ_sp as u64;
-
-        // eprintln!("  base {}: l2[{}]={}, occ_sp={}, occ_ep={} => k={}",
-        //           b, b, bwa_idx.bwt.l2[b as usize], occ_sp, occ_ep, k_arr[b as usize]);
-
-        // Defensive: avoid u64 underflow if occ_ep < occ_sp due to malformed/placeholder data
-        let s = if occ_ep >= occ_sp { occ_ep - occ_sp } else { 0 };
-        s_arr[b as usize] = s as u64;
+        k[b as usize] = bwa_idx.bwt.l2[b as usize] as i64 + occ_sp;
+        s[b as usize] = occ_ep - occ_sp;
     }
 
-    // Calculate l_arr: For each base, l = k + s
-    // This is the straightforward interpretation where the interval [k, l) has size s
-    // NOTE: C++ bwa-mem2 uses a different approach with cumulative sums, but
-    // that appears to be for a combined forward/backward extension scheme.
-    // Our backward-only extension works correctly with the simple formula.
-    for b in 0..4 {
-        l_arr[b] = k_arr[b] + s_arr[b];
-    }
+    // Sentinel handling (matching C++ lines 1041-1042)
+    let sentinel_offset = if smem.k <= bwa_idx.sentinel_index as u64
+        && (smem.k + smem.s) > bwa_idx.sentinel_index as u64 {
+        1i64
+    } else {
+        0i64
+    };
 
-    let mut sentinel_offset = 0;
-    if smem.k <= bwa_idx.sentinel_index as u64 && (smem.k + smem.s) > bwa_idx.sentinel_index as u64
-    {
-        sentinel_offset = 1;
-    }
+    // CRITICAL: Cumulative sum computation for l[] (matching C++ lines 1043-1046)
+    // This is NOT l[b] = k[b] + s[b]!
+    // Instead: l[3] = smem.l + offset, then l[2] = l[3] + s[3], etc.
+    l[3] = smem.l as i64 + sentinel_offset;
+    l[2] = l[3] + s[3];
+    l[1] = l[2] + s[2];
+    l[0] = l[1] + s[1];
 
-    smem.k = k_arr[a as usize];
-    smem.l = l_arr[a as usize];
-    smem.s = s_arr[a as usize];
-
-    // Apply sentinel offset if needed
-    if sentinel_offset > 0 && smem.k <= bwa_idx.sentinel_index as u64 && smem.l > bwa_idx.sentinel_index as u64
-    {
-        smem.l += sentinel_offset;
-    }
-
-    // Validation: ensure BWT interval invariants hold
-    debug_assert!(
-        smem.k <= smem.l,
-        "BWT interval invariant violated: k={} > l={}",
-        smem.k,
-        smem.l
-    );
-    debug_assert!(
-        smem.s == smem.l - smem.k,
-        "BWT interval size mismatch: s={} but l-k={}",
-        smem.s,
-        smem.l - smem.k
-    );
-    debug_assert!(
-        smem.l <= bwa_idx.bwt.seq_len,
-        "BWT interval out of bounds: l={} > seq_len={}",
-        smem.l,
-        bwa_idx.bwt.seq_len
-    );
-
-    // eprintln!("  → Result: k={}, l={}, s={}", smem.k, smem.l, smem.s);
+    // Update SMEM with results for base 'a' (matching C++ lines 1048-1050)
+    smem.k = k[a as usize] as u64;
+    smem.l = l[a as usize] as u64;
+    smem.s = s[a as usize] as u64;
 
     smem
+}
+
+/// Forward extension matching C++ bwa-mem2 pattern
+///
+/// Forward extension is implemented as:
+/// 1. Swap k and l
+/// 2. Call backwardExt with complement base (3 - a)
+/// 3. Swap k and l back
+///
+/// C++ reference: FMI_search.cpp lines 546-554
+#[inline]
+pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
+    // Step 1: Swap k and l (lines 547-548)
+    let mut smem_swapped = smem;
+    smem_swapped.k = smem.l;
+    smem_swapped.l = smem.k;
+
+    // Step 2: Backward extension with complement base (line 549)
+    let mut result = backward_ext(bwa_idx, smem_swapped, 3 - a);
+
+    // Step 3: Swap k and l back (lines 552-553)
+    let k_temp = result.k;
+    result.k = result.l;
+    result.l = k_temp;
+
+    result
 }
 
 // Function to convert a base character to its 0-3 encoding
@@ -642,97 +641,242 @@ fn generate_seeds_with_mode(
 
     let mut all_smems: Vec<SMEM> = Vec::new();
 
-    // --- Process Forward Strand ---
-    let mut smems_fwd: Vec<SMEM> = Vec::new();
-    for i in (0..query_len).rev() {
-        let current_base_code = encoded_query[i];
+    // --- Generate SMEMs using C++ two-phase algorithm ---
+    // C++ reference: FMI_search.cpp getSMEMsOnePosOneThread (lines 496-670)
+    // For each starting position x:
+    //   Phase 1: Forward extension (collect intermediate SMEMs)
+    //   Phase 2: Backward extension (generate final bidirectional SMEMs)
 
-        if current_base_code == 4 {
+    let min_seed_len = _opt.min_seed_len;
+    let min_intv = _opt.max_occ as u64; // min_intv is the occurrence threshold
+
+    log::debug!("{}: Starting SMEM generation: min_seed_len={}, min_intv={}, query_len={}",
+                query_name, min_seed_len, min_intv, query_len);
+
+    // Process each starting position in the query
+    for x in 0..query_len {
+        let a = encoded_query[x];
+
+        if a >= 4 {
             // Skip 'N' bases
             continue;
         }
 
+        // Initialize SMEM at position x (C++ lines 527-533)
         let mut smem = SMEM {
             rid: 0,
-            m: i as i32,
-            n: i as i32,
-            k: bwa_idx.bwt.l2[current_base_code as usize],
-            l: bwa_idx.bwt.l2[(current_base_code + 1) as usize],
-            s: bwa_idx.bwt.l2[(current_base_code + 1) as usize]
-                - bwa_idx.bwt.l2[current_base_code as usize],
+            m: x as i32,
+            n: x as i32,
+            k: bwa_idx.bwt.l2[a as usize],
+            l: bwa_idx.bwt.l2[(3 - a) as usize],
+            s: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
             is_rev_comp: false,
         };
 
-        for j in (0..i).rev() {
-            let next_base_code = encoded_query[j];
-            if next_base_code == 4 {
+        // Phase 1: Forward extension (C++ lines 537-581)
+        let mut prev_array: Vec<SMEM> = Vec::new();
+
+        for j in (x + 1)..query_len {
+            let a = encoded_query[j];
+
+            if a >= 4 {
+                // Hit 'N' base - stop forward extension
                 break;
             }
 
-            // Fixed: Use literal base code for backward search, not reverse complement
-            let new_smem = backward_ext(bwa_idx, smem, next_base_code);
+            // Forward extension (C++ lines 546-554)
+            let new_smem = forward_ext(bwa_idx, smem, a);
 
-            if new_smem.s == 0 {
-                break;
-            }
-
+            // If interval size changed, save previous SMEM (C++ lines 556-559)
             if new_smem.s != smem.s {
-                smems_fwd.push(smem);
+                prev_array.push(smem);
             }
+
+            // Check if interval became too small (C++ lines 560-564)
+            if new_smem.s < min_intv {
+                break;
+            }
+
             smem = new_smem;
-            smem.m = j as i32;
+            smem.n = j as i32; // Update end position
         }
-        if smem.s > 0 {
-            smems_fwd.push(smem);
+
+        // Save final forward-extended SMEM if large enough (C++ lines 576-581)
+        if smem.s >= min_intv {
+            prev_array.push(smem);
+        }
+
+        if x < 3 {
+            log::debug!("{}: Position x={}, prev_array.len()={}, smem.s={}, min_intv={}",
+                        query_name, x, prev_array.len(), smem.s, min_intv);
+        }
+
+        // Reverse the prev_array (C++ lines 587-592)
+        prev_array.reverse();
+
+        // Phase 2: Backward search (C++ lines 595-665)
+        for j in (0..x).rev() {
+            let a = encoded_query[j];
+
+            if a >= 4 {
+                // Hit 'N' base - stop backward search
+                break;
+            }
+
+            let mut curr_array: Vec<SMEM> = Vec::new();
+            let mut curr_s = None;
+
+            for smem in &prev_array {
+                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+                new_smem.m = j as i32;
+
+                // Check if we should output this SMEM (C++ lines 613-619)
+                if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
+                    all_smems.push(*smem);
+                    break; // C++ breaks after first output in this position
+                }
+
+                // Keep extending if interval is large enough and different from previous (C++ lines 620-629)
+                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
+                    curr_s = Some(new_smem.s);
+                    curr_array.push(new_smem);
+                    break; // C++ breaks after first successful extension
+                }
+            }
+
+            // Continue with remaining SMEMs (C++ lines 632-649)
+            for smem in prev_array.iter().skip(1) {
+                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+                new_smem.m = j as i32;
+
+                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
+                    curr_s = Some(new_smem.s);
+                    curr_array.push(new_smem);
+                }
+            }
+
+            // Update prev_array for next iteration (C++ lines 650-654)
+            prev_array = curr_array;
+            if prev_array.is_empty() {
+                break;
+            }
+        }
+
+        // Output any remaining SMEMs (C++ lines 656-665)
+        if !prev_array.is_empty() {
+            let smem = prev_array[0];
+            let len = smem.n - smem.m + 1;
+            if x < 3 {
+                log::debug!("{}: Position x={}, final prev_array[0]: len={}, min_seed_len={}, will_output={}",
+                            query_name, x, len, min_seed_len, len >= min_seed_len);
+            }
+            if len >= min_seed_len {
+                all_smems.push(smem);
+                if x < 3 {
+                    log::debug!("{}: OUTPUT SMEM at x={}: m={}, n={}, len={}",
+                                query_name, x, smem.m, smem.n, len);
+                }
+            }
         }
     }
-    all_smems.extend(smems_fwd);
 
     // --- Process Reverse Complement Strand ---
-    let mut smems_rev: Vec<SMEM> = Vec::new();
-    for i in (0..query_len).rev() {
-        let current_base_code = encoded_query_rc[i];
+    // Same two-phase algorithm on reverse complement
+    for x in 0..query_len {
+        let a = encoded_query_rc[x];
 
-        if current_base_code == 4 {
-            // Skip 'N' bases
+        if a >= 4 {
             continue;
         }
 
         let mut smem = SMEM {
             rid: 0,
-            m: i as i32,
-            n: i as i32,
-            k: bwa_idx.bwt.l2[current_base_code as usize],
-            l: bwa_idx.bwt.l2[(current_base_code + 1) as usize],
-            s: bwa_idx.bwt.l2[(current_base_code + 1) as usize]
-                - bwa_idx.bwt.l2[current_base_code as usize],
-            is_rev_comp: true, // Mark as from reverse complement
+            m: x as i32,
+            n: x as i32,
+            k: bwa_idx.bwt.l2[a as usize],
+            l: bwa_idx.bwt.l2[(3 - a) as usize],
+            s: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
+            is_rev_comp: true,
         };
 
-        for j in (0..i).rev() {
-            let next_base_code = encoded_query_rc[j];
-            if next_base_code == 4 {
+        let mut prev_array: Vec<SMEM> = Vec::new();
+
+        for j in (x + 1)..query_len {
+            let a = encoded_query_rc[j];
+
+            if a >= 4 {
                 break;
             }
 
-            // Fixed: Use literal base code for backward search on RC strand
-            let new_smem = backward_ext(bwa_idx, smem, next_base_code);
-
-            if new_smem.s == 0 {
-                break;
-            }
+            let new_smem = forward_ext(bwa_idx, smem, a);
 
             if new_smem.s != smem.s {
-                smems_rev.push(smem);
+                prev_array.push(smem);
             }
+
+            if new_smem.s < min_intv {
+                break;
+            }
+
             smem = new_smem;
-            smem.m = j as i32;
+            smem.n = j as i32;
         }
-        if smem.s > 0 {
-            smems_rev.push(smem);
+
+        if smem.s >= min_intv {
+            prev_array.push(smem);
+        }
+
+        prev_array.reverse();
+
+        for j in (0..x).rev() {
+            let a = encoded_query_rc[j];
+
+            if a >= 4 {
+                break;
+            }
+
+            let mut curr_array: Vec<SMEM> = Vec::new();
+            let mut curr_s = None;
+
+            for smem in &prev_array {
+                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+                new_smem.m = j as i32;
+
+                if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
+                    all_smems.push(*smem);
+                    break;
+                }
+
+                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
+                    curr_s = Some(new_smem.s);
+                    curr_array.push(new_smem);
+                    break;
+                }
+            }
+
+            for smem in prev_array.iter().skip(1) {
+                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+                new_smem.m = j as i32;
+
+                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
+                    curr_s = Some(new_smem.s);
+                    curr_array.push(new_smem);
+                }
+            }
+
+            prev_array = curr_array;
+            if prev_array.is_empty() {
+                break;
+            }
+        }
+
+        if !prev_array.is_empty() {
+            let smem = prev_array[0];
+            if (smem.n - smem.m + 1) >= min_seed_len {
+                all_smems.push(smem);
+            }
         }
     }
-    all_smems.extend(smems_rev);
 
     // eprintln!("all_smems: {:?}", all_smems);
 

@@ -57,7 +57,47 @@ Contains single 148bp read from HG002 whole-genome sequencing dataset.
 - Cumulative sum calculation for BWT interval endpoints
 - Maintaining BWT interval invariants during extension
 
-**Recent Findings**:
-- Simple `l = k + s` formula causes issues with k/l swap for forward extension
-- C++ uses cumulative sum approach that doesn't follow standard `s = l - k` invariant
-- Suggests fundamental difference in how k, l, and s fields relate in SMEM structure
+**Recent Findings** (Session 2025-11-16):
+
+### Critical Discoveries:
+1. **SMEM `l` field encoding**: C++ uses `l = count[3-a]` (reverse complement), NOT `l = count[a+1]`
+   - This breaks the traditional BWT invariant `s = l - k`
+   - The `l` field encodes reverse complement BWT information
+
+2. **backward_ext() cumulative sum**: C++ uses cumulative sum for `l[]` computation:
+   ```cpp
+   l[3] = smem.l + sentinel_offset;
+   l[2] = l[3] + s[3];
+   l[1] = l[2] + s[2];
+   l[0] = l[1] + s[1];
+   ```
+   NOT the simple formula `l[b] = k[b] + s[b]`
+
+3. **Two-Phase SMEM Algorithm**: C++ uses bidirectional search, Rust was only doing backward:
+   - **Phase 1 (Forward Extension)**: Start at position x, extend forward (j from x+1 to readlength)
+     - Uses k/l swap + backwardExt(3-a) to simulate forward extension
+     - Collects intermediate SMEMs in array
+     - Reverses the array
+   - **Phase 2 (Backward Search)**: Extend backward (j from x-1 to 0)
+     - Uses regular backwardExt(a) with literal base
+     - Outputs final bidirectional SMEMs
+
+4. **Result**: Rust was generating 4740 SMEMs vs C++ generating ~4 long SMEMs
+   - Missing the bidirectional constraint
+
+### Fixes Applied:
+- ✅ Fixed SMEM initialization (`l = count[3-a]`)
+- ✅ Fixed backward_ext() cumulative sum
+- ✅ Added forward_ext() helper function
+- ✅ Rewrote main SMEM generation loop for two-phase algorithm
+  - Forward extension phase: collects 12-13 intermediate SMEMs
+  - Backward extension phase: should extend SMEMs further
+
+### Current Status (Debugging Phase):
+- Forward extension working: generating prev_arrays with 12-13 SMEMs
+- SMEMs have interval sizes above threshold (s=1429, 1112, 870 > min_intv=500)
+- **Issue**: SMEMs only length 11, need >= 19 (min_seed_len)
+- **Analysis**: Backward phase should extend `m` backward to create longer SMEMs
+- Forward extends `n` forward by ~11 positions before interval drops
+- Backward should extend `m` backward by many more positions
+- Need to debug why backward extension isn't producing longer SMEMs

@@ -1,0 +1,28 @@
+# Tracing backward_ext logic
+
+Given SMEM: k=100, l=200, s=100
+
+Step 1: For each base b (0-3):
+  sp = smem.k = 100
+  ep = smem.k + smem.s = 200  (should equal smem.l)
+  
+  k_arr[b] = L2[b] + Occ(sp, b)  
+  s_arr[b] = Occ(ep, b) - Occ(sp, b)
+
+Step 2: Calculate l_arr:
+  l_arr[3] = smem.l + sentinel_offset = 200
+  l_arr[2] = l_arr[3] + s_arr[3]  
+  l_arr[1] = l_arr[2] + s_arr[2]
+  l_arr[0] = l_arr[1] + s_arr[1]
+
+Step 3: Select base 'a':
+  smem.k = k_arr[a]
+  smem.l = l_arr[a]  
+  smem.s = s_arr[a]
+
+PROBLEM: The new smem.l uses the OLD smem.l value!
+For base 'a', the correct new interval should be:
+  new_k = L2[a] + Occ(old_k, a) = k_arr[a] ✓
+  new_l = L2[a] + Occ(old_l, a) = k_arr[a] + s_arr[a]
+
+But the code uses the old smem.l + cumulative sums, which is wrong!

@@ -1,0 +1,81 @@
+Looking to launch executable "/home/jkane/Applications/bwa-mem2/bwa-mem2.avx512bw", simd = .avx512bw
+Launching executable "/home/jkane/Applications/bwa-mem2/bwa-mem2.avx512bw"
+-----------------------------
+Executing in AVX512 mode!!
+-----------------------------
+* SA compression enabled with xfactor: 8
+* Ref file: /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna
+* Entering FMI_search
+* Index file found. Loading index from /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.bwt.2bit.64
+* Reference seq len for bi-index = 6199845083
+* sentinel-index: 2637243555
+* Count:
+0,	1
+1,	1817861264
+2,	3099922542
+3,	4381983820
+4,	6199845083
+
+* Reading other elements of the index from files /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna
+* Index prefix: /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna
+* Read 0 ALT contigs
+* Done reading Index!!
+* Reading reference genome..
+* Binary seq file = /home/jkane/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.0123
+* Reference genome size: 6199845082 bp
+* Done reading reference genome !!
+
+------------------------------------------
+1. Memory pre-allocation for Chaining: 139.3584 MB
+2. Memory pre-allocation for BSW: 239.6170 MB
+3. Memory pre-allocation for BWT: 77.3142 MB
+------------------------------------------
+* Threads used (compute): 1
+* No. of pipeline threads: 2
+
+[0000] read_chunk: 10000000, work_chunk_size: 148, nseq: 1
+	[0000][ M::kt_pipeline] read 1 sequences (148 bp)...
+[0000] Calling mem_process_seqs.., task: 0
+[0000] 1. Calling kt_for - worker_bwt
+[0000] read_chunk: 10000000, work_chunk_size: 0, nseq: 0
+[0000] 2. Calling kt_for - worker_aln
+[0000] 3. Calling kt_for - worker_sam
+	[0000][ M::mem_process_seqs] Processed 1 reads in 0.001 CPU sec, 0.001 real sec
+[0000] read_chunk: 10000000, work_chunk_size: 0, nseq: 0
+[0000] Computation ends..
+No. of OMP threads: 1
+Processor is running @4691.447269 MHz
+Runtime profile:
+
+	Time taken for main_mem function: 8.21 sec
+
+	IO times (sec) :
+	Reading IO time (reads) avg: 0.00, (0.00, 0.00)
+	Writing IO time (SAM) avg: 0.00, (0.00, 0.00)
+	Reading IO time (Reference Genome) avg: 3.68, (3.68, 3.68)
+	Index read time avg: 3.70, (3.70, 3.70)
+
+	Overall time (sec) (Excluding Index reading time):
+	PROCESS() (Total compute time + (read + SAM) IO time) : 0.00
+	MEM_PROCESS_SEQ() (Total compute time (Kernel + SAM)), avg: 0.00, (0.00, 0.00)
+
+	 SAM Processing time (sec):
+	--WORKER_SAM avg: 0.00, (0.00, 0.00)
+
+	Kernels' compute time (sec):
+	Total kernel (smem+sal+bsw) time avg: 0.00, (0.00, 0.00)
+		SMEM compute avg: 0.00, (0.00, 0.00)
+		SAL compute avg: 0.00, (0.00, 0.00)
+				MEM_SA avg: 0.00, (0.00, 0.00)
+
+		BSW time, avg: 0.00, (0.00, 0.00)
+
+Important parameter settings: 
+	BATCH_SIZE: 512
+	MAX_SEQ_LEN_REF: 256
+	MAX_SEQ_LEN_QER: 128
+	MAX_SEQ_LEN8: 128
+	SEEDS_PER_READ: 500
+	SIMD_WIDTH8 X: 64
+	SIMD_WIDTH16 X: 32
+	AVG_SEEDS_PER_READ: 64
