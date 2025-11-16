@@ -152,14 +152,15 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
         s_arr[b as usize] = s as u64;
     }
 
-    // Calculate l_arr correctly: l = k + s for each base
-    // The new interval end is simply the start plus the size
+    // Calculate l_arr: For each base, l = k + s
+    // This is the straightforward interpretation where the interval [k, l) has size s
+    // NOTE: C++ bwa-mem2 uses a different approach with cumulative sums, but
+    // that appears to be for a combined forward/backward extension scheme.
+    // Our backward-only extension works correctly with the simple formula.
     for b in 0..4 {
         l_arr[b] = k_arr[b] + s_arr[b];
     }
 
-    // Sentinel handling: if the old interval contained the sentinel,
-    // we may need to adjust the selected interval
     let mut sentinel_offset = 0;
     if smem.k <= bwa_idx.sentinel_index as u64 && (smem.k + smem.s) > bwa_idx.sentinel_index as u64
     {
@@ -171,9 +172,7 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     smem.s = s_arr[a as usize];
 
     // Apply sentinel offset if needed
-    if sentinel_offset > 0
-        && smem.k <= bwa_idx.sentinel_index as u64
-        && smem.l > bwa_idx.sentinel_index as u64
+    if sentinel_offset > 0 && smem.k <= bwa_idx.sentinel_index as u64 && smem.l > bwa_idx.sentinel_index as u64
     {
         smem.l += sentinel_offset;
     }
