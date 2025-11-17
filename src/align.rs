@@ -420,19 +420,37 @@ fn estimate_divergence_score(query_len: usize, target_len: usize) -> f64 {
     (length_mismatch * 2.5).min(1.0)
 }
 
-/// Determine optimal batch size based on estimated divergence
+/// Determine optimal batch size based on estimated divergence and SIMD engine
 ///
 /// **Strategy**:
-/// - Low divergence (score < 0.3): Use larger batches (32-64) for maximum SIMD efficiency
-/// - Medium divergence (0.3-0.7): Use standard batch size (16)
-/// - High divergence (> 0.7): Use smaller batches (8) or route to scalar
+/// - Detect available SIMD engine (SSE2/AVX2/AVX-512)
+/// - Low divergence (score < 0.3): Use engine's maximum batch size for efficiency
+/// - Medium divergence (0.3-0.7): Use engine's standard batch size
+/// - High divergence (> 0.7): Use smaller batches or route to scalar
+///
+/// **SIMD Engine Batch Sizes**:
+/// - SSE2/NEON (128-bit): 16-way parallelism
+/// - AVX2 (256-bit): 32-way parallelism
+/// - AVX-512 (512-bit): 64-way parallelism
 ///
 /// This reduces batch synchronization penalty for divergent sequences while
 /// maximizing SIMD utilization for similar sequences.
 fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
+    use crate::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+
     if jobs.is_empty() {
         return 16; // Default
     }
+
+    // Detect SIMD engine and determine native batch size
+    let engine = detect_optimal_simd_engine();
+    let (max_batch, standard_batch) = match engine {
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => (64, 32),  // AVX-512: 64-way max, 32-way standard
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => (32, 16),  // AVX2: 32-way max, 16-way standard
+        SimdEngineType::Engine128 => (16, 16),  // SSE2/NEON: 16-way
+    };
 
     // Calculate average divergence score for this batch of jobs
     let total_divergence: f64 = jobs
@@ -442,16 +460,17 @@ fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
 
     let avg_divergence = total_divergence / jobs.len() as f64;
 
-    // Adaptive batch sizing based on divergence
+    // Adaptive batch sizing based on divergence and SIMD capability
     if avg_divergence < 0.3 {
-        // Low divergence: Use larger batches for better SIMD utilization
-        32
+        // Low divergence: Use engine's maximum batch size for best SIMD utilization
+        max_batch
     } else if avg_divergence < 0.7 {
-        // Medium divergence: Use standard batch size
-        16
+        // Medium divergence: Use engine's standard batch size
+        standard_batch
     } else {
         // High divergence: Use smaller batches to reduce synchronization penalty
-        8
+        // Use half of standard batch, minimum 8
+        (standard_batch / 2).max(8)
     }
 }
 
@@ -478,6 +497,7 @@ fn partition_jobs_by_divergence(jobs: &[AlignmentJob]) -> (Vec<AlignmentJob>, Ve
 
 /// Execute alignments using batched SIMD (processes up to 16 at a time)
 /// Now includes CIGAR generation via hybrid approach
+/// NOTE: This function is deprecated - use execute_adaptive_alignments instead
 pub(crate) fn execute_batched_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
@@ -490,7 +510,7 @@ pub(crate) fn execute_batched_alignments(
         let batch_end = (batch_start + BATCH_SIZE).min(jobs.len());
         let batch_jobs = &jobs[batch_start..batch_end];
 
-        // Prepare batch data for simd_banded_swa_batch16_with_cigar
+        // Prepare batch data for SIMD dispatch
         let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
             .iter()
             .map(|job| {
@@ -506,7 +526,8 @@ pub(crate) fn execute_batched_alignments(
             .collect();
 
         // Execute batched alignment with CIGAR generation
-        let results = sw_params.simd_banded_swa_batch16_with_cigar(&batch_data);
+        // Use dispatch to automatically route to optimal SIMD width (16/32/64)
+        let results = sw_params.simd_banded_swa_dispatch_with_cigar(&batch_data);
 
         // Extract scores and CIGARs from results
         for (i, result) in results.iter().enumerate() {
@@ -611,6 +632,7 @@ pub(crate) fn execute_adaptive_alignments(
 }
 
 /// Execute batched alignments with configurable batch size
+/// Uses SIMD dispatch to automatically select optimal engine (SSE2/AVX2/AVX-512)
 fn execute_batched_alignments_with_size(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
@@ -639,7 +661,8 @@ fn execute_batched_alignments_with_size(
             .collect();
 
         // Execute batched alignment with CIGAR generation
-        let results = sw_params.simd_banded_swa_batch16_with_cigar(&batch_data);
+        // Dispatch automatically selects batch16/32/64 based on detected SIMD engine
+        let results = sw_params.simd_banded_swa_dispatch_with_cigar(&batch_data);
 
         // Extract scores and CIGARs from results
         for (i, result) in results.iter().enumerate() {

@@ -30,10 +30,22 @@ fn generate_sequence_with_mutations(seq: &[u8], mutation_rate: f64, seed: u64) -
 
 /// Benchmark scalar vs batched SIMD for varying sequence lengths
 fn bench_scalar_vs_batched(c: &mut Criterion) {
+    use ferrous_align::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+
     let mat = bwa_fill_scmat(1, 4, -1);
     let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
 
     let mut group = c.benchmark_group("smith_waterman");
+
+    // Determine optimal batch size based on SIMD engine
+    let engine = detect_optimal_simd_engine();
+    let batch_size = match engine {
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => 32,
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => 64,
+        SimdEngineType::Engine128 => 16,
+    };
 
     // Test different sequence lengths: 50bp, 100bp, 150bp
     for seq_len in [50, 100, 150].iter() {
@@ -55,8 +67,8 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
             })
         });
 
-        // Benchmark batched SIMD version (batch of 16 identical alignments)
-        let batch: Vec<_> = (0..16)
+        // Benchmark batched SIMD version with optimal batch size
+        let batch: Vec<_> = (0..batch_size)
             .map(|_| {
                 (
                     query.len() as i32,
@@ -69,11 +81,11 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
             })
             .collect();
 
-        group.throughput(Throughput::Elements(16));
+        group.throughput(Throughput::Elements(batch_size as u64));
         group.bench_with_input(
             BenchmarkId::new("batched_simd", seq_len),
             seq_len,
-            |b, &_size| b.iter(|| bsw.simd_banded_swa_batch16(black_box(&batch))),
+            |b, &_size| b.iter(|| bsw.simd_banded_swa_dispatch(black_box(&batch))),
         );
     }
 
@@ -88,7 +100,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_sizes");
 
     let seq_len = 100;
-    let num_alignments = 128; // Total alignments to process
+    let num_alignments: usize = 128; // Total alignments to process
 
     // Generate diverse set of alignments
     let alignments: Vec<(Vec<u8>, Vec<u8>)> = (0..num_alignments)
@@ -100,7 +112,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
         .collect();
 
     // Benchmark scalar: process all alignments one by one
-    group.throughput(Throughput::Elements(num_alignments));
+    group.throughput(Throughput::Elements(num_alignments as u64));
     group.bench_function("scalar_128x", |b| {
         b.iter(|| {
             for (query, target) in &alignments {
@@ -116,15 +128,66 @@ fn bench_batch_sizes(c: &mut Criterion) {
         })
     });
 
-    // Benchmark batched: process in batches of 16
-    group.throughput(Throughput::Elements(num_alignments));
-    group.bench_function("batched_simd_128x", |b| {
+    // Benchmark auto-dispatch: uses optimal batch size for detected SIMD engine
+    // SSE2 → 16, AVX2 → 32, AVX-512 → 64
+    group.throughput(Throughput::Elements(num_alignments as u64));
+    group.bench_function("auto_dispatch_128x", |b| {
+        // Determine optimal batch size based on SIMD engine
+        use ferrous_align::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+        let engine = detect_optimal_simd_engine();
+        let batch_size = match engine {
+            #[cfg(target_arch = "x86_64")]
+            SimdEngineType::Engine256 => 32,
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+            SimdEngineType::Engine512 => 64,
+            SimdEngineType::Engine128 => 16,
+        };
+
+        b.iter(|| {
+            for chunk_start in (0..num_alignments).step_by(batch_size) {
+                let batch: Vec<_> = (0..batch_size.min(num_alignments - chunk_start))
+                    .map(|i| {
+                        let idx = chunk_start + i;
+                        let (query, target) = &alignments[idx];
+                        (
+                            query.len() as i32,
+                            query.as_slice(),
+                            target.len() as i32,
+                            target.as_slice(),
+                            100i32,
+                            0i32,
+                        )
+                    })
+                    .collect();
+
+                // Pad to batch_size if needed
+                let mut padded_batch = batch;
+                while padded_batch.len() < batch_size {
+                    let (query, target) = &alignments[0];
+                    padded_batch.push((
+                        query.len() as i32,
+                        query.as_slice(),
+                        target.len() as i32,
+                        target.as_slice(),
+                        100i32,
+                        0i32,
+                    ));
+                }
+
+                black_box(bsw.simd_banded_swa_dispatch(&padded_batch));
+            }
+        })
+    });
+
+    // Keep the old batch16 benchmark for comparison
+    group.throughput(Throughput::Elements(num_alignments as u64));
+    group.bench_function("batch16_128x_legacy", |b| {
         b.iter(|| {
             for chunk_start in (0..num_alignments).step_by(16) {
                 let batch: Vec<_> = (0..16.min(num_alignments - chunk_start))
                     .map(|i| {
-                        let idx = chunk_start + i as u64;
-                        let (query, target) = &alignments[idx as usize];
+                        let idx = chunk_start + i;
+                        let (query, target) = &alignments[idx];
                         (
                             query.len() as i32,
                             query.as_slice(),
@@ -160,11 +223,23 @@ fn bench_batch_sizes(c: &mut Criterion) {
 
 /// Benchmark different mutation rates (affects DP complexity)
 fn bench_mutation_rates(c: &mut Criterion) {
+    use ferrous_align::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+
     let mat = bwa_fill_scmat(1, 4, -1);
     let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
 
     let mut group = c.benchmark_group("mutation_rates");
     let seq_len = 100;
+
+    // Determine optimal batch size based on SIMD engine
+    let engine = detect_optimal_simd_engine();
+    let batch_size = match engine {
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => 32,
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => 64,
+        SimdEngineType::Engine128 => 16,
+    };
 
     for mutation_rate in [0.0, 0.05, 0.10, 0.20].iter() {
         let query = generate_random_sequence(seq_len, 42);
@@ -188,8 +263,8 @@ fn bench_mutation_rates(c: &mut Criterion) {
             },
         );
 
-        // Batched SIMD
-        let batch: Vec<_> = (0..16)
+        // Batched SIMD with optimal batch size
+        let batch: Vec<_> = (0..batch_size)
             .map(|_| {
                 (
                     query.len() as i32,
@@ -205,7 +280,7 @@ fn bench_mutation_rates(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("batched_simd", format!("{:.0}%", mutation_rate * 100.0)),
             mutation_rate,
-            |b, &_rate| b.iter(|| bsw.simd_banded_swa_batch16(black_box(&batch))),
+            |b, &_rate| b.iter(|| bsw.simd_banded_swa_dispatch(black_box(&batch))),
         );
     }
 
