@@ -797,6 +797,13 @@ fn generate_seeds_with_mode(
     log::debug!("{}: Starting SMEM generation: min_seed_len={}, min_intv={}, query_len={}",
                 query_name, min_seed_len, min_intv, query_len);
 
+    // OPTIMIZATION: Pre-allocate buffers to avoid repeated allocations
+    // These are reused for every position x to reduce malloc overhead
+    let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut prev_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut curr_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
+
     // Process each starting position in the query
     // CRITICAL FIX: Use while loop and skip ahead after each SMEM (like C++)
     // This prevents outputting the same SMEM at every position x!
@@ -829,7 +836,8 @@ fn generate_seeds_with_mode(
         }
 
         // Phase 1: Forward extension (C++ lines 537-581)
-        let mut prev_array: Vec<SMEM> = Vec::new();
+        // OPTIMIZATION: Reuse pre-allocated buffer instead of allocating fresh Vec
+        prev_array_buf.clear();
         let mut next_x = x + 1; // Track next uncovered position (C++ line 518, 541)
 
         for j in (x + 1)..query_len {
@@ -859,10 +867,10 @@ fn generate_seeds_with_mode(
             if new_smem.s != smem.s {
                 if x < 3 {
                     let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                    log::debug!("{}: x={}, j={}, pushing smem to prev_array: s={}, l-k={}, match={}",
+                    log::debug!("{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
                                 query_name, x, j, smem.s, s_from_lk, smem.s == s_from_lk);
                 }
-                prev_array.push(smem);
+                prev_array_buf.push(smem);
             }
 
             // Check if interval became too small (C++ lines 560-564)
@@ -880,20 +888,20 @@ fn generate_seeds_with_mode(
 
         // Save final forward-extended SMEM if large enough (C++ lines 576-581)
         if smem.s >= min_intv {
-            prev_array.push(smem);
+            prev_array_buf.push(smem);
         }
 
         if x < 3 {
-            log::debug!("{}: Position x={}, prev_array.len()={}, smem.s={}, min_intv={}",
-                        query_name, x, prev_array.len(), smem.s, min_intv);
+            log::debug!("{}: Position x={}, prev_array_buf.len()={}, smem.s={}, min_intv={}",
+                        query_name, x, prev_array_buf.len(), smem.s, min_intv);
         }
 
-        // Reverse the prev_array (C++ lines 587-592)
-        prev_array.reverse();
+        // Reverse the prev_array_buf (C++ lines 587-592)
+        prev_array_buf.reverse();
 
         // Phase 2: Backward search (C++ lines 595-665)
-        log::debug!("{}: [RUST Phase 2] Starting backward search from x={}, prev_array.len()={}",
-                    query_name, x, prev_array.len());
+        log::debug!("{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
+                    query_name, x, prev_array_buf.len());
 
         for j in (0..x).rev() {
             let a = encoded_query[j];
@@ -904,13 +912,15 @@ fn generate_seeds_with_mode(
                 break;
             }
 
-            let mut curr_array: Vec<SMEM> = Vec::new();
+            // OPTIMIZATION: Reuse pre-allocated buffer
+            curr_array_buf.clear();
+            let curr_array = &mut curr_array_buf;
             let mut curr_s = None;
 
-            log::debug!("{}: [RUST Phase 2] j={}, base={}, prev_array.len()={}",
-                        query_name, j, a, prev_array.len());
+            log::debug!("{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
+                        query_name, j, a, prev_array_buf.len());
 
-            for (i, smem) in prev_array.iter().enumerate() {
+            for (i, smem) in prev_array_buf.iter().enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -947,7 +957,7 @@ fn generate_seeds_with_mode(
             }
 
             // Continue with remaining SMEMs (C++ lines 632-649)
-            for (i, smem) in prev_array.iter().skip(1).enumerate() {
+            for (i, smem) in prev_array_buf.iter().skip(1).enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -964,20 +974,21 @@ fn generate_seeds_with_mode(
                 }
             }
 
-            // Update prev_array for next iteration (C++ lines 650-654)
-            prev_array = curr_array;
-            log::debug!("{}: [RUST Phase 2] After j={}, prev_array.len()={}",
-                        query_name, j, prev_array.len());
+            // Update prev_array_buf for next iteration (C++ lines 650-654)
+            // OPTIMIZATION: Swap buffers instead of copying/moving
+            std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
+            log::debug!("{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
+                        query_name, j, prev_array_buf.len());
 
-            if prev_array.is_empty() {
-                log::debug!("{}: [RUST Phase 2] prev_array empty, breaking at j={}", query_name, j);
+            if prev_array_buf.is_empty() {
+                log::debug!("{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}", query_name, j);
                 break;
             }
         }
 
         // Output any remaining SMEMs (C++ lines 656-665)
-        if !prev_array.is_empty() {
-            let smem = prev_array[0];
+        if !prev_array_buf.is_empty() {
+            let smem = prev_array_buf[0];
             let len = smem.n - smem.m + 1;
             if len >= min_seed_len {
                 let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
@@ -1021,7 +1032,8 @@ fn generate_seeds_with_mode(
             is_rev_comp: true,
         };
 
-        let mut prev_array: Vec<SMEM> = Vec::new();
+        // OPTIMIZATION: Reuse pre-allocated buffer instead of allocating fresh Vec
+        prev_array_buf_rc.clear();
         let mut next_x = x + 1; // Track next uncovered position
 
         for j in (x + 1)..query_len {
@@ -1037,7 +1049,7 @@ fn generate_seeds_with_mode(
             let new_smem = forward_ext(bwa_idx, smem, a);
 
             if new_smem.s != smem.s {
-                prev_array.push(smem);
+                prev_array_buf_rc.push(smem);
             }
 
             if new_smem.s < min_intv {
@@ -1049,10 +1061,10 @@ fn generate_seeds_with_mode(
         }
 
         if smem.s >= min_intv {
-            prev_array.push(smem);
+            prev_array_buf_rc.push(smem);
         }
 
-        prev_array.reverse();
+        prev_array_buf_rc.reverse();
 
         for j in (0..x).rev() {
             let a = encoded_query_rc[j];
@@ -1061,10 +1073,12 @@ fn generate_seeds_with_mode(
                 break;
             }
 
-            let mut curr_array: Vec<SMEM> = Vec::new();
+            // OPTIMIZATION: Reuse pre-allocated buffer
+            curr_array_buf_rc.clear();
+            let curr_array = &mut curr_array_buf_rc;
             let mut curr_s = None;
 
-            for smem in &prev_array {
+            for smem in &prev_array_buf_rc {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -1080,7 +1094,7 @@ fn generate_seeds_with_mode(
                 }
             }
 
-            for smem in prev_array.iter().skip(1) {
+            for smem in prev_array_buf_rc.iter().skip(1) {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -1090,14 +1104,15 @@ fn generate_seeds_with_mode(
                 }
             }
 
-            prev_array = curr_array;
-            if prev_array.is_empty() {
+            // OPTIMIZATION: Swap buffers instead of copying/moving
+            std::mem::swap(&mut prev_array_buf_rc, &mut curr_array_buf_rc);
+            if prev_array_buf_rc.is_empty() {
                 break;
             }
         }
 
-        if !prev_array.is_empty() {
-            let smem = prev_array[0];
+        if !prev_array_buf_rc.is_empty() {
+            let smem = prev_array_buf_rc[0];
             if (smem.n - smem.m + 1) >= min_seed_len {
                 all_smems.push(smem);
             }
