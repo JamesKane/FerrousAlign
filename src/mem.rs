@@ -734,8 +734,51 @@ fn process_paired_end(
     // Current implementation performs basic single-round rescue
     // See C++ bwamem.cpp mem_matesw() for full multi-round implementation
 
+    // Load PAC file ONCE for all mate rescue operations (critical performance fix)
+    log::info!("Phase 4: Loading PAC file for mate rescue...");
+    let pac_file_path = match bwa_idx.bns.pac_file_path.as_ref() {
+        Some(path) => path,
+        None => {
+            log::error!("No PAC file path found - skipping mate rescue");
+            // Continue without mate rescue
+            &std::path::PathBuf::from("")
+        }
+    };
+
+    let pac: Vec<u8> = if !pac_file_path.as_os_str().is_empty() {
+        use std::fs::File;
+        use std::io::{BufReader, Read};
+
+        match File::open(pac_file_path) {
+            Ok(f) => {
+                let pac_size = ((bwa_idx.bns.l_pac + 3) / 4) as usize;
+                let mut pac_data = vec![0u8; pac_size];
+                let mut reader = BufReader::new(f);
+
+                match reader.read_exact(&mut pac_data) {
+                    Ok(_) => {
+                        log::info!("Loaded PAC file ({} bytes) for mate rescue", pac_size);
+                        pac_data
+                    }
+                    Err(e) => {
+                        log::error!("Failed to read PAC file: {} - skipping mate rescue", e);
+                        Vec::new()
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to open PAC file: {} - skipping mate rescue", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     // Reload the read sequences for mate rescue
     // Read all sequences into memory for random access during rescue
+    log::info!("Reloading {} read pairs for mate rescue...", all_pairs.len());
+
     let mut reader1_rescue = match FastqReader::new(read1_file) {
         Ok(r) => r,
         Err(e) => {
@@ -751,19 +794,32 @@ fn process_paired_end(
         }
     };
 
+    log::debug!("Opened FASTQ files for rescue, starting batch read loop");
+
     // Read all sequences into vectors for rescue
     let mut all_seqs1: Vec<(String, Vec<u8>, String)> = Vec::new();
     let mut all_seqs2: Vec<(String, Vec<u8>, String)> = Vec::new();
 
+    let mut batch_count = 0;
     loop {
+        log::debug!("Reading rescue batch {}...", batch_count);
         let batch1 = reader1_rescue
             .read_batch(reads_per_batch)
-            .unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
+            .unwrap_or_else(|e| {
+                log::error!("Error reading batch1: {}", e);
+                crate::fastq_reader::ReadBatch::new()
+            });
         let batch2 = reader2_rescue
             .read_batch(reads_per_batch)
-            .unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
+            .unwrap_or_else(|e| {
+                log::error!("Error reading batch2: {}", e);
+                crate::fastq_reader::ReadBatch::new()
+            });
+
+        log::debug!("Batch {} sizes: batch1={}, batch2={}", batch_count, batch1.names.len(), batch2.names.len());
 
         if batch1.is_empty() {
+            log::debug!("Batch1 empty, ending read loop after {} batches", batch_count);
             break;
         }
 
@@ -779,12 +835,22 @@ fn process_paired_end(
                 batch2.quals[i].clone(),
             ));
         }
+        batch_count += 1;
     }
 
+    log::info!("Loaded {} read pairs for mate rescue", all_seqs1.len());
+    log::info!("Starting mate rescue phase...");
+
+    let total_pairs = all_pairs.len();
     let mut rescued_pairs = 0;
+    let mut rescue_attempts = 0;
     for (pair_idx, (alignments1, alignments2)) in all_pairs.iter_mut().enumerate() {
         if pair_idx >= all_seqs1.len() {
             break;
+        }
+
+        if pair_idx % 1000 == 0 {
+            log::debug!("Mate rescue progress: {}/{} pairs processed", pair_idx, total_pairs);
         }
 
         let (name1, seq1, qual1) = &all_seqs1[pair_idx];
@@ -804,10 +870,13 @@ fn process_paired_end(
         };
 
         // Try to rescue read2 if read1 has good alignments but read2 doesn't
-        if !alignments1.is_empty() && alignments2.is_empty() {
+        if !alignments1.is_empty() && alignments2.is_empty() && !pac.is_empty() {
+            log::debug!("Attempting to rescue read2 for pair {}", pair_idx);
+            rescue_attempts += 1;
             let mate_seq = encode_seq(seq2);
             let n = mem_matesw(
                 &bwa_idx,
+                &pac,  // Pre-loaded PAC data
                 &stats,
                 &alignments1[0], // Use best alignment as anchor
                 &mate_seq,
@@ -817,14 +886,18 @@ fn process_paired_end(
             );
             if n > 0 {
                 rescued_pairs += 1;
+                log::debug!("Successfully rescued read2 for pair {}", pair_idx);
             }
         }
 
         // Try to rescue read1 if read2 has good alignments but read1 doesn't
-        if !alignments2.is_empty() && alignments1.is_empty() {
+        if !alignments2.is_empty() && alignments1.is_empty() && !pac.is_empty() {
+            log::debug!("Attempting to rescue read1 for pair {}", pair_idx);
+            rescue_attempts += 1;
             let mate_seq = encode_seq(seq1);
             let n = mem_matesw(
                 &bwa_idx,
+                &pac,  // Pre-loaded PAC data
                 &stats,
                 &alignments2[0], // Use best alignment as anchor
                 &mate_seq,
@@ -834,13 +907,12 @@ fn process_paired_end(
             );
             if n > 0 {
                 rescued_pairs += 1;
+                log::debug!("Successfully rescued read1 for pair {}", pair_idx);
             }
         }
     }
 
-    if rescued_pairs > 0 {
-        log::info!("Mate rescue: {} read pairs rescued", rescued_pairs);
-    }
+    log::info!("Mate rescue complete: {} attempts, {} pairs rescued", rescue_attempts, rescued_pairs);
 
     // Second pass: Output alignments with proper paired-end flags
     let mut pair_id: u64 = 0;
@@ -1361,6 +1433,7 @@ fn mem_pair(
 /// Returns number of rescued alignments added
 fn mem_matesw(
     bwa_idx: &BwaIndex,
+    pac: &[u8],  // Pre-loaded PAC data (passed once, not loaded per call)
     stats: &[InsertSizeStats; 4],
     anchor: &align::Alignment,
     mate_seq: &[u8],
@@ -1369,8 +1442,6 @@ fn mem_matesw(
     rescued_alignments: &mut Vec<align::Alignment>,
 ) -> usize {
     use crate::banded_swa::BandedPairWiseSW;
-    use std::fs::File;
-    use std::io::{BufReader as IoBufReader, Read as IoRead};
 
     let l_pac = bwa_idx.bns.l_pac as i64;
     let l_ms = mate_seq.len() as i32;
@@ -1397,22 +1468,8 @@ fn mem_matesw(
         return 0;
     }
 
-    // Load packed reference sequence
-    let pac_file_path = match bwa_idx.bns.pac_file_path.as_ref() {
-        Some(path) => path,
-        None => return 0,
-    };
-
-    let mut pac_file = match File::open(pac_file_path) {
-        Ok(f) => IoBufReader::new(f),
-        Err(_) => return 0,
-    };
-
-    let pac_size = ((bwa_idx.bns.l_pac + 3) / 4) as usize;
-    let mut pac = vec![0u8; pac_size];
-    if pac_file.read_exact(&mut pac).is_err() {
-        return 0;
-    }
+    // PAC data is now passed as parameter (loaded once per batch, not per call)
+    // This eliminates catastrophic I/O: was reading 740MB × 5000+ times per batch!
 
     // Setup Smith-Waterman aligner (same parameters as generate_seeds)
     let sw_params = BandedPairWiseSW::new(
