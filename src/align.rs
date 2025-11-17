@@ -1927,6 +1927,50 @@ mod tests {
     }
 
     #[test]
+    fn test_reverse_complement_encoding_with_n_bases() {
+        // Regression test for bug: using XOR trick (b ^ 3) incorrectly encodes N bases
+        // For N (code 4): 4 ^ 3 = 7 (INVALID!)
+        // This test ensures we use reverse_complement_code() which handles N correctly
+
+        // Test sequence with N bases: "ACGTNACGT"
+        let sequence = b"ACGTNACGT";
+        let encoded: Vec<u8> = sequence.iter().map(|&b| base_to_code(b)).collect();
+
+        // Expected: [0, 1, 2, 3, 4, 0, 1, 2, 3]
+        assert_eq!(encoded, vec![0, 1, 2, 3, 4, 0, 1, 2, 3]);
+
+        // Create reverse complement using reverse_complement_code (CORRECT)
+        let rc_encoded: Vec<u8> = encoded.iter()
+            .map(|&b| reverse_complement_code(b))
+            .collect();
+        let mut rc_encoded_rev = rc_encoded.clone();
+        rc_encoded_rev.reverse();
+
+        // Expected RC: [3, 2, 1, 0, 4, 3, 2, 1, 0] (reversed: [0, 1, 2, 3, 4, 0, 1, 2, 3])
+        // Note: Reverse complement of N is N (code 4)
+        assert_eq!(rc_encoded, vec![3, 2, 1, 0, 4, 3, 2, 1, 0]);
+
+        // CRITICAL: All codes must be in valid range [0, 4]
+        for &code in &rc_encoded {
+            assert!(
+                code <= 4,
+                "Invalid base code {} detected! All codes must be 0-4. Code 7 indicates XOR bug.",
+                code
+            );
+        }
+
+        // Test that XOR trick would fail (for documentation purposes)
+        // DON'T USE THIS IN PRODUCTION CODE!
+        let bad_rc_with_xor: Vec<u8> = encoded.iter().map(|&b| b ^ 3).collect();
+        // For the 'N' base (code 4): 4 ^ 3 = 7 (INVALID!)
+        assert_eq!(bad_rc_with_xor[4], 7, "XOR trick produces invalid code 7 for N");
+
+        // Demonstrate the correct way doesn't produce invalid codes
+        assert_ne!(rc_encoded[4], 7, "reverse_complement_code() correctly handles N");
+        assert_eq!(rc_encoded[4], 4, "N reverse complements to N");
+    }
+
+    #[test]
     fn test_get_sa_entry_basic() {
         // This test requires an actual index file to be present
         // We'll use a simple test to verify the function doesn't crash
