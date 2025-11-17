@@ -92,13 +92,13 @@ This section presents performance data from an AMD Ryzen 9 7900X system, which s
 
 ### Executive Summary (AMD Ryzen 9 7900X)
 
-The x86_64 implementation demonstrates **excellent SIMD scaling** with proper batch sizes. AVX-512 achieves nearly **2x speedup** with 64-way batching, significantly outperforming narrower SIMD engines.
+The x86_64 implementation, with optimized batch sizing, demonstrates excellent SIMD scaling. AVX-512, with its 64-way batching, achieves a remarkable 1.90x speedup over scalar, significantly outperforming narrower SIMD engines and closing the performance gap with the Apple M3 Max.
 
-- ✅ **SSE2 (128-bit, 16-way batching)**: 1.48x speedup on batch processing (60.92 Kelem/s vs 41.28 Kelem/s)
-- ✅ **AVX2 (256-bit, 32-way batching)**: 1.50x speedup on batch processing (61.66 Kelem/s vs 41.18 Kelem/s)
-- ✅ **AVX-512 (512-bit, 64-way batching)**: **1.90x speedup** on batch processing (77.8 Kelem/s vs 41.19 Kelem/s)
+- ✅ **SSE2 (128-bit, 16-way)**: Achieves a solid 1.48x speedup, establishing a strong baseline for x86_64 performance.
+- ✅ **AVX2 (256-bit, 32-way)**: Provides a 1.50x speedup, showing a minor improvement over SSE2, indicating memory-bound limitations.
+- ✅ **AVX-512 (512-bit, 64-way)**: Delivers a substantial **1.90x speedup**, with **28% higher throughput** than AVX2, by breaking through the memory bottleneck.
 
-**Key Achievement**: With properly sized batches matching SIMD width, AVX-512 delivers **28% higher throughput** than AVX2, validating the benefit of wider SIMD parallelism for Smith-Waterman alignment
+**Key Achievement**: Optimized batching unlocks the full potential of wide SIMD on x86_64, making FerrousAlign highly competitive on modern CPUs.
 
 ### Current Performance (AMD Ryzen 9 7900X - SSE2/AVX2/AVX-512)
 
@@ -118,11 +118,11 @@ The x86_64 implementation demonstrates **excellent SIMD scaling** with proper ba
 | **AVX-512 (512-bit)** | Batched SIMD (2×64) | 1.64 ms | **77.8 Kelem/s** | **1.90x** ✅✅ |
 
 **Analysis**:
-- **Batch size optimization is critical**: Each SIMD engine now uses its native width (16/32/64)
-- **AVX-512 shows clear advantage**: 28% faster than AVX2 (77.8 vs 61.66 Kelem/s)
-- **Wider SIMD scales well**: Doubling parallelism from AVX2→AVX-512 yields 1.26x throughput gain
-- **SSE2/AVX2 similar performance**: Both achieve ~1.48-1.50x speedup, likely memory-bound
-- **AVX-512 breaks memory bottleneck**: Superior cache utilization with 64-way parallelism
+- **Batch size optimization is critical**: The key to unlocking performance on x86_64 is matching the batch size to the native SIMD width (16 for SSE2, 32 for AVX2, 64 for AVX-512).
+- **AVX-512 shows a clear advantage**: With a 64-way batch, AVX-512 is **28% faster** than AVX2, demonstrating that wider SIMD vectors can be effectively utilized.
+- **Wider SIMD scales well**: The 1.26x throughput gain from AVX2 to AVX-512 confirms that the algorithm benefits from increased parallelism.
+- **SSE2 and AVX2 show similar performance**: The minimal improvement from SSE2 to AVX2 suggests that with 16 and 32-way parallelism, the implementation is likely memory-bound.
+- **AVX-512 breaks the memory bottleneck**: The superior cache utilization and wider registers of AVX-512, combined with 64-way batching, overcome the memory limitations seen with AVX2.
 
 ---
 
@@ -197,50 +197,40 @@ The x86_64 implementation demonstrates **excellent SIMD scaling** with proper ba
 | AMD Ryzen 9 7900X | AVX-512 (512-bit, 64-way) | 3.11 ms | 1.64 ms | **1.90x** | **77.8 Kelem/s** |
 
 **Key Observations**:
-- **M3 Max still leads in 128-bit SIMD**: 93.7 vs 60.92 Kelem/s (1.54x faster than Ryzen SSE2)
-- **AVX-512 closes the gap**: Ryzen 9 AVX-512 achieves 77.8 Kelem/s, only 17% slower than M3 Max NEON
-- **Proper batch sizing reveals x86_64 potential**: AVX-512 achieves 1.90x speedup vs 1.48x for SSE2
-- **SIMD width matters on x86**: AVX-512 (64-way) is 28% faster than AVX2 (32-way)
-- **M3 Max efficiency advantage**: Unified memory and wider execution units benefit 128-bit operations
+- **M3 Max still leads in 128-bit SIMD**: The M3 Max's NEON implementation is **1.54x faster** than the Ryzen 9's SSE2, highlighting the efficiency of Apple's silicon for 128-bit operations.
+- **AVX-512 closes the performance gap**: The Ryzen 9 with AVX-512 is now highly competitive, achieving a throughput of 77.8 Kelem/s, only **17% slower** than the M3 Max.
+- **Proper batch sizing unlocks x86_64 potential**: The 1.90x speedup of AVX-512 over scalar demonstrates that with optimized batching, x86_64 can be a powerful platform for this workload.
+- **SIMD width is key on x86**: The 28% performance jump from AVX2 to AVX-512 confirms that wider SIMD is crucial for overcoming memory bottlenecks.
+- **M3 Max efficiency advantage**: The unified memory architecture and wider execution units of the M3 Max likely contribute to its superior performance in 128-bit SIMD tasks.
 
 ---
 
 ## Architecture-Specific Considerations
 
 ### ARM NEON (Apple M3 Max)
-- **Strengths**: Energy efficient, unified memory, excellent 128-bit SIMD performance
-- **Width**: 16 lanes (128-bit SIMD)
-- **Performance**: 93.7 Kelem/s throughput, 1.45x SIMD speedup
-- **Optimizations used**: All major optimizations implemented ✅
-- **Real-world advantage**: Faster absolute performance than x86_64 in current benchmarks
+- **Strengths**: Highly efficient 128-bit SIMD performance, benefiting from unified memory and wide execution units.
+- **Width**: 16 lanes (128-bit SIMD).
+- **Performance**: Achieves a throughput of 93.7 Kelem/s with a 1.45x speedup over scalar.
+- **Real-world advantage**: Currently the fastest platform for this workload, outperforming even AVX-512.
 
 ### x86_64 SSE2 (AMD Ryzen 9 7900X)
-- **Width**: 16 lanes (128-bit SIMD, baseline x86_64)
-- **Performance**: 60.92 Kelem/s throughput, 1.48x SIMD speedup
-- **Batch size**: 16 alignments per batch (8 batches for 128 total)
-- **Compatibility**: Available on all x86_64 CPUs
-- **Use case**: Baseline fallback when AVX2/AVX-512 unavailable
-- **vs M3 Max NEON**: 35% slower (60.92 vs 93.7 Kelem/s)
+- **Width**: 16 lanes (128-bit SIMD, baseline for x86_64).
+- **Performance**: 60.92 Kelem/s throughput with a 1.48x speedup.
+- **Use case**: Provides a solid baseline and fallback for older CPUs without AVX support.
+- **vs M3 Max NEON**: **35% slower**, highlighting the architectural advantages of the M3 Max.
 
 ### x86_64 AVX2 (AMD Ryzen 9 7900X)
-- **Width**: 32 lanes (256-bit SIMD)
-- **Performance**: 61.66 Kelem/s throughput, 1.50x SIMD speedup
-- **Batch size**: 32 alignments per batch (4 batches for 128 total)
-- **Additional ops**: Wider registers, 2x parallelism vs SSE2
-- **Improvement vs SSE2**: Minimal (1.2% faster) - likely memory-bound
-- **vs M3 Max NEON**: 34% slower (61.66 vs 93.7 Kelem/s)
+- **Width**: 32 lanes (256-bit SIMD).
+- **Performance**: 61.66 Kelem/s throughput with a 1.50x speedup.
+- **Improvement vs SSE2**: Minimal (1.2% faster), indicating that the implementation is memory-bound at this level of parallelism.
+- **vs M3 Max NEON**: **34% slower**, showing that simply having wider vectors is not enough without overcoming memory bottlenecks.
 
 ### x86_64 AVX-512 (AMD Ryzen 9 7900X)
-- **Width**: 64 lanes (512-bit SIMD)
-- **Performance**: **77.8 Kelem/s throughput, 1.90x SIMD speedup** ✅
-- **Batch size**: 64 alignments per batch (2 batches for 128 total)
-- **Additional ops**: vpgatherdd for score lookups, vpcompressb for compaction, mask operations
-- **Improvement vs AVX2**: **28% faster** (77.8 vs 61.66 Kelem/s)
-- **vs M3 Max NEON**: Only 17% slower (77.8 vs 93.7 Kelem/s) - **competitive!**
-- **Availability**: Requires `--features avx512` and nightly Rust (unstable intrinsics)
-- **Sweet spot**: Breaks memory bottleneck with larger batches and better cache utilization
-
----
+- **Width**: 64 lanes (512-bit SIMD).
+- **Performance**: **77.8 Kelem/s throughput** with a **1.90x speedup**.
+- **Improvement vs AVX2**: **28% faster**, demonstrating that the increased parallelism and cache efficiency of AVX-512 can break through memory-bound limitations.
+- **vs M3 Max NEON**: Only **17% slower**, making it a highly competitive platform.
+- **Availability**: Requires the `--features avx512` flag and a nightly Rust compiler.---
 
 ## Theoretical Maximum Performance
 
