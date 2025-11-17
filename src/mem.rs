@@ -735,7 +735,18 @@ fn process_paired_end(
 
     // Second pass: Output alignments with proper paired-end flags
     let mut pair_id: u64 = 0;
-    for (mut alignments1, mut alignments2) in all_pairs {
+    for (pair_idx, (mut alignments1, mut alignments2)) in all_pairs.into_iter().enumerate() {
+        // Get read names and sequences for this pair
+        let (name1, seq1, qual1) = if pair_idx < all_seqs1.len() {
+            &all_seqs1[pair_idx]
+        } else {
+            continue; // Skip if we don't have sequence data
+        };
+        let (name2, seq2, qual2) = if pair_idx < all_seqs2.len() {
+            &all_seqs2[pair_idx]
+        } else {
+            continue; // Skip if we don't have sequence data
+        };
         // Use mem_pair to score paired alignments (Phase 3)
         let pair_result = if !alignments1.is_empty() && !alignments2.is_empty() {
             mem_pair(&stats, &alignments1, &alignments2, l_pac, 2, pair_id) // match_score = 2 (opt->a)
@@ -782,7 +793,7 @@ fn process_paired_end(
         // If read1 has no alignments, create a dummy unmapped alignment
         if alignments1.is_empty() {
             let mut unmapped = align::Alignment {
-                query_name: String::new(), // Will be filled from kseq if needed
+                query_name: name1.clone(),
                 flag: 0x1 | 0x4 | 0x40,    // paired | unmapped | first in pair
                 ref_name: mate2_ref.clone(),
                 ref_id: 0,
@@ -793,8 +804,8 @@ fn process_paired_end(
                 rnext: "*".to_string(),
                 pnext: 0,
                 tlen: 0,
-                seq: String::new(),
-                qual: String::new(),
+                seq: String::from_utf8_lossy(seq1).to_string(),
+                qual: qual1.clone(),
                 tags: Vec::new(),
             };
 
@@ -813,7 +824,7 @@ fn process_paired_end(
         // If read2 has no alignments, create a dummy unmapped alignment
         if alignments2.is_empty() {
             let mut unmapped = align::Alignment {
-                query_name: String::new(), // Will be filled from kseq if needed
+                query_name: name2.clone(),
                 flag: 0x1 | 0x4 | 0x80,    // paired | unmapped | second in pair
                 ref_name: mate1_ref.clone(),
                 ref_id: 0,
@@ -824,8 +835,8 @@ fn process_paired_end(
                 rnext: "*".to_string(),
                 pnext: 0,
                 tlen: 0,
-                seq: String::new(),
-                qual: String::new(),
+                seq: String::from_utf8_lossy(seq2).to_string(),
+                qual: qual2.clone(),
                 tags: Vec::new(),
             };
 
@@ -956,9 +967,17 @@ fn process_paired_end(
             "*".to_string()
         };
 
-        // Write alignments for read1 (filter by score threshold)
+        // Write alignments for read1
+        // In paired-end mode, output all alignments to maintain pairing information
+        // Score filtering should only affect secondary alignments, not primary/unmapped reads
         for mut alignment in alignments1 {
-            if alignment.score >= opt.t {
+            // CRITICAL: In paired-end mode, always output primary and unmapped reads
+            // to match bwa-mem2 behavior. Only filter secondary alignments by score.
+            let is_unmapped = alignment.flag & 0x4 != 0;
+            let is_secondary = alignment.flag & 0x100 != 0;
+            let should_output = is_unmapped || !is_secondary || alignment.score >= opt.t;
+
+            if should_output {
                 // Add RG tag if read group is specified
                 if let Some(ref rg) = rg_id {
                     alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
@@ -978,9 +997,16 @@ fn process_paired_end(
             }
         }
 
-        // Write alignments for read2 (filter by score threshold)
+        // Write alignments for read2
+        // In paired-end mode, output all alignments to maintain pairing information
         for mut alignment in alignments2 {
-            if alignment.score >= opt.t {
+            // CRITICAL: In paired-end mode, always output primary and unmapped reads
+            // to match bwa-mem2 behavior. Only filter secondary alignments by score.
+            let is_unmapped = alignment.flag & 0x4 != 0;
+            let is_secondary = alignment.flag & 0x100 != 0;
+            let should_output = is_unmapped || !is_secondary || alignment.score >= opt.t;
+
+            if should_output {
                 // Add RG tag if read group is specified
                 if let Some(ref rg) = rg_id {
                     alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
