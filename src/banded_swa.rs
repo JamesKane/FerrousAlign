@@ -110,6 +110,24 @@ impl BandedPairWiseSW {
             return (out_score, Vec::new());
         }
 
+        // CRITICAL: Validate that qlen matches query.len() and tlen matches target.len()
+        // This prevents index out of bounds errors.
+        // Clamp to actual lengths to prevent panic.
+        let qlen = (qlen as usize).min(query.len()) as i32;
+        let tlen = (tlen as usize).min(target.len()) as i32;
+
+        if qlen == 0 || tlen == 0 {
+            let out_score = OutScore {
+                score: 0,
+                tle: 0,
+                qle: 0,
+                gtle: 0,
+                gscore: 0,
+                max_off: 0,
+            };
+            return (out_score, Vec::new());
+        }
+
         let oe_del = self.o_del + self.e_del;
         let oe_ins = self.o_ins + self.e_ins;
 
@@ -123,7 +141,10 @@ impl BandedPairWiseSW {
         for k in 0..self.m {
             let p_row_start = (k * qlen) as usize; // Corrected: k * qlen
             for j in 0..qlen as usize {
-                qp[p_row_start + j] = self.mat[(k * self.m + query[j] as i32) as usize]; // Corrected indexing
+                // CRITICAL: Clamp query[j] to valid range [0, 4] to prevent out-of-bounds access to self.mat
+                // Query values should be 0=A, 1=C, 2=G, 3=T, 4=N, but clamp to be safe
+                let base_code = (query[j] as i32).min(4);
+                qp[p_row_start + j] = self.mat[(k * self.m + base_code) as usize];
             }
         }
 
@@ -165,7 +186,9 @@ impl BandedPairWiseSW {
             let mut m_val = 0;
             let mut mj = -1;
 
-            let q_row_start = (target[i as usize] as i32 * qlen) as usize;
+            // CRITICAL: Clamp target base code to valid range [0, 4]
+            let target_base = (target[i as usize] as i32).min(4);
+            let q_row_start = (target_base * qlen) as usize;
             let q_slice = &qp[q_row_start..(q_row_start + qlen as usize)];
 
             // Apply the band and the constraint
@@ -474,8 +497,27 @@ impl BandedPairWiseSW {
         for i in 0..SIMD_WIDTH {
             let (q_len, query, t_len, target, _, _) = padded_batch[i];
 
+            // Validate lengths before accessing
+            let actual_q_len = query.len().min(MAX_SEQ_LEN);
+            let actual_t_len = target.len().min(MAX_SEQ_LEN);
+            let safe_q_len = (q_len as usize).min(actual_q_len);
+            let safe_t_len = (t_len as usize).min(actual_t_len);
+
+            if q_len as usize != query.len() && !query.is_empty() {
+                eprintln!(
+                    "[ERROR] simd_batch16: lane {}: q_len mismatch! q_len={} but query.len()={}",
+                    i, q_len, query.len()
+                );
+            }
+            if t_len as usize != target.len() && !target.is_empty() {
+                eprintln!(
+                    "[ERROR] simd_batch16: lane {}: t_len mismatch! t_len={} but target.len()={}",
+                    i, t_len, target.len()
+                );
+            }
+
             // Copy query (interleaved: q0[0], q1[0], ..., q15[0], q0[1], q1[1], ...)
-            for j in 0..(q_len as usize).min(MAX_SEQ_LEN) {
+            for j in 0..safe_q_len {
                 query_soa[j * SIMD_WIDTH + i] = query[j];
             }
             // Pad with dummy value
@@ -484,7 +526,7 @@ impl BandedPairWiseSW {
             }
 
             // Copy target (interleaved)
-            for j in 0..(t_len as usize).min(MAX_SEQ_LEN) {
+            for j in 0..safe_t_len {
                 target_soa[j * SIMD_WIDTH + i] = target[j];
             }
             // Pad with dummy value
