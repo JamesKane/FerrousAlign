@@ -180,9 +180,74 @@ The x86_64 implementation, with optimized batch sizing, demonstrates excellent S
 
 ---
 
+## End-to-End Performance Comparison (AMD Ryzen 9 7900X)
+
+**Date**: 2025-11-16
+**Platform**: AMD Ryzen 9 7900X 12-Core (24 threads @ 5.4 GHz)
+**Test**: Align real HG002 sequencing data (~5-10M paired-end reads, 400MB+ gzipped) against chrM
+**Configuration**: Both tools using `-t 24` (all cores), paired-end mode, dynamic batch sizing (2400 reads/batch for FerrousAlign)
+
+| Tool           | Total Time | Throughput | Speedup (vs bwa-mem2) |
+|----------------|------------|------------|-----------------------|
+| bwa-mem2       | 11.36 s    | baseline   | 1.00x (baseline)      |
+| FerrousAlign   | 58.36 s    | baseline   | 0.19x (5.14x slower)  |
+
+**Analysis**:
+- **bwa-mem2 is currently 5.14x faster** than FerrousAlign on x86_64 with real production data.
+- This represents a **significant performance gap** compared to the Apple M3 Max (1.11x slower), indicating x86_64-specific optimization opportunities.
+- **Multi-threading confirmed working**: FerrousAlign achieved 1834% CPU usage (~18 cores active), demonstrating effective parallelization.
+- **Dynamic batch sizing working**: 2400 reads/batch (24 threads × 100 reads/thread) for better thread utilization.
+- **Memory usage**: FerrousAlign used ~4GB RAM during alignment (index + working set).
+
+**Root Cause Analysis** (Preliminary):
+The 5.14x performance gap on x86_64 (vs 1.11x on ARM) suggests platform-specific bottlenecks:
+
+1. **Gzip decompression bottleneck**: FASTQ files are gzipped (~400MB compressed). Single-threaded decompression likely dominates I/O time.
+   - **Expected impact**: 3-5x speedup from parallel decompression (see THREADING_OPTIMIZATION_PLAN.md)
+
+2. **Pipeline stalls**: Sequential read → align → write pattern causes CPU idle time waiting for I/O.
+   - **Expected impact**: 1.5-2x speedup from pipeline parallelism
+
+3. **FM-Index backward search**: Not yet vectorized, scalar implementation.
+   - **Expected impact**: 2-3x speedup from SIMD acceleration
+
+4. **Suffix array reconstruction**: Sequential cache lookups with unpredictable access patterns.
+   - **Expected impact**: 1.5-2x speedup from prefetching + caching
+
+**Next Steps**:
+1. ✅ **Baseline established**: We now have a concrete 5.14x optimization target
+2. 🔄 **Profiling**: Identify hotspots with `perf` and flamegraphs (in progress)
+3. 📋 **High-priority optimizations** (from THREADING_OPTIMIZATION_PLAN.md):
+   - Phase 3.2: Parallel gzip decompression (expected 3-5x)
+   - Phase 4.1: Pipeline parallelism (expected 1.5-2x)
+   - Phase 5.1: Vectorize FM-Index backward search (expected 2-3x)
+
+**Theoretical Best Case**: If all optimizations succeed independently: 5.14x / (3.5 × 1.75 × 2.5) ≈ **0.33x faster than bwa-mem2** (matching or exceeding C++ performance)
+
+---
+
 ## Comparison to C++ bwa-mem2
 
-*(This section can be updated to reflect the current feature parity and expected performance on x86_64 after the AVX2/AVX512 port is complete and benchmarked.)*
+### Platform-Specific Performance Summary
+
+| Platform | Tool | Time | Relative Performance | Status |
+|----------|------|------|---------------------|---------|
+| **Apple M3 Max** | bwa-mem2 | 14.79s | 1.00x (baseline) | ✅ Competitive |
+| **Apple M3 Max** | FerrousAlign | 16.49s | 0.90x (1.11x slower) | ✅ Near parity |
+| **AMD Ryzen 9 7900X** | bwa-mem2 | 11.36s | 1.00x (baseline) | ✅ Competitive |
+| **AMD Ryzen 9 7900X** | FerrousAlign | 58.36s | 0.19x (5.14x slower) | ⚠️ Optimization needed |
+
+**Key Insights**:
+- **ARM (M3 Max)**: FerrousAlign is already competitive, only 11% slower than bwa-mem2
+- **x86_64 (Ryzen 9)**: Significant performance gap (5.14x) indicates platform-specific bottlenecks
+- **SIMD advantage**: M3 Max NEON implementation already optimized, x86_64 needs AVX2/AVX-512 tuning
+- **I/O bottleneck more severe on x86_64**: Suggests gzip decompression and pipeline stalls are primary culprits
+
+**Optimization Roadmap**:
+- **Phase 1** (Weeks 1-2): Parallel gzip + pipeline parallelism → Target: 2.5-3.0x speedup
+- **Phase 2** (Weeks 3-4): Vectorized FM-Index + SA caching → Target: 1.5-2.0x speedup
+- **Phase 3** (Month 2): NUMA awareness + advanced SIMD → Target: 1.2-1.5x speedup
+- **Goal**: Match or exceed bwa-mem2 performance on x86_64
 
 ---
 

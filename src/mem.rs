@@ -4,11 +4,13 @@ use crate::bntseq::BntSeq;
 use crate::bwt::Bwt;
 use crate::fastq_reader::FastqReader;
 use crate::mem_opt::MemOpt;
+use crossbeam_channel::{bounded, Sender, Receiver};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 
 use crate::align;
 use crate::align::{CP_SHIFT, CpOcc};
@@ -36,6 +38,9 @@ struct ReadBatch {
     seqs: Vec<Vec<u8>>,
     quals: Vec<String>,
 }
+
+// Message type for pipeline communication
+type PairedBatchMessage = Option<(crate::fastq_reader::ReadBatch, crate::fastq_reader::ReadBatch)>;
 
 // Insert size statistics for one orientation
 #[derive(Debug, Clone)]
@@ -417,6 +422,87 @@ fn process_single_end(
     );
 }
 
+// Reader thread function for pipeline parallelism
+// Continuously reads batches from FASTQ files and sends them through channel
+fn reader_thread(
+    read1_file: String,
+    read2_file: String,
+    reads_per_batch: usize,
+    sender: Sender<PairedBatchMessage>,
+) {
+    // Open both FASTQ files
+    let mut reader1 = match FastqReader::new(&read1_file) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Error opening read1 file {}: {}", read1_file, e);
+            let _ = sender.send(None); // Signal error
+            return;
+        }
+    };
+    let mut reader2 = match FastqReader::new(&read2_file) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Error opening read2 file {}: {}", read2_file, e);
+            let _ = sender.send(None); // Signal error
+            return;
+        }
+    };
+
+    log::debug!("[Reader thread] Started, reading batches of {} read pairs", reads_per_batch);
+
+    loop {
+        // Read batch from both files
+        let batch1 = match reader1.read_batch(reads_per_batch) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("Error reading batch from read1 file: {}", e);
+                let _ = sender.send(None); // Signal error
+                break;
+            }
+        };
+        let batch2 = match reader2.read_batch(reads_per_batch) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("Error reading batch from read2 file: {}", e);
+                let _ = sender.send(None); // Signal error
+                break;
+            }
+        };
+
+        // Check for EOF
+        if batch1.names.is_empty() && batch2.names.is_empty() {
+            log::debug!("[Reader thread] EOF reached, shutting down");
+            let _ = sender.send(None); // Signal EOF
+            break;
+        }
+
+        // Check for mismatched batch sizes
+        if batch1.names.len() != batch2.names.len() {
+            log::warn!("Warning: Paired-end files have different number of reads");
+            let _ = sender.send(None); // Signal error
+            break;
+        }
+
+        let batch_size = batch1.names.len();
+        log::debug!("[Reader thread] Read {} read pairs", batch_size);
+
+        // Send batch through channel
+        if sender.send(Some((batch1, batch2))).is_err() {
+            log::error!("[Reader thread] Channel closed, shutting down");
+            break;
+        }
+
+        // If this was a partial batch, it's the last one
+        if batch_size < reads_per_batch {
+            log::debug!("[Reader thread] Final partial batch, shutting down");
+            let _ = sender.send(None); // Signal EOF
+            break;
+        }
+    }
+
+    log::debug!("[Reader thread] Exiting");
+}
+
 // Process paired-end reads with parallel batching
 fn process_paired_end(
     bwa_idx: &BwaIndex,
@@ -442,51 +528,41 @@ fn process_paired_end(
     log::debug!("Using batch size: {} ({} threads × {} reads/thread)",
                 reads_per_batch, num_threads, READS_PER_THREAD);
 
-    // Open both FASTQ files
-    let mut reader1 = match FastqReader::new(read1_file) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Error opening read1 file {}: {}", read1_file, e);
-            return;
-        }
-    };
-    let mut reader2 = match FastqReader::new(read2_file) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Error opening read2 file {}: {}", read2_file, e);
-            return;
-        }
-    };
+    // Create channel for pipeline communication
+    // Buffer size of 2 allows reader to stay 1 batch ahead
+    let (sender, receiver): (Sender<PairedBatchMessage>, Receiver<PairedBatchMessage>) = bounded(2);
+
+    // Spawn reader thread for pipeline parallelism
+    let read1_file_owned = read1_file.to_string();
+    let read2_file_owned = read2_file.to_string();
+    let reader_handle = thread::spawn(move || {
+        reader_thread(read1_file_owned, read2_file_owned, reads_per_batch, sender);
+    });
+
+    log::debug!("[Main] Pipeline started: reader thread spawned");
 
     // Collect all paired alignments in memory for two-pass processing
     let mut all_pairs: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = Vec::new();
 
-    // First pass: Read and align all pairs in batches
+    // First pass: Receive batches from reader thread and align them
     loop {
-        // Stage 0: Read batch of paired reads
-        let batch1 = match reader1.read_batch(reads_per_batch) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("Error reading batch from read1 file: {}", e);
-                break;
-            }
-        };
-        let batch2 = match reader2.read_batch(reads_per_batch) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("Error reading batch from read2 file: {}", e);
+        // Receive batch from reader thread (blocks until batch available)
+        let batch_msg = match receiver.recv() {
+            Ok(msg) => msg,
+            Err(_) => {
+                log::debug!("[Main] Reader channel closed");
                 break;
             }
         };
 
-        if batch1.names.is_empty() && batch2.names.is_empty() {
-            break; // Both files finished (EOF)
-        }
-
-        if batch1.names.len() != batch2.names.len() {
-            log::warn!("Warning: Paired-end files have different number of reads");
-            break;
-        }
+        // Check for EOF or error signal
+        let (batch1, batch2) = match batch_msg {
+            Some((b1, b2)) => (b1, b2),
+            None => {
+                log::debug!("[Main] Received EOF/error signal from reader");
+                break;
+            }
+        };
 
         let batch_size = batch1.names.len();
 
@@ -531,11 +607,15 @@ fn process_paired_end(
         for (aln1, aln2) in alignments1.into_iter().zip(alignments2.into_iter()) {
             all_pairs.push((aln1, aln2));
         }
-
-        if batch_size < reads_per_batch {
-            break; // Last incomplete batch
-        }
+        // Continue receiving batches until reader signals EOF
     }
+
+    // Wait for reader thread to finish
+    log::debug!("[Main] Waiting for reader thread to finish");
+    if let Err(e) = reader_handle.join() {
+        log::error!("[Main] Reader thread panicked: {:?}", e);
+    }
+    log::debug!("[Main] Reader thread finished, pipeline complete");
 
     // Calculate insert size statistics from aligned pairs
     let mut position_pairs: Vec<(i64, i64)> = Vec::new();
