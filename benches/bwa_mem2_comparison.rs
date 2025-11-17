@@ -4,8 +4,10 @@ use std::process::{Command, Stdio};
 use std::path::Path;
 
 fn run_bwa_mem2(bwa_path: &str, ref_path: &str, read1_path: &str, read2_path: &str) {
+    let num_threads = num_cpus::get().to_string();
     let output = Command::new(bwa_path)
         .arg("mem")
+        .arg("-t").arg(&num_threads)  // Use all available cores
         .arg(ref_path)
         .arg(read1_path)
         .arg(read2_path)
@@ -20,12 +22,14 @@ fn run_bwa_mem2(bwa_path: &str, ref_path: &str, read1_path: &str, read2_path: &s
 }
 
 fn run_ferrous_align(ref_path: &str, read1_path: &str, read2_path: &str) {
+    let num_threads = num_cpus::get().to_string();
     let output = Command::new("cargo")
         .arg("run")
         .arg("--release")
         .arg("--")
         .arg("mem")
         .arg("-p") // paired-end reads
+        .arg("-t").arg(&num_threads)  // Use all available cores
         .arg(ref_path)
         .arg(read1_path)
         .arg(read2_path)

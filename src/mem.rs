@@ -14,7 +14,7 @@ use crate::align;
 use crate::align::{CP_SHIFT, CpOcc};
 
 // Batch processing constants (matching C++ bwa-mem2)
-const BATCH_SIZE: usize = 512; // Number of reads per batch (from C++ BATCH_SIZE)
+const BATCH_SIZE: usize = 2048; // Number of reads per batch (optimized for multi-threading: ~85 reads/thread @ 24 threads)
 
 // Paired-end insert size constants (from C++ bwamem_pair.cpp)
 #[allow(dead_code)] // Reserved for future use in alignment scoring
