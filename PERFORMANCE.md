@@ -118,6 +118,23 @@ This section will be filled in with performance data from an AMD Ryzen 9 7900X s
 
 ---
 
+## End-to-End Performance Comparison (Apple M3 Max)
+
+**Test**: Align 1,000,000 paired-end reads against the mitochondrial chromosome (chrM).
+
+| Tool           | Total Time | Speedup (vs bwa-mem2) |
+|----------------|------------|-----------------------|
+| bwa-mem2       | 14.794 s   | 1.00x (baseline)      |
+| FerrousAlign   | 16.492 s   | 0.90x                 |
+
+**Analysis**:
+- **bwa-mem2 is currently 1.11x faster** than FerrousAlign in an end-to-end test.
+- This benchmark includes file I/O, index loading, and multi-threading, representing a more realistic workload.
+- The performance gap is relatively small, indicating that FerrousAlign's core alignment performance is competitive.
+- Further profiling is needed to identify bottlenecks in FerrousAlign's I/O and pre/post-processing steps.
+
+---
+
 ## Comparison to C++ bwa-mem2
 
 *(This section can be updated to reflect the current feature parity and expected performance on x86_64 after the AVX2/AVX512 port is complete and benchmarked.)*

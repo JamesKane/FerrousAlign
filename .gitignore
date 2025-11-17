@@ -1,4 +1,5 @@
 /target/
+.idea/
 Cargo.lock
 *.bwt.2bit.64
 *.pac
