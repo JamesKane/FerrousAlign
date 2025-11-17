@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **FerrousAlign** (`ferrous-align`) is a Rust port of [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2), a high-performance bioinformatics tool for aligning DNA sequencing reads to reference genomes using the Burrows-Wheeler Transform. This implementation targets performance parity with the C++ version (1.3-3.1x faster than original BWA-MEM) while providing Rust's safety and maintainability benefits.
 
-### NOTICE: The C++ reference implementation's behavior and file formats are the technical specification.  Any deviation is a critical bug, which blocks all downstream tasks.
+### NOTICE: The C++ reference implementation's behavior and file formats are the technical specification.  Any deviation is a critical bug, which blocks all downstream tasks.  We must match the behavior even if that means rewriting the code.
 
 **Project Status**: v0.5.0 (~60% complete), ~85-95% of C++ bwa-mem2 performance, working single-end and paired-end alignment with complete SAM output. Recent Session 29 achieved major milestone: **Rust-built indices now produce identical results to C++ bwa-mem2** after fixing SMEM generation, index format compatibility, and BWT construction.
 
