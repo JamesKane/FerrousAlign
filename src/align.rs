@@ -1307,54 +1307,8 @@ fn generate_seeds_with_mode(
                         query_name, idx, ref_pos, is_rev);
         }
 
-        // CRITICAL DEBUG: Try different reference positions to find the correct mapping
-        // Test: ref_pos - 1, ref_pos, ref_pos + 1, ref_pos - smem_len + 1 (points to end instead of start)
-        let test_positions = vec![
-            ("ref_pos", ref_pos),
-            ("ref_pos+1", ref_pos.saturating_add(1)),
-            ("ref_pos-1", ref_pos.saturating_sub(1)),
-            ("ref_pos-(len-1)", ref_pos.saturating_sub(smem_len as u64 - 1)),
-        ];
-
-        let mut best_matches = 0;
-        let mut best_pos_label = "";
-
-        for (label, test_pos) in test_positions.iter() {
-            let ref_fetch_len = (smem_len as u64).min(30).min(bwa_idx.bns.l_pac.saturating_sub(*test_pos));
-            if ref_fetch_len == 0 {
-                continue;
-            }
-
-            if let Ok(ref_bases) = bwa_idx.bns.get_reference_segment(*test_pos, ref_fetch_len) {
-                let comparison_len = smem_query_bases.len().min(ref_bases.len());
-                let mut matches = 0;
-                for i in 0..comparison_len {
-                    if smem_query_bases[i] == ref_bases[i] {
-                        matches += 1;
-                    }
-                }
-
-                if matches > best_matches {
-                    best_matches = matches;
-                    best_pos_label = label;
-                }
-
-                if matches == comparison_len {
-                    log::info!("{}: SMEM {}: ✅ PERFECT MATCH at {} (pos={}): {} matches!",
-                               query_name, idx, label, test_pos, matches);
-                } else if matches >= comparison_len / 2 {
-                    log::debug!("{}: SMEM {}: Partial match at {} (pos={}): {}/{} matches",
-                                query_name, idx, label, test_pos, matches, comparison_len);
-                }
-            }
-        }
-
-        if best_matches < smem_len as usize {
-            log::warn!("{}: SMEM {}: ⚠️ NO PERFECT MATCH FOUND! Best: {} at {} ({}/{} bases)",
-                       query_name, idx, best_pos_label, best_matches, best_matches, smem_len);
-            log::warn!("{}: SMEM {}:   Query: {:?}", query_name, idx,
-                       &smem_query_bases[..5.min(smem_query_bases.len())]);
-        }
+        // Diagnostic validation removed - was causing 79,000% performance regression
+        // The SMEM validation loop with log::info/warn was being called millions of times
 
         // Use query position in the coordinate system of the query we're aligning
         // For RC seeds, use smem.m directly (RC query coordinates)
@@ -1383,13 +1337,6 @@ fn generate_seeds_with_mode(
         let ref_segment_len =
             (query_len as u64 + 2 * _opt.w as u64).min(bwa_idx.bns.l_pac - ref_start_for_full_query);
         let ref_segment_start = ref_start_for_full_query;
-
-        // Debug: fetch a small segment at the original ref_pos to see if it matches the SMEM
-        let debug_ref_at_smem = bwa_idx.bns.get_reference_segment(ref_pos, 21.min(bwa_idx.bns.l_pac - ref_pos));
-        let debug_ref_bases = debug_ref_at_smem.as_ref().map(|v| &v[..10.min(v.len())]).unwrap_or(&[]);
-
-        log::debug!("{}: Seed {}: original_ref_pos={}, query_pos={}, adjusted_ref_start={}, ref_segment_len={}, query_len={}, ref_at_smem_pos={:?}",
-                    query_name, idx, ref_pos, seed.query_pos, ref_start_for_full_query, ref_segment_len, query_len, debug_ref_bases);
 
         let target_segment_result = bwa_idx
             .bns
