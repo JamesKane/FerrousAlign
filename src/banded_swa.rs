@@ -348,44 +348,22 @@ impl BandedPairWiseSW {
             let tb_code = tb[curr_i as usize][curr_j as usize];
             match tb_code {
                 TB_MATCH => {
-                    // Count consecutive matches, distinguishing between exact matches and mismatches
-                    let mut match_count = 0;
-                    let mut mismatch_count = 0;
+                    // Count consecutive alignment positions (both matches and mismatches use 'M')
+                    // This matches bwa-mem2 behavior which uses MIDSH operations (no X or =)
+                    let mut alignment_count = 0;
 
                     while curr_i > 0
                         && curr_j > 0
                         && tb[curr_i as usize][curr_j as usize] == TB_MATCH
                     {
-                        // Check if the bases actually match
-                        let query_base = query[(curr_j - 1) as usize];
-                        let target_base = target[(curr_i - 1) as usize];
-
-                        if query_base == target_base {
-                            // If we were counting mismatches, emit them first
-                            if mismatch_count > 0 {
-                                cigar.push((b'X', mismatch_count));
-                                mismatch_count = 0;
-                            }
-                            match_count += 1;
-                        } else {
-                            // If we were counting matches, emit them first
-                            if match_count > 0 {
-                                cigar.push((b'M', match_count));
-                                match_count = 0;
-                            }
-                            mismatch_count += 1;
-                        }
-
+                        alignment_count += 1;
                         curr_i -= 1;
                         curr_j -= 1;
                     }
 
-                    // Emit any remaining matches or mismatches
-                    if match_count > 0 {
-                        cigar.push((b'M', match_count));
-                    }
-                    if mismatch_count > 0 {
-                        cigar.push((b'X', mismatch_count));
+                    // Emit alignment positions as 'M' (both matches and mismatches)
+                    if alignment_count > 0 {
+                        cigar.push((b'M', alignment_count));
                     }
                 }
                 TB_DEL => {
@@ -877,8 +855,27 @@ impl BandedPairWiseSW {
         // This matches the production C++ bwa-mem2 design pattern
         batch
             .iter()
-            .map(|(qlen, query, tlen, target, w, h0)| {
+            .enumerate()
+            .map(|(idx, (qlen, query, tlen, target, w, h0))| {
                 let (score, cigar) = self.scalar_banded_swa(*qlen, query, *tlen, target, *w, *h0);
+
+                // Debug logging for problematic CIGARs
+                if idx < 3 || cigar.iter().any(|(op, _)| *op == b'I' && cigar.len() == 1) {
+                    log::debug!(
+                        "SIMD batch {}: qlen={}, tlen={}, score={}, cigar={:?}",
+                        idx,
+                        qlen,
+                        tlen,
+                        score.score,
+                        cigar
+                            .iter()
+                            .take(5)
+                            .map(|(op, len)| format!("{}{}", len, *op as char))
+                            .collect::<Vec<_>>()
+                            .join("")
+                    );
+                }
+
                 AlignmentResult { score, cigar }
             })
             .collect()
