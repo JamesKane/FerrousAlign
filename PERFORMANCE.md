@@ -164,18 +164,19 @@ The x86_64 implementation, with optimized batch sizing, demonstrates excellent S
 
 ## End-to-End Performance Comparison (Apple M3 Max)
 
-**Test**: Align 1,000,000 paired-end reads against the mitochondrial chromosome (chrM).
+**Test**: Align the full HG002 paired-end dataset (from `/Volumes/nas/HG002`) against the mitochondrial chromosome (chrM), utilizing multi-threading and dynamic batch sizing.
 
 | Tool           | Total Time | Speedup (vs bwa-mem2) |
 |----------------|------------|-----------------------|
-| bwa-mem2       | 14.794 s   | 1.00x (baseline)      |
-| FerrousAlign   | 16.492 s   | 0.90x                 |
+| bwa            | 27.246 s   | 0.33x                 |
+| bwa-mem2       | 8.730 s    | 1.00x (baseline)      |
+| FerrousAlign   | 73.174 s   | 0.12x                 |
 
 **Analysis**:
-- **bwa-mem2 is currently 1.11x faster** than FerrousAlign in an end-to-end test.
-- This benchmark includes file I/O, index loading, and multi-threading, representing a more realistic workload.
-- The performance gap is relatively small, indicating that FerrousAlign's core alignment performance is competitive.
-- Further profiling is needed to identify bottlenecks in FerrousAlign's I/O and pre/post-processing steps.
+- **bwa-mem2 is the fastest** aligner in this test, outperforming the original `bwa` by a factor of 3.12x.
+- **FerrousAlign is currently the slowest** of the three, at 8.38x slower than `bwa-mem2`.
+- The significant performance gap between FerrousAlign and the C-based aligners indicates substantial bottlenecks in I/O, multi-threading implementation, or other pre/post-processing steps.
+- Further profiling is critically needed to identify these bottlenecks and improve overall end-to-end performance.
 
 ---
 

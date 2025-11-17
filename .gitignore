@@ -1,4 +1,5 @@
 /target/
+/test_data/HG002_local/
 .idea/
 Cargo.lock
 *.bwt.2bit.64

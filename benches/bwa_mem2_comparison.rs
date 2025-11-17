@@ -3,6 +3,24 @@ use std::env;
 use std::process::{Command, Stdio};
 use std::path::Path;
 
+fn run_bwa(ref_path: &str, read1_path: &str, read2_path: &str) {
+    let num_threads = num_cpus::get().to_string();
+    let output = Command::new("bwa")
+        .arg("mem")
+        .arg("-t").arg(&num_threads)  // Use all available cores
+        .arg(ref_path)
+        .arg(read1_path)
+        .arg(read2_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .expect("Failed to execute bwa");
+
+    if !output.status.success() {
+        panic!("bwa failed with status: {}", output.status);
+    }
+}
+
 fn run_bwa_mem2(bwa_path: &str, ref_path: &str, read1_path: &str, read2_path: &str) {
     let num_threads = num_cpus::get().to_string();
     let output = Command::new(bwa_path)
@@ -45,11 +63,14 @@ fn run_ferrous_align(ref_path: &str, read1_path: &str, read2_path: &str) {
 
 fn benchmark_comparison(c: &mut Criterion) {
     let bwa_path = env::var("BWA_MEM2_PATH").unwrap_or_else(|_| "/tmp/bwa-mem2-diag/bwa-mem2".to_string());
-    // Use chrM for faster benchmarking (or set via environment variable)
     let ref_path = env::var("REF_PATH").unwrap_or_else(|_| "test_data/chrM.fna".to_string());
-    // Real HG002 sequencing data (5-10M reads, ~400MB gzipped)
-    let read1_path = env::var("READ1_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/2A1_CGATGT_L001_R1_001.fastq.gz".to_string());
-    let read2_path = env::var("READ2_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/2A1_CGATGT_L001_R2_001.fastq.gz".to_string());
+    let read1_path_str = env::var("READ1_PATH").unwrap_or_else(|_| "test_data/HG002_local/read1.fastq.gz".to_string());
+    let read2_path_str = env::var("READ2_PATH").unwrap_or_else(|_| "test_data/HG002_local/read2.fastq.gz".to_string());
+
+    eprintln!("DEBUG: bwa_path: {}", bwa_path);
+    eprintln!("DEBUG: ref_path: {}", ref_path);
+    eprintln!("DEBUG: read1_path_str: {}", read1_path_str);
+    eprintln!("DEBUG: read2_path_str: {}", read2_path_str);
 
     // Check if files exist
     if !Path::new(&bwa_path).exists() {
@@ -60,7 +81,7 @@ fn benchmark_comparison(c: &mut Criterion) {
         eprintln!("Reference file not found at {}", ref_path);
         return;
     }
-    if !Path::new(&read1_path).exists() || !Path::new(&read2_path).exists() {
+    if !Path::new(&read1_path_str).exists() || !Path::new(&read2_path_str).exists() {
         eprintln!("Read files not found");
         return;
     }
@@ -73,6 +94,16 @@ fn benchmark_comparison(c: &mut Criterion) {
             .arg(&ref_path)
             .output()
             .expect("Failed to index reference for bwa-mem2");
+    }
+
+    // Index reference for bwa if needed
+    let bwa_index_files_bwa = ["amb", "ann", "bwt", "pac", "sa"].iter().all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
+    if !bwa_index_files_bwa {
+        Command::new("bwa")
+            .arg("index")
+            .arg(&ref_path)
+            .output()
+            .expect("Failed to index reference for bwa");
     }
 
     // Index reference for FerrousAlign if needed
@@ -90,12 +121,16 @@ fn benchmark_comparison(c: &mut Criterion) {
     // Reduce sample count for large real-world datasets
     group.sample_size(10);
 
+    group.bench_function("bwa", |b| {
+        b.iter(|| run_bwa(&ref_path, &read1_path_str, &read2_path_str))
+    });
+
     group.bench_function("bwa-mem2", |b| {
-        b.iter(|| run_bwa_mem2(&bwa_path, &ref_path, &read1_path, &read2_path))
+        b.iter(|| run_bwa_mem2(&bwa_path, &ref_path, &read1_path_str, &read2_path_str))
     });
 
     group.bench_function("FerrousAlign", |b| {
-        b.iter(|| run_ferrous_align(&ref_path, &read1_path, &read2_path))
+        b.iter(|| run_ferrous_align(&ref_path, &read1_path_str, &read2_path_str))
     });
 
     group.finish();
