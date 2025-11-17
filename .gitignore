@@ -36,3 +36,5 @@ HG03576.final.cram*
 /test_data/*.amb
 /test_data/*.0123
 /test_data/*.sh
+
+perf.data*
