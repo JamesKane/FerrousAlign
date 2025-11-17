@@ -14,7 +14,10 @@ use crate::align;
 use crate::align::{CP_SHIFT, CpOcc};
 
 // Batch processing constants (matching C++ bwa-mem2)
-const BATCH_SIZE: usize = 2048; // Number of reads per batch (optimized for multi-threading: ~85 reads/thread @ 24 threads)
+// Base batch size for single-threaded execution
+const BASE_reads_per_batch: usize = 512;
+// Target reads per thread for optimal load balancing
+const READS_PER_THREAD: usize = 100;
 
 // Paired-end insert size constants (from C++ bwamem_pair.cpp)
 #[allow(dead_code)] // Reserved for future use in alignment scoring
@@ -320,6 +323,13 @@ fn process_single_end(
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
 
+    // Calculate optimal batch size based on thread count
+    // Formula: num_threads * reads_per_thread, with minimum of BASE_reads_per_batch
+    let num_threads = opt.n_threads as usize;
+    let reads_per_batch = (num_threads * READS_PER_THREAD).max(BASE_reads_per_batch);
+    log::debug!("Using batch size: {} ({} threads × {} reads/thread)",
+                reads_per_batch, num_threads, READS_PER_THREAD);
+
     for query_file_name in query_files {
         let mut reader = match FastqReader::new(query_file_name) {
             Ok(r) => r,
@@ -331,7 +341,7 @@ fn process_single_end(
 
         loop {
             // Stage 0: Read batch of reads (matching C++ kt_pipeline step 0)
-            let batch = match reader.read_batch(BATCH_SIZE) {
+            let batch = match reader.read_batch(reads_per_batch) {
                 Ok(b) => b,
                 Err(e) => {
                     log::error!("Error reading batch from {}: {}", query_file_name, e);
@@ -391,7 +401,7 @@ fn process_single_end(
                 }
             }
 
-            if batch_size < BATCH_SIZE {
+            if batch_size < reads_per_batch {
                 break; // Last incomplete batch
             }
         }
@@ -426,6 +436,12 @@ fn process_paired_end(
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
 
+    // Calculate optimal batch size based on thread count
+    let num_threads = opt.n_threads as usize;
+    let reads_per_batch = (num_threads * READS_PER_THREAD).max(BASE_reads_per_batch);
+    log::debug!("Using batch size: {} ({} threads × {} reads/thread)",
+                reads_per_batch, num_threads, READS_PER_THREAD);
+
     // Open both FASTQ files
     let mut reader1 = match FastqReader::new(read1_file) {
         Ok(r) => r,
@@ -448,14 +464,14 @@ fn process_paired_end(
     // First pass: Read and align all pairs in batches
     loop {
         // Stage 0: Read batch of paired reads
-        let batch1 = match reader1.read_batch(BATCH_SIZE) {
+        let batch1 = match reader1.read_batch(reads_per_batch) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("Error reading batch from read1 file: {}", e);
                 break;
             }
         };
-        let batch2 = match reader2.read_batch(BATCH_SIZE) {
+        let batch2 = match reader2.read_batch(reads_per_batch) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("Error reading batch from read2 file: {}", e);
@@ -516,7 +532,7 @@ fn process_paired_end(
             all_pairs.push((aln1, aln2));
         }
 
-        if batch_size < BATCH_SIZE {
+        if batch_size < reads_per_batch {
             break; // Last incomplete batch
         }
     }
@@ -648,10 +664,10 @@ fn process_paired_end(
 
     loop {
         let batch1 = reader1_rescue
-            .read_batch(BATCH_SIZE)
+            .read_batch(reads_per_batch)
             .unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
         let batch2 = reader2_rescue
-            .read_batch(BATCH_SIZE)
+            .read_batch(reads_per_batch)
             .unwrap_or_else(|_| crate::fastq_reader::ReadBatch::new());
 
         if batch1.is_empty() {
