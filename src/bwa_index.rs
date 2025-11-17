@@ -60,14 +60,31 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
 
     eprintln!("\n=== RUST INDEX BUILD TRACE ===");
     eprintln!("[RUST] l_pac = {}", bns.l_pac);
-    eprintln!("[RUST] Building SA for {} bases (with sentinel)", text_for_sais.len());
-    eprintln!("[RUST] text_for_sais length: forward={}, RC={}, total_with_sentinel={}",
-              bns.l_pac, bns.l_pac, text_for_sais.len());
-    eprintln!("[RUST] text_for_sais[0..20] = {:?}", &text_for_sais[..text_for_sais.len().min(20)]);
-    eprintln!("[RUST] text_for_sais[{}..{}] (RC start) = {:?}",
-              bns.l_pac as usize, (bns.l_pac as usize + 10).min(text_for_sais.len()),
-              &text_for_sais[bns.l_pac as usize..(bns.l_pac as usize + 10).min(text_for_sais.len())]);
-    eprintln!("[RUST] text_for_sais[{}] (sentinel) = {:?}", text_for_sais.len()-1, text_for_sais.last());
+    eprintln!(
+        "[RUST] Building SA for {} bases (with sentinel)",
+        text_for_sais.len()
+    );
+    eprintln!(
+        "[RUST] text_for_sais length: forward={}, RC={}, total_with_sentinel={}",
+        bns.l_pac,
+        bns.l_pac,
+        text_for_sais.len()
+    );
+    eprintln!(
+        "[RUST] text_for_sais[0..20] = {:?}",
+        &text_for_sais[..text_for_sais.len().min(20)]
+    );
+    eprintln!(
+        "[RUST] text_for_sais[{}..{}] (RC start) = {:?}",
+        bns.l_pac as usize,
+        (bns.l_pac as usize + 10).min(text_for_sais.len()),
+        &text_for_sais[bns.l_pac as usize..(bns.l_pac as usize + 10).min(text_for_sais.len())]
+    );
+    eprintln!(
+        "[RUST] text_for_sais[{}] (sentinel) = {:?}",
+        text_for_sais.len() - 1,
+        text_for_sais.last()
+    );
 
     // Use bio crate (well-tested bioinformatics library) for suffix array construction
     use bio::data_structures::suffix_array::suffix_array;
@@ -76,7 +93,10 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     let sa_with_sentinel = suffix_array(&text_for_sais);
     let sa_full: Vec<i32> = sa_with_sentinel.iter().map(|&x| x as i32).collect();
 
-    eprintln!("[RUST] SA construction complete, length = {}", sa_full.len());
+    eprintln!(
+        "[RUST] SA construction complete, length = {}",
+        sa_full.len()
+    );
     eprintln!("[RUST] SA[0..10] = {:?}", &sa_full[..sa_full.len().min(10)]);
     eprintln!("[RUST] Sampled SA positions (every 8th):");
     for i in (0..80).step_by(8) {
@@ -116,8 +136,14 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
         }
     }
 
-    eprintln!("[RUST] BWT construction complete, length = {}", bwt_output.len());
-    eprintln!("[RUST] BWT[0..20] = {:?}", &bwt_output[..bwt_output.len().min(20)]);
+    eprintln!(
+        "[RUST] BWT construction complete, length = {}",
+        bwt_output.len()
+    );
+    eprintln!(
+        "[RUST] BWT[0..20] = {:?}",
+        &bwt_output[..bwt_output.len().min(20)]
+    );
     eprintln!("[RUST] BWT character counts:");
     let mut bwt_char_counts = [0; 5];
     for &ch in bwt_output.iter() {
@@ -125,9 +151,14 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
             bwt_char_counts[ch as usize] += 1;
         }
     }
-    eprintln!("  [RUST] A(0)={}, C(1)={}, G(2)={}, T(3)={}, Sentinel(4)={}",
-              bwt_char_counts[0], bwt_char_counts[1], bwt_char_counts[2],
-              bwt_char_counts[3], bwt_char_counts[4]);
+    eprintln!(
+        "  [RUST] A(0)={}, C(1)={}, G(2)={}, T(3)={}, Sentinel(4)={}",
+        bwt_char_counts[0],
+        bwt_char_counts[1],
+        bwt_char_counts[2],
+        bwt_char_counts[3],
+        bwt_char_counts[4]
+    );
 
     // Pack BWT into 2-bit format
     let mut packed_bwt_data = Vec::with_capacity((bwt_output.len() + 3) / 4);
@@ -171,7 +202,10 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     for i in 0..seq_len_with_sentinel {
         if sa_full[i] == 0 {
             sentinel_index = i as i64;
-            eprintln!("[RUST] Found sentinel at BWT position {} (SA[{}]=0)", sentinel_index, i);
+            eprintln!(
+                "[RUST] Found sentinel at BWT position {} (SA[{}]=0)",
+                sentinel_index, i
+            );
             break;
         }
     }

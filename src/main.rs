@@ -407,10 +407,16 @@ fn main() {
                 .build_global()
             {
                 Ok(_) => {
-                    log::debug!("Successfully built global Rayon thread pool with {} threads", num_threads);
+                    log::debug!(
+                        "Successfully built global Rayon thread pool with {} threads",
+                        num_threads
+                    );
                 }
                 Err(e) => {
-                    log::warn!("Failed to configure thread pool: {} (may already be initialized)", e);
+                    log::warn!(
+                        "Failed to configure thread pool: {} (may already be initialized)",
+                        e
+                    );
                 }
             }
 
@@ -423,7 +429,10 @@ fn main() {
                     num_threads
                 );
             } else {
-                log::debug!("Rayon thread pool verified: {} threads active", actual_threads);
+                log::debug!(
+                    "Rayon thread pool verified: {} threads active",
+                    actual_threads
+                );
             }
 
             let thread_word = if num_threads == 1 {

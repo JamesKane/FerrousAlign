@@ -407,7 +407,7 @@ impl BandedPairWiseSW {
         // C++ bwa-mem2 adds soft clipping after Smith-Waterman (bwamem.cpp:1812)
         // curr_j is the query start position after traceback
         // max_j is the query end position where max score was found
-        let query_start = curr_j;  // Where alignment started in query
+        let query_start = curr_j; // Where alignment started in query
         let query_end = max_j + 1; // Where alignment ended in query (exclusive)
 
         let mut final_cigar = Vec::new();
@@ -438,7 +438,12 @@ impl BandedPairWiseSW {
             );
             log::warn!("  Query preview: {:?}", &query[..10.min(query.len())]);
             log::warn!("  Target preview: {:?}", &target[..10.min(target.len())]);
-            log::warn!("  query_start={}, query_end={}, qlen={}", query_start, query_end, qlen);
+            log::warn!(
+                "  query_start={}, query_end={}, qlen={}",
+                query_start,
+                query_end,
+                qlen
+            );
         }
 
         let out_score = OutScore {
@@ -522,13 +527,17 @@ impl BandedPairWiseSW {
             if q_len as usize != query.len() && !query.is_empty() {
                 eprintln!(
                     "[ERROR] simd_batch16: lane {}: q_len mismatch! q_len={} but query.len()={}",
-                    i, q_len, query.len()
+                    i,
+                    q_len,
+                    query.len()
                 );
             }
             if t_len as usize != target.len() && !target.is_empty() {
                 eprintln!(
                     "[ERROR] simd_batch16: lane {}: t_len mismatch! t_len={} but target.len()={}",
-                    i, t_len, target.len()
+                    i,
+                    t_len,
+                    target.len()
                 );
             }
 

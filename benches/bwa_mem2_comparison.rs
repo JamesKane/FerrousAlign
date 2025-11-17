@@ -1,13 +1,14 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::env;
-use std::process::{Command, Stdio};
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 fn run_bwa(ref_path: &str, read1_path: &str, read2_path: &str) {
     let num_threads = num_cpus::get().to_string();
     let output = Command::new("bwa")
         .arg("mem")
-        .arg("-t").arg(&num_threads)  // Use all available cores
+        .arg("-t")
+        .arg(&num_threads) // Use all available cores
         .arg(ref_path)
         .arg(read1_path)
         .arg(read2_path)
@@ -25,7 +26,8 @@ fn run_bwa_mem2(bwa_path: &str, ref_path: &str, read1_path: &str, read2_path: &s
     let num_threads = num_cpus::get().to_string();
     let output = Command::new(bwa_path)
         .arg("mem")
-        .arg("-t").arg(&num_threads)  // Use all available cores
+        .arg("-t")
+        .arg(&num_threads) // Use all available cores
         .arg(ref_path)
         .arg(read1_path)
         .arg(read2_path)
@@ -47,7 +49,8 @@ fn run_ferrous_align(ref_path: &str, read1_path: &str, read2_path: &str) {
         .arg("--")
         .arg("mem")
         .arg("-p") // paired-end reads
-        .arg("-t").arg(&num_threads)  // Use all available cores
+        .arg("-t")
+        .arg(&num_threads) // Use all available cores
         .arg(ref_path)
         .arg(read1_path)
         .arg(read2_path)
@@ -62,10 +65,13 @@ fn run_ferrous_align(ref_path: &str, read1_path: &str, read2_path: &str) {
 }
 
 fn benchmark_comparison(c: &mut Criterion) {
-    let bwa_path = env::var("BWA_MEM2_PATH").unwrap_or_else(|_| "/tmp/bwa-mem2-diag/bwa-mem2".to_string());
+    let bwa_path =
+        env::var("BWA_MEM2_PATH").unwrap_or_else(|_| "/tmp/bwa-mem2-diag/bwa-mem2".to_string());
     let ref_path = env::var("REF_PATH").unwrap_or_else(|_| "test_data/chrM.fna".to_string());
-    let read1_path_str = env::var("READ1_PATH").unwrap_or_else(|_| "test_data/HG002_local/read1.fastq.gz".to_string());
-    let read2_path_str = env::var("READ2_PATH").unwrap_or_else(|_| "test_data/HG002_local/read2.fastq.gz".to_string());
+    let read1_path_str = env::var("READ1_PATH")
+        .unwrap_or_else(|_| "test_data/HG002_local/read1.fastq.gz".to_string());
+    let read2_path_str = env::var("READ2_PATH")
+        .unwrap_or_else(|_| "test_data/HG002_local/read2.fastq.gz".to_string());
 
     eprintln!("DEBUG: bwa_path: {}", bwa_path);
     eprintln!("DEBUG: ref_path: {}", ref_path);
@@ -87,7 +93,9 @@ fn benchmark_comparison(c: &mut Criterion) {
     }
 
     // Index reference for bwa-mem2 if needed
-    let bwa_index_files = ["amb", "ann", "bwt.2bit.64", "pac"].iter().all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
+    let bwa_index_files = ["amb", "ann", "bwt.2bit.64", "pac"]
+        .iter()
+        .all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
     if !bwa_index_files {
         Command::new(&bwa_path)
             .arg("index")
@@ -97,7 +105,9 @@ fn benchmark_comparison(c: &mut Criterion) {
     }
 
     // Index reference for bwa if needed
-    let bwa_index_files_bwa = ["amb", "ann", "bwt", "pac", "sa"].iter().all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
+    let bwa_index_files_bwa = ["amb", "ann", "bwt", "pac", "sa"]
+        .iter()
+        .all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
     if !bwa_index_files_bwa {
         Command::new("bwa")
             .arg("index")
@@ -109,13 +119,12 @@ fn benchmark_comparison(c: &mut Criterion) {
     // Index reference for FerrousAlign if needed
     let fa_index_file = format!("{}.fai", ref_path);
     if !Path::new(&fa_index_file).exists() {
-         Command::new("samtools")
+        Command::new("samtools")
             .arg("faidx")
             .arg(&ref_path)
             .output()
             .expect("Failed to index reference for FerrousAlign with samtools");
     }
-
 
     let mut group = c.benchmark_group("FerrousAlign vs bwa-mem2");
     // Reduce sample count for large real-world datasets

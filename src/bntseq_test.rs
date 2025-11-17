@@ -246,7 +246,11 @@ AGCT
         // Test 2: Get bases around the ambiguous position (3106)
         // The 'N' is replaced with a random base, so we just check we can read it
         let segment2 = bns.get_reference_segment(3105, 3)?;
-        assert_eq!(segment2.len(), 3, "Should get 3 bases around ambiguous position");
+        assert_eq!(
+            segment2.len(),
+            3,
+            "Should get 3 bases around ambiguous position"
+        );
         // The middle base (index 1) was 'N', now random (0-3)
         assert!(segment2[1] <= 3, "Random base should be valid (0-3)");
 
@@ -257,7 +261,11 @@ AGCT
         // Test 4: Boundary test - requesting beyond l_pac should return empty
         let result = bns.get_reference_segment(16569, 1);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Vec::<u8>::new(), "Beyond l_pac should return empty");
+        assert_eq!(
+            result.unwrap(),
+            Vec::<u8>::new(),
+            "Beyond l_pac should return empty"
+        );
 
         cleanup_test_files(&test_dir);
         Ok(())

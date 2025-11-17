@@ -1,8 +1,8 @@
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use rand::{SeedableRng, Rng};
-use rand::rngs::StdRng;
 
 // From C's bntseq.h
 pub const NST_NT4_TABLE: [u8; 256] = [
@@ -161,8 +161,12 @@ impl BntSeq {
         let remainder = (bns.l_pac % 4) as u8;
         pac_file.write_all(&[remainder])?;
 
-        log::info!("Created .pac file: l_pac={}, file_bytes={}, metadata_bytes={}",
-                  bns.l_pac, pac_data.len(), if bns.l_pac % 4 == 0 { 2 } else { 1 });
+        log::info!(
+            "Created .pac file: l_pac={}, file_bytes={}, metadata_bytes={}",
+            bns.l_pac,
+            pac_data.len(),
+            if bns.l_pac % 4 == 0 { 2 } else { 1 }
+        );
 
         Ok(bns)
     }
@@ -333,8 +337,12 @@ impl BntSeq {
 
         // Check if we're bridging the forward-reverse boundary
         if start < self.l_pac && end > self.l_pac {
-            log::warn!("get_reference_segment: bridging forward-reverse boundary at start={}, end={}, l_pac={} - returning empty",
-                      start, end, self.l_pac);
+            log::warn!(
+                "get_reference_segment: bridging forward-reverse boundary at start={}, end={}, l_pac={} - returning empty",
+                start,
+                end,
+                self.l_pac
+            );
             return Ok(Vec::new());
         }
 
@@ -346,8 +354,14 @@ impl BntSeq {
             let beg_f = ((self.l_pac << 1) - 1).saturating_sub(end - 1);
             let end_f = ((self.l_pac << 1) - 1).saturating_sub(start);
 
-            log::debug!("get_reference_segment: RC strand start={}, len={}, l_pac={}, beg_f={}, end_f={}",
-                       start, len, self.l_pac, beg_f, end_f);
+            log::debug!(
+                "get_reference_segment: RC strand start={}, len={}, l_pac={}, beg_f={}, end_f={}",
+                start,
+                len,
+                self.l_pac,
+                beg_f,
+                end_f
+            );
 
             // Read in reverse order with complementation
             let mut pac_file = BufReader::new(File::open(pac_file_path)?);
@@ -373,8 +387,14 @@ impl BntSeq {
             pac_file.seek(SeekFrom::Start(start_byte_offset))?;
             pac_file.read_exact(&mut pac_bytes)?;
 
-            log::debug!("get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, bytes_to_read={}",
-                       start, len, self.l_pac, start_byte_offset, bytes_to_read);
+            log::debug!(
+                "get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, bytes_to_read={}",
+                start,
+                len,
+                self.l_pac,
+                start_byte_offset,
+                bytes_to_read
+            );
 
             for i in 0..len {
                 let k = start + i;
@@ -388,8 +408,11 @@ impl BntSeq {
             }
         }
 
-        log::debug!("get_reference_segment: extracted {} bases, first_10={:?}",
-                   segment.len(), &segment[..segment.len().min(10)]);
+        log::debug!(
+            "get_reference_segment: extracted {} bases, first_10={:?}",
+            segment.len(),
+            &segment[..segment.len().min(10)]
+        );
 
         Ok(segment)
     }

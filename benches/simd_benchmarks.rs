@@ -30,7 +30,7 @@ fn generate_sequence_with_mutations(seq: &[u8], mutation_rate: f64, seed: u64) -
 
 /// Benchmark scalar vs batched SIMD for varying sequence lengths
 fn bench_scalar_vs_batched(c: &mut Criterion) {
-    use ferrous_align::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+    use ferrous_align::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 
     let mat = bwa_fill_scmat(1, 4, -1);
     let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
@@ -133,7 +133,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
     group.throughput(Throughput::Elements(num_alignments as u64));
     group.bench_function("auto_dispatch_128x", |b| {
         // Determine optimal batch size based on SIMD engine
-        use ferrous_align::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+        use ferrous_align::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
         let engine = detect_optimal_simd_engine();
         let batch_size = match engine {
             #[cfg(target_arch = "x86_64")]
@@ -223,7 +223,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
 
 /// Benchmark different mutation rates (affects DP complexity)
 fn bench_mutation_rates(c: &mut Criterion) {
-    use ferrous_align::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+    use ferrous_align::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 
     let mat = bwa_fill_scmat(1, 4, -1);
     let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
