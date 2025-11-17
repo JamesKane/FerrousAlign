@@ -130,6 +130,34 @@ pub fn get_occ(bwa_idx: &BwaIndex, k: i64, c: u8) -> i64 {
     occ_k + popcount64(match_mask_k)
 }
 
+/// Vectorized get_occ for all 4 bases simultaneously
+///
+/// This function processes all 4 bases (A, C, G, T) in parallel, eliminating
+/// the need for 4 sequential get_occ calls. This provides significant speedup
+/// by reducing memory access overhead and enabling better CPU pipelining.
+///
+/// Returns [i64; 4] containing occurrence counts for bases 0, 1, 2, 3 (A, C, G, T)
+#[inline(always)]
+pub fn get_occ_all_bases(bwa_idx: &BwaIndex, k: i64) -> [i64; 4] {
+    let cp_shift = CP_SHIFT as i64;
+    let cp_mask = CP_MASK as i64;
+
+    let occ_id_k = k >> cp_shift;
+    let y_k = k & cp_mask;
+
+    let cp_occ = &bwa_idx.cp_occ[occ_id_k as usize];
+    let mask = ONE_HOT_MASK_ARRAY[y_k as usize];
+
+    // Process all 4 bases in parallel
+    let mut result = [0i64; 4];
+    for i in 0..4 {
+        let match_mask = cp_occ.one_hot_bwt_str[i] & mask;
+        result[i] = cp_occ.cp_count[i] + popcount64(match_mask);
+    }
+
+    result
+}
+
 /// Backward extension matching C++ bwa-mem2 FMI_search::backwardExt()
 ///
 /// CRITICAL: This uses a cumulative sum approach for computing l[] values,
@@ -150,19 +178,20 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     let mut s = [0i64; 4];
 
     // Compute k[] and s[] for all 4 bases (matching C++ lines 1030-1039)
-    for b in 0..4u8 {
-        let sp = smem.k as i64;
-        let ep = (smem.k + smem.s) as i64;
+    // OPTIMIZATION: Use vectorized get_occ_all_bases to process all 4 bases at once
+    let sp = smem.k as i64;
+    let ep = (smem.k + smem.s) as i64;
 
-        let occ_sp = get_occ(bwa_idx, sp, b);
-        let occ_ep = get_occ(bwa_idx, ep, b);
+    let occ_sp = get_occ_all_bases(bwa_idx, sp);
+    let occ_ep = get_occ_all_bases(bwa_idx, ep);
 
-        k[b as usize] = bwa_idx.bwt.l2[b as usize] as i64 + occ_sp;
-        s[b as usize] = occ_ep - occ_sp;
+    for b in 0..4usize {
+        k[b] = bwa_idx.bwt.l2[b] as i64 + occ_sp[b];
+        s[b] = occ_ep[b] - occ_sp[b];
 
-        if debug_enabled && b == a {
+        if debug_enabled && b == a as usize {
             log::trace!("backward_ext: base {}: sp={}, ep={}, occ_sp={}, occ_ep={}, k={}, s={}",
-                        b, sp, ep, occ_sp, occ_ep, k[b as usize], s[b as usize]);
+                        b, sp, ep, occ_sp[b], occ_ep[b], k[b], s[b]);
         }
     }
 
