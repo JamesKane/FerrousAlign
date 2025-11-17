@@ -1698,27 +1698,30 @@ fn output_batch_paired(
                 (0, 0, false)
             };
 
-        // Extract mate info from best alignments before mutably borrowing
-        let (mate2_ref, mate2_pos, mate2_flag) = if let Some(aln2) = alignments2.get(best_idx2) {
-            (aln2.ref_name.clone(), aln2.pos, aln2.flag)
-        } else {
-            ("*".to_string(), 0, 0)
-        };
+        // Extract mate info from best alignments BEFORE creating dummies
+        // (needed to populate dummy alignments with mate's position)
+        let (mate2_ref_initial, mate2_pos_initial, mate2_flag_initial) =
+            if let Some(aln2) = alignments2.get(best_idx2) {
+                (aln2.ref_name.clone(), aln2.pos, aln2.flag)
+            } else {
+                ("*".to_string(), 0, 0)
+            };
 
-        let (mate1_ref, mate1_pos, mate1_flag) = if let Some(aln1) = alignments1.get(best_idx1) {
-            (aln1.ref_name.clone(), aln1.pos, aln1.flag)
-        } else {
-            ("*".to_string(), 0, 0)
-        };
+        let (mate1_ref_initial, mate1_pos_initial, mate1_flag_initial) =
+            if let Some(aln1) = alignments1.get(best_idx1) {
+                (aln1.ref_name.clone(), aln1.pos, aln1.flag)
+            } else {
+                ("*".to_string(), 0, 0)
+            };
 
         // Handle unmapped reads - create dummy alignments
         if alignments1.is_empty() {
             let mut unmapped = align::Alignment {
                 query_name: name1.clone(),
                 flag: 0x1 | 0x4 | 0x40,
-                ref_name: mate2_ref.clone(),
+                ref_name: mate2_ref_initial.clone(),
                 ref_id: 0,
-                pos: mate2_pos,
+                pos: mate2_pos_initial,
                 mapq: 0,
                 score: 0,
                 cigar: Vec::new(),
@@ -1730,10 +1733,10 @@ fn output_batch_paired(
                 tags: Vec::new(),
             };
 
-            if mate2_ref != "*" {
+            if mate2_ref_initial != "*" {
                 unmapped.rnext = "=".to_string();
-                unmapped.pnext = mate2_pos + 1;
-                if mate2_flag & 0x10 != 0 {
+                unmapped.pnext = mate2_pos_initial + 1;
+                if mate2_flag_initial & 0x10 != 0 {
                     unmapped.flag |= 0x20;
                 }
             }
@@ -1745,9 +1748,9 @@ fn output_batch_paired(
             let mut unmapped = align::Alignment {
                 query_name: name2.clone(),
                 flag: 0x1 | 0x4 | 0x80,
-                ref_name: mate1_ref.clone(),
+                ref_name: mate1_ref_initial.clone(),
                 ref_id: 0,
-                pos: mate1_pos,
+                pos: mate1_pos_initial,
                 mapq: 0,
                 score: 0,
                 cigar: Vec::new(),
@@ -1759,16 +1762,30 @@ fn output_batch_paired(
                 tags: Vec::new(),
             };
 
-            if mate1_ref != "*" {
+            if mate1_ref_initial != "*" {
                 unmapped.rnext = "=".to_string();
-                unmapped.pnext = mate1_pos + 1;
-                if mate1_flag & 0x10 != 0 {
+                unmapped.pnext = mate1_pos_initial + 1;
+                if mate1_flag_initial & 0x10 != 0 {
                     unmapped.flag |= 0x20;
                 }
             }
 
             alignments2.push(unmapped);
         }
+
+        // Re-extract mate info AFTER creating dummy alignments
+        // This ensures mapped reads get correct mate information even when mate is unmapped
+        let (mate2_ref, mate2_pos, mate2_flag) = if let Some(aln2) = alignments2.get(best_idx2) {
+            (aln2.ref_name.clone(), aln2.pos, aln2.flag)
+        } else {
+            ("*".to_string(), 0, 0)
+        };
+
+        let (mate1_ref, mate1_pos, mate1_flag) = if let Some(aln1) = alignments1.get(best_idx1) {
+            (aln1.ref_name.clone(), aln1.pos, aln1.flag)
+        } else {
+            ("*".to_string(), 0, 0)
+        };
 
         // Set flags and mate information for read1
         for (idx, alignment) in alignments1.iter_mut().enumerate() {

@@ -400,11 +400,16 @@ pub struct Alignment {
 
 impl Alignment {
     /// Get CIGAR string as a formatted string (e.g., "50M2I48M")
+    /// Returns "*" for empty CIGAR (unmapped reads per SAM spec)
     pub fn cigar_string(&self) -> String {
-        self.cigar
-            .iter()
-            .map(|&(op, len)| format!("{}{}", len, op as char))
-            .collect()
+        if self.cigar.is_empty() {
+            "*".to_string()
+        } else {
+            self.cigar
+                .iter()
+                .map(|&(op, len)| format!("{}{}", len, op as char))
+                .collect()
+        }
     }
 
     pub fn to_sam_string(&self) -> String {
@@ -840,6 +845,15 @@ fn generate_seeds_with_mode(
     let query_len = query_seq.len();
     if query_len == 0 {
         return Vec::new();
+    }
+
+    #[cfg(feature = "debug-logging")]
+    let is_debug_read = query_name.contains("1150:14380");
+
+    #[cfg(feature = "debug-logging")]
+    if is_debug_read {
+        log::debug!("[DEBUG_READ] Generating seeds for: {}", query_name);
+        log::debug!("[DEBUG_READ] Query length: {}", query_len);
     }
 
     // Instantiate BandedPairWiseSW with parameters from MemOpt
@@ -1771,6 +1785,23 @@ fn generate_seeds_with_mode(
             query_len,
             (max_smem_count as f64 / query_len as f64) * 100.0
         );
+    }
+
+    #[cfg(feature = "debug-logging")]
+    if is_debug_read {
+        log::debug!("[DEBUG_READ] Generated {} SMEM(s)", all_smems.len());
+        log::debug!("[DEBUG_READ] Created {} alignment(s)", alignments.len());
+        for (i, aln) in alignments.iter().enumerate() {
+            log::debug!(
+                "[DEBUG_READ] Alignment[{}]: {}:{} MAPQ={} Score={} CIGAR={}",
+                i,
+                aln.ref_name,
+                aln.pos,
+                aln.mapq,
+                aln.score,
+                aln.cigar_string()
+            );
+        }
     }
 
     alignments
