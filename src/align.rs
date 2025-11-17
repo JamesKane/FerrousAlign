@@ -1178,8 +1178,10 @@ fn generate_seeds_with_mode(
     let query_segment_encoded: Vec<u8> = query_seq.iter().map(|&b| base_to_code(b)).collect();
 
     // Also prepare reverse complement for RC SMEMs
+    // CRITICAL FIX: Use reverse_complement_code() to properly handle 'N' bases (code 4)
+    // The XOR trick (b ^ 3) breaks for N: 4 ^ 3 = 7 (invalid!)
     let mut query_segment_encoded_rc: Vec<u8> = query_segment_encoded.iter()
-        .map(|&b| b ^ 3)  // A<->T (0<->3), C<->G (1<->2)
+        .map(|&b| reverse_complement_code(b))  // Properly handles N (4 → 4)
         .collect();
     query_segment_encoded_rc.reverse();
 

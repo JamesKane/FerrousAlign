@@ -310,10 +310,10 @@ impl BandedPairWiseSW {
         }
 
         // Backtrack to generate CIGAR
-        // For seed extension, we want to extend to the end of the query (more global-like)
-        // rather than stopping at the max score position (local alignment)
+        // Use local alignment mode: start from max score position (max_i, max_j)
+        // Soft clipping will be added as post-processing for unaligned regions
         let mut cigar = Vec::new();
-        let use_global_end = true; // TODO: this might need to be a parameter
+        let use_global_end = false; // Local alignment: start from max score position
         let mut curr_i = if use_global_end {
             _max_ie + 1
         } else {
@@ -403,6 +403,28 @@ impl BandedPairWiseSW {
 
         cigar.reverse(); // CIGAR is usually represented from start to end
 
+        // --- Add Soft Clipping (Post-processing) ---
+        // C++ bwa-mem2 adds soft clipping after Smith-Waterman (bwamem.cpp:1812)
+        // curr_j is the query start position after traceback
+        // max_j is the query end position where max score was found
+        let query_start = curr_j;  // Where alignment started in query
+        let query_end = max_j + 1; // Where alignment ended in query (exclusive)
+
+        let mut final_cigar = Vec::new();
+
+        // Add soft clip at beginning if alignment doesn't start at position 0
+        if query_start > 0 {
+            final_cigar.push((b'S', query_start));
+        }
+
+        // Add the core alignment operations
+        final_cigar.extend_from_slice(&cigar);
+
+        // Add soft clip at end if alignment doesn't reach the end of query
+        if query_end < qlen {
+            final_cigar.push((b'S', qlen - query_end));
+        }
+
         // Debug logging for problematic CIGARs (all insertions)
         if cigar.len() == 1 && cigar[0].0 == b'I' {
             log::warn!(
@@ -416,6 +438,7 @@ impl BandedPairWiseSW {
             );
             log::warn!("  Query preview: {:?}", &query[..10.min(query.len())]);
             log::warn!("  Target preview: {:?}", &target[..10.min(target.len())]);
+            log::warn!("  query_start={}, query_end={}, qlen={}", query_start, query_end, qlen);
         }
 
         let out_score = OutScore {
@@ -427,7 +450,7 @@ impl BandedPairWiseSW {
             max_off: current_max_off,
         };
 
-        (out_score, cigar)
+        (out_score, final_cigar)
     }
 
     /// Batched SIMD Smith-Waterman alignment for up to 16 alignments in parallel
