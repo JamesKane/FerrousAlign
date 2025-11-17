@@ -588,15 +588,22 @@ pub(crate) fn execute_adaptive_alignments(
         return Vec::new();
     }
 
-    // Partition jobs by estimated divergence
-    let (low_div_jobs, high_div_jobs) = partition_jobs_by_divergence(jobs);
+    // SIMD routing: Use SIMD for all jobs (length-based heuristic was flawed)
+    // The previous divergence-based routing incorrectly compared query vs target lengths,
+    // but target is always larger due to alignment margins (~100bp each side).
+    // This caused ALL jobs to route to scalar (0% SIMD utilization).
+    // SIMD handles variable lengths efficiently with padding, so just use it for everything.
+    let (low_div_jobs, high_div_jobs) = (jobs.to_vec(), Vec::new());
 
-    // Calculate average divergence for logging
+    // Calculate average divergence and length statistics for logging
     let avg_divergence: f64 = jobs
         .iter()
         .map(|job| estimate_divergence_score(job.query.len(), job.target.len()))
         .sum::<f64>()
         / jobs.len() as f64;
+
+    let avg_query_len: f64 = jobs.iter().map(|job| job.query.len()).sum::<usize>() as f64 / jobs.len() as f64;
+    let avg_target_len: f64 = jobs.iter().map(|job| job.target.len()).sum::<usize>() as f64 / jobs.len() as f64;
 
     // Log routing statistics (INFO level - shows in default verbosity)
     log::info!(
@@ -607,6 +614,14 @@ pub(crate) fn execute_adaptive_alignments(
         low_div_jobs.len(),
         low_div_jobs.len() as f64 / jobs.len() as f64 * 100.0,
         avg_divergence
+    );
+
+    // Show length statistics to understand why routing fails
+    log::info!(
+        "  → avg_query={:.1}bp, avg_target={:.1}bp, length_diff={:.1}%",
+        avg_query_len,
+        avg_target_len,
+        ((avg_query_len - avg_target_len).abs() / avg_query_len.max(avg_target_len) * 100.0)
     );
 
     // Create result vector with correct size
@@ -636,28 +651,34 @@ pub(crate) fn execute_adaptive_alignments(
         Vec::new()
     };
 
-    // Merge results back in original order
-    let mut low_idx = 0;
-    let mut high_idx = 0;
+    // Since we route everything to SIMD now (high_div_jobs is always empty),
+    // just return the SIMD results directly
+    if high_div_results.is_empty() {
+        // All jobs went to SIMD - return directly (common case now)
+        low_div_results
+    } else {
+        // Mixed routing (should not happen with current logic, but keep for safety)
+        let mut low_idx = 0;
+        let mut high_idx = 0;
 
-    for (original_idx, job) in jobs.iter().enumerate() {
-        let div_score = estimate_divergence_score(job.query.len(), job.target.len());
-        let result = if div_score > 0.7 {
-            // High divergence - get from scalar results
-            let res = high_div_results[high_idx].clone();
-            high_idx += 1;
-            res
-        } else {
-            // Low divergence - get from SIMD results
-            let res = low_div_results[low_idx].clone();
-            low_idx += 1;
-            res
-        };
+        for (original_idx, job) in jobs.iter().enumerate() {
+            let div_score = estimate_divergence_score(job.query.len(), job.target.len());
+            let result = if div_score > 0.7 && high_idx < high_div_results.len() {
+                // High divergence - get from scalar results
+                let res = high_div_results[high_idx].clone();
+                high_idx += 1;
+                res
+            } else {
+                // Low divergence - get from SIMD results
+                let res = low_div_results[low_idx].clone();
+                low_idx += 1;
+                res
+            };
 
-        all_results[original_idx] = result;
+            all_results[original_idx] = result;
+        }
+        all_results
     }
-
-    all_results
 }
 
 /// Execute batched alignments with configurable batch size
