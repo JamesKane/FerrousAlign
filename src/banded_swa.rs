@@ -403,6 +403,21 @@ impl BandedPairWiseSW {
 
         cigar.reverse(); // CIGAR is usually represented from start to end
 
+        // Debug logging for problematic CIGARs (all insertions)
+        if cigar.len() == 1 && cigar[0].0 == b'I' {
+            log::warn!(
+                "PATHOLOGICAL CIGAR: Single insertion of {} bases! qlen={}, tlen={}, max_i={}, max_j={}, score={}",
+                cigar[0].1,
+                qlen,
+                tlen,
+                max_i,
+                max_j,
+                max_score
+            );
+            log::warn!("  Query preview: {:?}", &query[..10.min(query.len())]);
+            log::warn!("  Target preview: {:?}", &target[..10.min(target.len())]);
+        }
+
         let out_score = OutScore {
             score: max_score,
             tle: max_i + 1,
