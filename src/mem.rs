@@ -16,10 +16,12 @@ use crate::align;
 use crate::align::{CP_SHIFT, CpOcc};
 
 // Batch processing constants (matching C++ bwa-mem2)
-// Base batch size for single-threaded execution
-const BASE_reads_per_batch: usize = 512;
-// Target reads per thread for optimal load balancing
-const READS_PER_THREAD: usize = 100;
+// Chunk size in base pairs (from C++ bwamem.cpp mem_opt_init: o->chunk_size = 10000000)
+const CHUNK_SIZE_BASES: usize = 10_000_000;
+// Assumed average read length for batch size calculation (typical Illumina)
+const AVG_READ_LEN: usize = 101;
+// Minimum batch size (BATCH_SIZE from C++ macro.h)
+const MIN_BATCH_SIZE: usize = 512;
 
 // Paired-end insert size constants (from C++ bwamem_pair.cpp)
 #[allow(dead_code)] // Reserved for future use in alignment scoring
@@ -328,12 +330,16 @@ fn process_single_end(
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
 
-    // Calculate optimal batch size based on thread count
-    // Formula: num_threads * reads_per_thread, with minimum of BASE_reads_per_batch
+    // Calculate optimal batch size based on thread count (matching C++ bwa-mem2)
+    // Formula: (CHUNK_SIZE_BASES * n_threads) / AVG_READ_LEN
+    // C++ fastmap.cpp:947: aux.task_size = opt->chunk_size * opt->n_threads
+    // C++ fastmap.cpp:459: nreads = aux->actual_chunk_size / READ_LEN + 10
     let num_threads = opt.n_threads as usize;
-    let reads_per_batch = (num_threads * READS_PER_THREAD).max(BASE_reads_per_batch);
-    log::debug!("Using batch size: {} ({} threads × {} reads/thread)",
-                reads_per_batch, num_threads, READS_PER_THREAD);
+    let batch_total_bases = CHUNK_SIZE_BASES * num_threads;
+    let reads_per_batch = (batch_total_bases / AVG_READ_LEN).max(MIN_BATCH_SIZE);
+    log::debug!("Using batch size: {} reads ({} MB total, {} threads × {} MB/thread)",
+                reads_per_batch, batch_total_bases / 1_000_000, num_threads,
+                CHUNK_SIZE_BASES / 1_000_000);
 
     for query_file_name in query_files {
         let mut reader = match FastqReader::new(query_file_name) {
@@ -522,11 +528,16 @@ fn process_paired_end(
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
 
-    // Calculate optimal batch size based on thread count
+    // Calculate optimal batch size based on thread count (matching C++ bwa-mem2)
+    // Formula: (CHUNK_SIZE_BASES * n_threads) / AVG_READ_LEN
+    // C++ fastmap.cpp:947: aux.task_size = opt->chunk_size * opt->n_threads
+    // C++ fastmap.cpp:459: nreads = aux->actual_chunk_size / READ_LEN + 10
     let num_threads = opt.n_threads as usize;
-    let reads_per_batch = (num_threads * READS_PER_THREAD).max(BASE_reads_per_batch);
-    log::debug!("Using batch size: {} ({} threads × {} reads/thread)",
-                reads_per_batch, num_threads, READS_PER_THREAD);
+    let batch_total_bases = CHUNK_SIZE_BASES * num_threads;
+    let reads_per_batch = (batch_total_bases / AVG_READ_LEN).max(MIN_BATCH_SIZE);
+    log::debug!("Using batch size: {} reads ({} MB total, {} threads × {} MB/thread)",
+                reads_per_batch, batch_total_bases / 1_000_000, num_threads,
+                CHUNK_SIZE_BASES / 1_000_000);
 
     // Create channel for pipeline communication
     // Buffer size of 2 allows reader to stay 1 batch ahead
@@ -580,23 +591,32 @@ fn process_paired_end(
         let bwa_idx_clone = Arc::clone(&bwa_idx);
         let opt_clone = Arc::clone(&opt);
 
-        let pair_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = batch1
-            .names
-            .par_iter()
-            .zip(batch1.seqs.par_iter())
-            .zip(batch1.quals.par_iter())
-            .zip(batch2.names.par_iter())
-            .zip(batch2.seqs.par_iter())
-            .zip(batch2.quals.par_iter())
-            .map(
-                |(((((name1, seq1), qual1), _name2), seq2), qual2)| {
-                    // Each thread processes both mates of a pair
-                    let aln1 = align::generate_seeds(&bwa_idx_clone, name1, seq1, qual1, &opt_clone);
-                    let aln2 = align::generate_seeds(&bwa_idx_clone, name1, seq2, qual2, &opt_clone);
-                    (aln1, aln2)
-                },
-            )
+        // Track thread usage for debugging
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let thread_counter = Arc::new(AtomicUsize::new(0));
+
+        // SIMPLIFIED par_iter() to diagnose serial execution issue
+        // Original complex zipping may have prevented parallelization
+        let num_pairs = batch1.names.len();
+        let pair_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = (0..num_pairs)
+            .into_par_iter()
+            .map(|i| {
+                // Track unique threads used (for debug logging)
+                let thread_id = rayon::current_thread_index().unwrap_or(0);
+                thread_counter.fetch_or(1 << (thread_id % 64), Ordering::Relaxed);
+
+                // Each thread processes both mates of a pair
+                let aln1 = align::generate_seeds(&bwa_idx_clone, &batch1.names[i], &batch1.seqs[i], &batch1.quals[i], &opt_clone);
+                let aln2 = align::generate_seeds(&bwa_idx_clone, &batch2.names[i], &batch2.seqs[i], &batch2.quals[i], &opt_clone);
+                (aln1, aln2)
+            })
             .collect();
+
+        // Log which threads were actually used
+        let threads_used = thread_counter.load(Ordering::Relaxed);
+        let num_threads_used = threads_used.count_ones();
+        log::debug!("Batch processed using {} different threads (bitmask: 0x{:x})",
+                    num_threads_used, threads_used);
 
         // Store pairs for later processing
         all_pairs.extend(pair_alignments);

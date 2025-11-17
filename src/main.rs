@@ -402,11 +402,28 @@ fn main() {
 
             opt.n_threads = num_threads as i32;
 
-            if let Err(e) = rayon::ThreadPoolBuilder::new()
+            match rayon::ThreadPoolBuilder::new()
                 .num_threads(num_threads)
                 .build_global()
             {
-                log::warn!("Failed to configure thread pool: {}", e);
+                Ok(_) => {
+                    log::debug!("Successfully built global Rayon thread pool with {} threads", num_threads);
+                }
+                Err(e) => {
+                    log::warn!("Failed to configure thread pool: {} (may already be initialized)", e);
+                }
+            }
+
+            // Verify actual thread pool size
+            let actual_threads = rayon::current_num_threads();
+            if actual_threads != num_threads {
+                log::warn!(
+                    "Rayon thread pool has {} threads but requested {}",
+                    actual_threads,
+                    num_threads
+                );
+            } else {
+                log::debug!("Rayon thread pool verified: {} threads active", actual_threads);
             }
 
             let thread_word = if num_threads == 1 {
