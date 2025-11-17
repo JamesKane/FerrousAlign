@@ -575,38 +575,31 @@ fn process_paired_end(
         log::info!("Read {} sequences ({} bp)", batch_size * 2, batch_bp);
         log::debug!("Processing batch of {} read pairs in parallel", batch_size);
 
-        // Stage 1: Process both batches in parallel
-        let bwa_idx_clone1 = Arc::clone(&bwa_idx);
-        let bwa_idx_clone2 = Arc::clone(&bwa_idx);
+        // Stage 1: Process read pairs in parallel (each thread handles both mates of a pair)
+        // Zip read1 and read2 together and process as pairs across cores
+        let bwa_idx_clone = Arc::clone(&bwa_idx);
+        let opt_clone = Arc::clone(&opt);
 
-        // Process read1 batch in parallel
-        let opt_clone1 = Arc::clone(&opt);
-        let alignments1: Vec<Vec<align::Alignment>> = batch1
+        let pair_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = batch1
             .names
             .par_iter()
             .zip(batch1.seqs.par_iter())
             .zip(batch1.quals.par_iter())
-            .map(|((name, seq), qual)| {
-                align::generate_seeds(&bwa_idx_clone1, name, seq, qual, &opt_clone1)
-            })
-            .collect();
-
-        // Process read2 batch in parallel
-        let opt_clone2 = Arc::clone(&opt);
-        let alignments2: Vec<Vec<align::Alignment>> = batch2
-            .names
-            .par_iter()
+            .zip(batch2.names.par_iter())
             .zip(batch2.seqs.par_iter())
             .zip(batch2.quals.par_iter())
-            .map(|((name, seq), qual)| {
-                align::generate_seeds(&bwa_idx_clone2, name, seq, qual, &opt_clone2)
-            })
+            .map(
+                |(((((name1, seq1), qual1), _name2), seq2), qual2)| {
+                    // Each thread processes both mates of a pair
+                    let aln1 = align::generate_seeds(&bwa_idx_clone, name1, seq1, qual1, &opt_clone);
+                    let aln2 = align::generate_seeds(&bwa_idx_clone, name1, seq2, qual2, &opt_clone);
+                    (aln1, aln2)
+                },
+            )
             .collect();
 
-        // Combine pairs
-        for (aln1, aln2) in alignments1.into_iter().zip(alignments2.into_iter()) {
-            all_pairs.push((aln1, aln2));
-        }
+        // Store pairs for later processing
+        all_pairs.extend(pair_alignments);
         // Continue receiving batches until reader signals EOF
     }
 
