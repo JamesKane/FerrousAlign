@@ -896,8 +896,8 @@ fn generate_seeds_with_mode(
                         query_name, x, prev_array_buf.len(), smem.s, min_intv);
         }
 
-        // Reverse the prev_array_buf (C++ lines 587-592)
-        prev_array_buf.reverse();
+        // OPTIMIZATION: Skip reverse() by iterating backward with .rev() (C++ lines 587-592)
+        // prev_array_buf.reverse(); // REMOVED - use .iter().rev() instead
 
         // Phase 2: Backward search (C++ lines 595-665)
         log::debug!("{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
@@ -920,7 +920,8 @@ fn generate_seeds_with_mode(
             log::debug!("{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
                         query_name, j, a, prev_array_buf.len());
 
-            for (i, smem) in prev_array_buf.iter().enumerate() {
+            // OPTIMIZATION: Iterate backward instead of reversing array
+            for (i, smem) in prev_array_buf.iter().rev().enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -957,7 +958,8 @@ fn generate_seeds_with_mode(
             }
 
             // Continue with remaining SMEMs (C++ lines 632-649)
-            for (i, smem) in prev_array_buf.iter().skip(1).enumerate() {
+            // OPTIMIZATION: Use .rev().skip(1) to skip last element (first after reverse)
+            for (i, smem) in prev_array_buf.iter().rev().skip(1).enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -1064,7 +1066,8 @@ fn generate_seeds_with_mode(
             prev_array_buf_rc.push(smem);
         }
 
-        prev_array_buf_rc.reverse();
+        // OPTIMIZATION: Skip reverse() by iterating backward with .rev()
+        // prev_array_buf_rc.reverse(); // REMOVED - use .iter().rev() instead
 
         for j in (0..x).rev() {
             let a = encoded_query_rc[j];
@@ -1078,7 +1081,8 @@ fn generate_seeds_with_mode(
             let curr_array = &mut curr_array_buf_rc;
             let mut curr_s = None;
 
-            for smem in &prev_array_buf_rc {
+            // OPTIMIZATION: Iterate backward instead of reversing array
+            for smem in prev_array_buf_rc.iter().rev() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
