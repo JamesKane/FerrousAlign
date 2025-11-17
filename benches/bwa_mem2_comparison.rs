@@ -40,10 +40,11 @@ fn run_ferrous_align(ref_path: &str, read1_path: &str, read2_path: &str) {
 }
 
 fn benchmark_comparison(c: &mut Criterion) {
-    let bwa_path = env::var("BWA_MEM2_PATH").unwrap_or_else(|_| "/Users/jkane/Applications/bwa-mem2/bwa-mem2".to_string());
-    let ref_path = "test_data/test_ref.fa";
-    let read1_path = "test_data/paired_end/read1.fq";
-    let read2_path = "test_data/paired_end/read2.fq";
+    let bwa_path = env::var("BWA_MEM2_PATH").unwrap_or_else(|_| "/tmp/bwa-mem2-diag/bwa-mem2".to_string());
+    // Use chrM for faster benchmarking (or set via environment variable)
+    let ref_path = env::var("REF_PATH").unwrap_or_else(|_| "test_data/chrM.fna".to_string());
+    let read1_path = env::var("READ1_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/test_20pairs_R1.fq".to_string());
+    let read2_path = env::var("READ2_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/test_20pairs_R2.fq".to_string());
 
     // Check if files exist
     if !Path::new(&bwa_path).exists() {
