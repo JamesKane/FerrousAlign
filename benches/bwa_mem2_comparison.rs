@@ -43,8 +43,9 @@ fn benchmark_comparison(c: &mut Criterion) {
     let bwa_path = env::var("BWA_MEM2_PATH").unwrap_or_else(|_| "/tmp/bwa-mem2-diag/bwa-mem2".to_string());
     // Use chrM for faster benchmarking (or set via environment variable)
     let ref_path = env::var("REF_PATH").unwrap_or_else(|_| "test_data/chrM.fna".to_string());
-    let read1_path = env::var("READ1_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/test_20pairs_R1.fq".to_string());
-    let read2_path = env::var("READ2_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/test_20pairs_R2.fq".to_string());
+    // Real HG002 sequencing data (5-10M reads, ~400MB gzipped)
+    let read1_path = env::var("READ1_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/2A1_CGATGT_L001_R1_001.fastq.gz".to_string());
+    let read2_path = env::var("READ2_PATH").unwrap_or_else(|_| "/home/jkane/Genomics/HG002/2A1_CGATGT_L001_R2_001.fastq.gz".to_string());
 
     // Check if files exist
     if !Path::new(&bwa_path).exists() {
@@ -82,6 +83,8 @@ fn benchmark_comparison(c: &mut Criterion) {
 
 
     let mut group = c.benchmark_group("FerrousAlign vs bwa-mem2");
+    // Reduce sample count for large real-world datasets
+    group.sample_size(10);
 
     group.bench_function("bwa-mem2", |b| {
         b.iter(|| run_bwa_mem2(&bwa_path, &ref_path, &read1_path, &read2_path))
