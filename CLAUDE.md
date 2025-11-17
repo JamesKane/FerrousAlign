@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### NOTICE: The C++ reference implementation's behavior and file formats are the technical specification.  Any deviation is a critical bug, which blocks all downstream tasks.
 
-**Project Status**: v0.5.0 (~50% complete), ~85-95% of C++ bwa-mem2 performance, working single-end and paired-end alignment with complete SAM output including proper headers and logging.
+**Project Status**: v0.5.0 (~60% complete), ~85-95% of C++ bwa-mem2 performance, working single-end and paired-end alignment with complete SAM output. Recent Session 29 achieved major milestone: **Rust-built indices now produce identical results to C++ bwa-mem2** after fixing SMEM generation, index format compatibility, and BWT construction.
 
 ## Build Commands
 
@@ -526,6 +526,18 @@ let cigar = result.cigar_string;
 4. ✅ bio::io::fastq migration with gzip support (Session 27 - native .fq.gz handling)
 5. ✅ AVX2 SIMD support (Session 28 - 256-bit vectors, 32-way parallelism, automatic detection)
 6. ✅ AVX-512 SIMD support (Session 28 - 512-bit vectors, 64-way parallelism, feature-gated)
+7. ✅ SMEM generation algorithm (Session 29 - complete rewrite to match C++ bwa-mem2)
+8. ✅ Index building format compatibility (Session 29 - .pac file format, ambiguous bases, BWT construction)
+9. ✅ Adaptive batch sizing and SIMD routing (Session 29 - performance optimizations)
+
+**Recent Critical Fixes (Session 29 - Nov 2025)**:
+- ✅ SMEM duplication bug - now correctly skips ahead after each SMEM
+- ✅ BWT interval calculation in backward_ext() - off-by-one errors fixed
+- ✅ L2 array initialization - added +1 to match C++ count[] array
+- ✅ Ambiguous base handling - now replaces with random bases and includes in l_pac
+- ✅ .pac file format - MSB-first bit order and metadata bytes now correct
+- ✅ Suffix array reconstruction - sentinel handling and position calculations fixed
+- ✅ Index file compatibility - Rust-built indices now match C++ bwa-mem2 format
 
 **Remaining Optimizations**:
 1. Faster suffix array reconstruction (cache recent lookups)
@@ -533,7 +545,7 @@ let cigar = result.cigar_string;
 3. Vectorize backward_ext() for FM-Index search
 4. Stabilize AVX-512 support (waiting on Rust compiler stabilization)
 
-**Correctness Issues**:
+**Remaining Correctness Issues**:
 - Paired-end insert size distribution may differ slightly from C++ version
 - Secondary alignment marking not fully matching bwa-mem2 behavior
 - Some edge cases in CIGAR generation for complex indels
@@ -550,6 +562,132 @@ let cigar = result.cigar_string;
 - Apple Acceleration framework integration (vDSP for matrix ops)
 - Memory-mapped index loading (reduce startup time)
 - GPU acceleration via Metal (Apple Silicon) or CUDA
+
+## Session 29 Bug Fixes - Detailed Technical Notes
+
+This section documents critical bugs fixed in Session 29 (Nov 2025) and their root causes for future reference.
+
+### 1. Ambiguous Base Handling in Index Building
+
+**Problem**: Rust-built indices had l_pac off by 1, causing ALL suffix array positions to be wrong.
+
+**Root Cause**:
+- C++ bwa-mem2 replaces ambiguous bases (N) with **random bases** (bntseq.cpp:284)
+- C++ includes these random-replaced bases in l_pac and writes them to .pac file
+- Rust was **skipping** ambiguous bases entirely, not writing them to .pac
+- For chrM reference (1 'N' at position 3106): C++ l_pac=16569, Rust l_pac=16568
+
+**Fix** (commit aef85d1):
+- Added `rand` crate with deterministic RNG (seed=11, matching C++)
+- When processing ambiguous base: record in ambs array AND replace with random base (0-3)
+- Write random-replaced base to pac_data and increment packed_base_count
+- Add .pac metadata bytes: `[optional_zero_if_divisible] + [l_pac % 4]`
+
+**Files Changed**: `src/bntseq.rs`, `Cargo.toml`
+
+**Validation**: Rust l_pac now matches C++ exactly, SA values identical
+
+### 2. SMEM Duplication Bug
+
+**Problem**: SMEM generation produced duplicate seeds with overlapping intervals.
+
+**Root Cause**:
+- After finding an SMEM, backward_ext() continued from current position
+- Should skip ahead past the SMEM to avoid re-processing (C++ FMI_search.cpp)
+
+**Fix** (commit 43d5a63):
+- After each SMEM: set `i = x + 1` to skip past the SMEM
+- Prevents overlapping SMEMs and duplicate seed generation
+
+**Files Changed**: `src/align.rs`
+
+**Validation**: SMEM counts now match C++ bwa-mem2
+
+### 3. L2 Array Off-by-One
+
+**Problem**: FM-Index backward search returned wrong intervals.
+
+**Root Cause**:
+- C++ uses `count[]` array with sentinel at index 0 (FMI_search.cpp:182)
+- Rust l2 array was missing the +1 offset for this sentinel position
+- Caused off-by-one errors in occurrence calculations
+
+**Fix** (commit 2ff8e72):
+- Added +1 when initializing l2 array from bwt_occ calculations
+- l2[i] now represents cumulative count BEFORE character i (matching C++)
+
+**Files Changed**: `src/bwa_index.rs`
+
+**Validation**: BWT intervals now match C++ exactly
+
+### 4. .pac File Bit Order
+
+**Problem**: .pac files had reversed bit order within bytes.
+
+**Root Cause**:
+- C++ uses MSB-first bit packing: `((~pos & 3) << 1)` (bntseq.cpp:246)
+- Rust was using LSB-first bit packing
+- Caused incorrect base extraction during alignment
+
+**Fix** (commit 58a3298):
+- Changed bit shift formula to match C++: `shift = ((!(i % 4)) & 3) << 1`
+- Now correctly packs 4 bases per byte in MSB-first order
+
+**Files Changed**: `src/bntseq.rs`
+
+**Validation**: hexdump of .pac files now matches C++ output
+
+### 5. BWT Interval Calculation in backward_ext()
+
+**Problem**: BWT backward search produced wrong intervals for some queries.
+
+**Root Cause**:
+- Using `bwt_occ(k-1)` and `bwt_occ(l-1)` instead of `bwt_occ(k)` and `bwt_occ(l)`
+- Off-by-one error in occurrence counting
+- Caused incorrect SMEM boundaries
+
+**Fix** (commit 1ed3bb7):
+- Changed to `bwt_occ(k, c)` and `bwt_occ(l, c)` (no -1 offset)
+- Matches C++ FMI_search behavior exactly
+
+**Files Changed**: `src/align.rs`
+
+**Validation**: SMEM intervals now match C++ for all test cases
+
+### 6. Bidirectional BWT Construction
+
+**Problem**: BWT was only built for forward strand, not bidirectional.
+
+**Root Cause**:
+- C++ builds BWT on concatenated sequence: forward + reverse_complement (FMI_search.cpp:101-140)
+- Rust was only using forward strand
+- Missing reverse complement prevented reverse-strand alignment
+
+**Fix** (Session 29, multiple commits):
+- Build text_for_sais with capacity `2 * l_pac + 1`
+- Append forward strand bases
+- Append reverse complement strand: `complement = (3 - base) + 1`
+- Total length now matches C++: 33139 for chrM (16569 forward + 16569 RC + 1 sentinel)
+
+**Files Changed**: `src/bwa_index.rs`
+
+**Validation**: BWT length, SA values, and alignment results now match C++
+
+### Debugging Techniques Used
+
+1. **Comparative Logging**: Added parallel debug traces to C++ and Rust codebases
+2. **Binary Diff**: Used hexdump to compare .pac and .bwt files byte-by-byte
+3. **Trace Comparison**: Compared l_pac, SA arrays, BWT values between implementations
+4. **Small Test Case**: Used chrM (16.5 KB) for fast iteration and validation
+5. **Git Bisect**: Reverted changes when fixes made things worse
+
+### Key Learnings
+
+- **"Obvious" design choices may be wrong**: Random base replacement for N seemed odd but is required
+- **File format matters**: Bit order, metadata bytes all critical for compatibility
+- **Off-by-one errors cascade**: l_pac off by 1 → all SA positions wrong → all alignments wrong
+- **Comparative debugging is powerful**: Side-by-side traces quickly revealed l_pac discrepancy
+- **C++ code is the specification**: When in doubt, match C++ behavior exactly, even if it seems suboptimal
 
 ## Development Workflow
 
