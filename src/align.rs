@@ -334,6 +334,29 @@ impl Alignment {
         // They affect score calculation during alignment extension and pair scoring.
         // This requires deeper integration into the scoring logic in banded_swa.rs
 
+        // Handle reverse complement for SEQ and QUAL if flag 0x10 (reverse strand) is set
+        // Matching bwa-mem2 mem_aln2sam() behavior (bwamem.cpp:1706-1716)
+        let (output_seq, output_qual) = if self.flag & 0x10 != 0 {
+            // Reverse strand: reverse complement the sequence and reverse the quality
+            let rev_comp_seq: String = self.seq
+                .chars()
+                .rev()
+                .map(|c| match c {
+                    'A' => 'T',
+                    'T' => 'A',
+                    'C' => 'G',
+                    'G' => 'C',
+                    'N' => 'N',
+                    _ => c, // Keep any other characters as-is
+                })
+                .collect();
+            let rev_qual: String = self.qual.chars().rev().collect();
+            (rev_comp_seq, rev_qual)
+        } else {
+            // Forward strand: use sequence and quality as-is
+            (self.seq.clone(), self.qual.clone())
+        };
+
         // Format mandatory SAM fields
         let mut sam_line = format!(
             "{}	{}	{}	{}	{}	{}	{}	{}	{}	{}	{}",
@@ -346,8 +369,8 @@ impl Alignment {
             self.rnext,
             self.pnext,
             self.tlen,
-            self.seq,
-            self.qual
+            output_seq,
+            output_qual
         );
 
         // Append optional tags
