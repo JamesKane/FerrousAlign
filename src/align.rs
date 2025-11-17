@@ -799,10 +799,13 @@ fn generate_seeds_with_mode(
 
     // OPTIMIZATION: Pre-allocate buffers to avoid repeated allocations
     // These are reused for every position x to reduce malloc overhead
+    // Note: Initial capacity = query_len, but Vec::push() will automatically
+    // grow (realloc) if SMEM count exceeds capacity (seen in IGSR samples)
     let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
     let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
     let mut prev_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
     let mut curr_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut max_smem_count = 0usize; // Track max SMEMs for capacity validation
 
     // Process each starting position in the query
     // CRITICAL FIX: Use while loop and skip ahead after each SMEM (like C++)
@@ -979,6 +982,7 @@ fn generate_seeds_with_mode(
             // Update prev_array_buf for next iteration (C++ lines 650-654)
             // OPTIMIZATION: Swap buffers instead of copying/moving
             std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
+            max_smem_count = max_smem_count.max(prev_array_buf.len());
             log::debug!("{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
                         query_name, j, prev_array_buf.len());
 
@@ -1110,6 +1114,7 @@ fn generate_seeds_with_mode(
 
             // OPTIMIZATION: Swap buffers instead of copying/moving
             std::mem::swap(&mut prev_array_buf_rc, &mut curr_array_buf_rc);
+            max_smem_count = max_smem_count.max(prev_array_buf_rc.len());
             if prev_array_buf_rc.is_empty() {
                 break;
             }
@@ -1525,6 +1530,15 @@ fn generate_seeds_with_mode(
             qual: query_qual.to_string(),
             tags: Vec::new(), // Optional tags to be added later
         });
+    }
+
+    // Log buffer capacity validation
+    if max_smem_count > query_len {
+        log::debug!("{}: SMEM buffer grew beyond initial capacity! max_smem_count={} > query_len={} (growth factor: {:.2}x)",
+                    query_name, max_smem_count, query_len, max_smem_count as f64 / query_len as f64);
+    } else {
+        log::debug!("{}: SMEM buffer stayed within capacity. max_smem_count={} <= query_len={} (utilization: {:.1}%)",
+                    query_name, max_smem_count, query_len, (max_smem_count as f64 / query_len as f64) * 100.0);
     }
 
     alignments
