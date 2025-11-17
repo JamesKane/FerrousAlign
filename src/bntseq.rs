@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use rand::{SeedableRng, Rng};
+use rand::rngs::StdRng;
 
 // From C's bntseq.h
 pub const NST_NT4_TABLE: [u8; 256] = [
@@ -65,12 +67,15 @@ impl BntSeq {
         _for_only: bool, // for_only is not used in the C version's bns_fasta2bntseq
     ) -> io::Result<Self> {
         let mut bns = BntSeq::new();
+        bns.seed = 11; // Fixed seed matching C++ bwa-mem2 (line 314 in bntseq.cpp)
+        let mut rng = StdRng::seed_from_u64(bns.seed as u64);
+
         let mut kseq = crate::kseq::KSeq::new(Box::new(reader));
         let mut pac_data: Vec<u8> = Vec::new();
 
         let mut seq_id = 0;
         let mut pac_len = 0; // This will now track the total length including ambiguous bases
-        let mut packed_base_count = 0; // This will track only non-ambiguous bases
+        let mut packed_base_count = 0; // This will track ALL bases (regular + ambiguous replaced with random)
 
         let mut current_ambs: Vec<BntAmb1> = Vec::new();
 
@@ -93,21 +98,12 @@ impl BntSeq {
 
             let mut n_ambs_in_seq = 0;
             for base in kseq.seq.bytes() {
-                let nt4 = NST_NT4_TABLE[base as usize];
-                if nt4 < 4 {
-                    // Regular base
-                    let last_byte_idx = (packed_base_count / 4) as usize;
-                    if pac_data.len() <= last_byte_idx {
-                        pac_data.resize(last_byte_idx + 1, 0);
-                    }
-                    // CRITICAL: Match C++ bwa-mem2 bit packing order
-                    // Same formula as extraction: ((~pos & 3) << 1)
-                    let shift = ((!(packed_base_count % 4)) & 3) << 1;
-                    pac_data[last_byte_idx] |= nt4 << shift;
-                    packed_base_count += 1;
-                    pac_len += 1; // Still increment total pac_len for ambiguous base tracking
-                } else {
-                    // Ambiguous base
+                let mut nt4 = NST_NT4_TABLE[base as usize];
+
+                // CRITICAL: Match C++ bwa-mem2 behavior (bntseq.cpp lines 264-292)
+                // For ambiguous bases (N, etc.), record in ambs array AND replace with random base
+                if nt4 >= 4 {
+                    // Ambiguous base - record it
                     if current_ambs.is_empty()
                         || current_ambs.last().unwrap().offset
                             + current_ambs.last().unwrap().len as u64
@@ -121,9 +117,23 @@ impl BntSeq {
                     } else {
                         current_ambs.last_mut().unwrap().len += 1;
                     }
-                    pac_len += 1;
                     n_ambs_in_seq += 1;
+
+                    // Replace with random base (C++ line 284: if (c >= 4) c = lrand48()&3;)
+                    nt4 = rng.gen_range(0..4);
                 }
+
+                // Write ALL bases (regular + ambiguous-replaced-with-random) to pac_data
+                let last_byte_idx = (packed_base_count / 4) as usize;
+                if pac_data.len() <= last_byte_idx {
+                    pac_data.resize(last_byte_idx + 1, 0);
+                }
+                // CRITICAL: Match C++ bwa-mem2 bit packing order
+                // Same formula as extraction: ((~pos & 3) << 1)
+                let shift = ((!(packed_base_count % 4)) & 3) << 1;
+                pac_data[last_byte_idx] |= nt4 << shift;
+                packed_base_count += 1;
+                pac_len += 1;
             }
             ann.n_ambs = n_ambs_in_seq; // Update n_ambs for the current annotation
 
@@ -131,21 +141,28 @@ impl BntSeq {
             seq_id += 1;
         }
 
-        bns.l_pac = packed_base_count; // Assign the count of non-ambiguous bases to l_pac (forward strand only)
+        bns.l_pac = packed_base_count; // ALL bases including ambiguous (replaced with random)
         bns.n_seqs = seq_id;
         bns.ambs = current_ambs;
         bns.n_holes = bns.ambs.len() as i32;
         bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
 
-        // NOTE: Unlike C++ bwa-mem2 which appends RC to pac in memory before building BWT,
-        // we store ONLY the forward strand in the .pac file (standard bwa-mem2 disk format).
-        // The RC strand is computed on-the-fly in get_reference_segment() when needed.
-        // BWT is still built on bidirectional text (forward + RC) during index construction.
+        // Write .pac file with C++ bwa-mem2 format (bntseq.cpp lines 340-347)
+        // Format: packed_bases + [optional_zero_byte] + count_byte
         let mut pac_file = File::create(prefix.with_extension("pac"))?;
         pac_file.write_all(&pac_data)?;
 
-        log::info!("Created .pac file: forward_len={}, file_bytes={}",
-                  packed_base_count, pac_data.len());
+        // C++: if (bns->l_pac % 4 == 0) { ct = 0; err_fwrite(&ct, 1, 1, fp); }
+        if bns.l_pac % 4 == 0 {
+            pac_file.write_all(&[0u8])?;
+        }
+
+        // C++: ct = bns->l_pac % 4; err_fwrite(&ct, 1, 1, fp);
+        let remainder = (bns.l_pac % 4) as u8;
+        pac_file.write_all(&[remainder])?;
+
+        log::info!("Created .pac file: l_pac={}, file_bytes={}, metadata_bytes={}",
+                  bns.l_pac, pac_data.len(), if bns.l_pac % 4 == 0 { 2 } else { 1 });
 
         Ok(bns)
     }
