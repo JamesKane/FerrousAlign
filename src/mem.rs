@@ -966,16 +966,23 @@ fn mem_pair(
 
     // Add alignments from read1
     for (i, aln) in alns1.iter().enumerate() {
-        // Get forward strand position
+        // Use forward-strand position directly (aln.pos is always on forward strand)
         let is_rev = (aln.flag & 0x10) != 0;
-        let forward_pos = if is_rev {
-            (l_pac << 1) - 1 - (aln.pos as i64)
-        } else {
-            aln.pos as i64
-        };
+        let pos = aln.pos as i64;
 
-        let pos_key = ((aln.ref_id as u64) << 32) | (forward_pos as u64);
+        let pos_key = ((aln.ref_id as u64) << 32) | (pos as u64);
         let info = ((aln.score as u64) << 32) | ((i as u64) << 2) | ((is_rev as u64) << 1) | 0; // 0 = read1
+
+        // DEBUG: Log positions for first few pairs
+        if pair_id < 3 {
+            log::debug!(
+                "mem_pair: R1[{}]: aln.pos={}, is_rev={}, ref_id={}",
+                i,
+                aln.pos,
+                is_rev,
+                aln.ref_id
+            );
+        }
 
         v.push(AlignmentInfo { pos_key, info });
     }
@@ -983,14 +990,21 @@ fn mem_pair(
     // Add alignments from read2
     for (i, aln) in alns2.iter().enumerate() {
         let is_rev = (aln.flag & 0x10) != 0;
-        let forward_pos = if is_rev {
-            (l_pac << 1) - 1 - (aln.pos as i64)
-        } else {
-            aln.pos as i64
-        };
+        let pos = aln.pos as i64;
 
-        let pos_key = ((aln.ref_id as u64) << 32) | (forward_pos as u64);
+        let pos_key = ((aln.ref_id as u64) << 32) | (pos as u64);
         let info = ((aln.score as u64) << 32) | ((i as u64) << 2) | ((is_rev as u64) << 1) | 1; // 1 = read2
+
+        // DEBUG: Log positions for first few pairs
+        if pair_id < 3 {
+            log::debug!(
+                "mem_pair: R2[{}]: aln.pos={}, is_rev={}, ref_id={}",
+                i,
+                aln.pos,
+                is_rev,
+                aln.ref_id
+            );
+        }
 
         v.push(AlignmentInfo { pos_key, info });
     }
@@ -1038,11 +1052,30 @@ fn mem_pair(
                 // Calculate distance
                 let dist = (v[i].pos_key - v[k].pos_key) as i64;
 
+                // DEBUG: Log distance checks for first few pairs
+                if pair_id < 3 {
+                    log::debug!(
+                        "mem_pair: Checking pair i={}, k={}, dir={}, dist={}, bounds=[{}, {}]",
+                        i,
+                        k,
+                        dir,
+                        dist,
+                        stats[dir].low,
+                        stats[dir].high
+                    );
+                }
+
                 if dist > stats[dir].high as i64 {
+                    if pair_id < 3 {
+                        log::debug!("mem_pair: Distance too far, breaking");
+                    }
                     break; // Too far
                 }
 
                 if dist < stats[dir].low as i64 {
+                    if pair_id < 3 {
+                        log::debug!("mem_pair: Distance too close, continuing");
+                    }
                     if k == 0 {
                         break;
                     }
@@ -1087,6 +1120,14 @@ fn mem_pair(
                     hash,
                 });
 
+                // DEBUG: Log when we find a valid pair
+                if pair_id < 10 {
+                    log::debug!(
+                        "mem_pair: Found valid pair! dir={}, dist={}, score={}",
+                        dir, dist, q
+                    );
+                }
+
                 if k == 0 {
                     break;
                 }
@@ -1098,6 +1139,14 @@ fn mem_pair(
     }
 
     if u.is_empty() {
+        // DEBUG: Log why no pairs were found for first few pairs
+        if pair_id < 10 {
+            log::debug!(
+                "mem_pair: No valid pairs in u array. v.len()={}, y={:?}",
+                v.len(),
+                y
+            );
+        }
         return None; // No valid pairs found
     }
 
@@ -1545,7 +1594,24 @@ fn bootstrap_insert_size_stats(
         if let (Some(aln1), Some(aln2)) = (alns1.first(), alns2.first()) {
             // Only use pairs on same reference
             if aln1.ref_name == aln2.ref_name {
-                position_pairs.push((aln1.pos as i64, aln2.pos as i64));
+                // Convert positions to bidirectional coordinate space [0, 2*l_pac)
+                // Forward strand: [0, l_pac), Reverse strand: [l_pac, 2*l_pac)
+                let is_rev1 = (aln1.flag & 0x10) != 0;
+                let is_rev2 = (aln2.flag & 0x10) != 0;
+
+                let pos1 = if is_rev1 {
+                    (l_pac << 1) - 1 - (aln1.pos as i64)
+                } else {
+                    aln1.pos as i64
+                };
+
+                let pos2 = if is_rev2 {
+                    (l_pac << 1) - 1 - (aln2.pos as i64)
+                } else {
+                    aln2.pos as i64
+                };
+
+                position_pairs.push((pos1, pos2));
             }
         }
     }
@@ -1677,7 +1743,21 @@ fn output_batch_paired(
 
         // Use mem_pair to score paired alignments
         let pair_result = if !alignments1.is_empty() && !alignments2.is_empty() {
-            mem_pair(stats, &alignments1, &alignments2, l_pac, 2, pair_id)
+            let result = mem_pair(stats, &alignments1, &alignments2, l_pac, 2, pair_id);
+
+            // DEBUG: Log mem_pair results
+            if pair_id < 10 {
+                if result.is_some() {
+                    log::debug!("mem_pair SUCCESS for pair {}", pair_id);
+                } else {
+                    log::debug!(
+                        "mem_pair FAIL for pair {}. alns1={}, alns2={}, stats[FR]: low={}, high={}, failed={}",
+                        pair_id, alignments1.len(), alignments2.len(), stats[1].low, stats[1].high, stats[1].failed
+                    );
+                }
+            }
+
+            result
         } else {
             None
         };
@@ -1685,16 +1765,16 @@ fn output_batch_paired(
         // Determine best paired alignment indices and check if properly paired
         let (best_idx1, best_idx2, is_properly_paired) =
             if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
-                let aln1 = &alignments1[idx1];
-                let aln2 = &alignments2[idx2];
-                let same_chr = aln1.ref_name == aln2.ref_name;
-                (idx1, idx2, same_chr)
+                // If mem_pair returned a valid pair, it's properly paired
+                // mem_pair already verified: same chromosome, insert size within bounds, valid orientation
+                (idx1, idx2, true)
             } else if !alignments1.is_empty() && !alignments2.is_empty() {
-                let aln1 = &alignments1[0];
-                let aln2 = &alignments2[0];
-                let same_chr = aln1.ref_name == aln2.ref_name;
-                (0, 0, same_chr)
+                // mem_pair returned None - no valid pair found
+                // Use first alignments but NOT properly paired
+                // (insert size out of bounds, or wrong orientation)
+                (0, 0, false)
             } else {
+                // One or both reads unmapped
                 (0, 0, false)
             };
 
