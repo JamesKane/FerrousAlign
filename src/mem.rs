@@ -470,9 +470,6 @@ fn reader_thread(
         reads_per_batch
     );
 
-    let mut batch_count = 0usize;
-    let mut total_pairs_read = 0usize;
-
     loop {
         // Read batch from both files
         let batch1 = match reader1.read_batch(reads_per_batch) {
@@ -507,30 +504,23 @@ fn reader_thread(
         }
 
         let batch_size = batch1.names.len();
-        total_pairs_read += batch_size;
-        log::debug!("[Reader thread] Batch {}: Read {} read pairs (cumulative: {})",
-                    batch_count, batch_size, total_pairs_read);
+        log::debug!("[Reader thread] Read {} read pairs", batch_size);
 
         // Send batch through channel
-        log::debug!("[Reader thread] Batch {}: Sending to channel...", batch_count);
         if sender.send(Some((batch1, batch2))).is_err() {
-            log::error!("[Reader thread] Batch {}: Channel closed, shutting down", batch_count);
+            log::error!("[Reader thread] Channel closed, shutting down");
             break;
         }
-        log::debug!("[Reader thread] Batch {}: Successfully sent", batch_count);
-        batch_count += 1;
 
         // If this was a partial batch, it's the last one
         if batch_size < reads_per_batch {
-            log::debug!("[Reader thread] Batch {} was partial ({}), sending EOF signal",
-                       batch_count - 1, batch_size);
+            log::debug!("[Reader thread] Final partial batch, shutting down");
             let _ = sender.send(None); // Signal EOF
             break;
         }
     }
 
-    log::debug!("[Reader thread] Exiting - sent {} batches, {} total pairs",
-               batch_count, total_pairs_read);
+    log::debug!("[Reader thread] Exiting");
 }
 
 // Process paired-end reads with parallel batching
@@ -600,7 +590,6 @@ fn process_paired_end(
     log::info!("Phase 1: Bootstrapping insert size statistics from first batch");
 
     // Receive first batch
-    log::debug!("[Main] Waiting for first batch (batch 0)...");
     let first_batch_msg = match receiver.recv() {
         Ok(msg) => msg,
         Err(_) => {
@@ -623,8 +612,6 @@ fn process_paired_end(
     total_reads += first_batch_size * 2;
     total_bases += first_batch_bp;
 
-    log::debug!("[Main] Batch 0: Received {} pairs from channel",
-               first_batch_size);
     log::info!(
         "Read {} sequences ({} bp) [first batch]",
         first_batch_size * 2,
@@ -772,11 +759,10 @@ fn process_paired_end(
 
     loop {
         // Receive batch from reader thread (blocks until batch available)
-        log::debug!("[Main] Waiting for batch {}...", batch_num);
         let batch_msg = match receiver.recv() {
             Ok(msg) => msg,
             Err(_) => {
-                log::debug!("[Main] Reader channel closed (after {} batches)", batch_num);
+                log::debug!("[Main] Reader channel closed");
                 break;
             }
         };
@@ -785,7 +771,7 @@ fn process_paired_end(
         let (batch1, batch2) = match batch_msg {
             Some((b1, b2)) => (b1, b2),
             None => {
-                log::debug!("[Main] Received EOF/error signal from reader (after {} batches)", batch_num);
+                log::debug!("[Main] Received EOF/error signal from reader");
                 break;
             }
         };
@@ -798,8 +784,6 @@ fn process_paired_end(
         total_reads += batch_size * 2;
         total_bases += batch_bp;
 
-        log::debug!("[Main] Batch {}: Received {} pairs from channel (cumulative: {} reads)",
-                   batch_num, batch_size, total_reads);
         log::info!("Read {} sequences ({} bp)", batch_size * 2, batch_bp);
 
         // Process batch in parallel
@@ -1709,16 +1693,6 @@ fn mate_rescue_batch(
         let (name1, seq1, qual1) = batch_seqs1[i];
         let (name2, seq2, qual2) = batch_seqs2[i];
 
-        // DEBUG: Log alignment counts for diagnostic purposes
-        log::debug!(
-            "Pair {}: {} has {} alignments, {} has {} alignments",
-            i,
-            name1,
-            alns1.len(),
-            name2,
-            alns2.len()
-        );
-
         // Try to rescue read2 if read1 has good alignments but read2 doesn't
         if !alns1.is_empty() && alns2.is_empty() && !pac.is_empty() {
             let mate_seq = encode_seq(seq2);
@@ -1771,72 +1745,6 @@ fn output_batch_paired(
         let (name1, seq1, qual1) = &batch_seqs1[pair_idx];
         let (name2, seq2, qual2) = &batch_seqs2[pair_idx];
         let pair_id = starting_pair_id + pair_idx as u64;
-
-        // DEBUG: Log pair processing for diagnostic purposes
-        log::debug!(
-            "Processing pair {}: {} ({} alns), {} ({} alns)",
-            pair_id,
-            name1,
-            alignments1.len(),
-            name2,
-            alignments2.len()
-        );
-
-        // ===  SCORE THRESHOLD FILTERING (matching C++ bwa-mem2 behavior) ===
-        // Filter alignments by score threshold. If ALL alignments filtered,
-        // create one unmapped alignment to ensure read is output.
-        // This matches C++ bwa-mem2: if (aa.n == 0) { create unmapped record }
-        alignments1.retain(|a| a.score >= opt.t);
-        alignments2.retain(|a| a.score >= opt.t);
-
-        // If all alignments filtered, create unmapped alignment
-        if alignments1.is_empty() {
-            log::debug!("{}: All alignments filtered by score threshold, creating unmapped", name1);
-            alignments1.push(align::Alignment {
-                query_name: name1.to_string(),
-                flag: 0x4, // Unmapped (paired flags will be set later)
-                ref_name: "*".to_string(),
-                ref_id: 0,
-                pos: 0,
-                mapq: 0,
-                score: 0,
-                cigar: Vec::new(),
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                seq: String::from_utf8_lossy(seq1).to_string(),
-                qual: qual1.to_string(),
-                tags: Vec::new(),
-                query_start: 0,
-                query_end: 0,
-                seed_coverage: 0,
-                hash: 0,
-            });
-        }
-
-        if alignments2.is_empty() {
-            log::debug!("{}: All alignments filtered by score threshold, creating unmapped", name2);
-            alignments2.push(align::Alignment {
-                query_name: name2.to_string(),
-                flag: 0x4, // Unmapped (paired flags will be set later)
-                ref_name: "*".to_string(),
-                ref_id: 0,
-                pos: 0,
-                mapq: 0,
-                score: 0,
-                cigar: Vec::new(),
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                seq: String::from_utf8_lossy(seq2).to_string(),
-                qual: qual2.to_string(),
-                tags: Vec::new(),
-                query_start: 0,
-                query_end: 0,
-                seed_coverage: 0,
-                hash: 0,
-            });
-        }
 
         // Use mem_pair to score paired alignments
         let pair_result = if !alignments1.is_empty() && !alignments2.is_empty() {
@@ -1976,26 +1884,23 @@ fn output_batch_paired(
 
         // Set flags and mate information for read1
         for (idx, alignment) in alignments1.iter_mut().enumerate() {
-            let is_unmapped = alignment.flag & 0x4 != 0;
+            if alignment.flag & 0x4 != 0 {
+                continue;
+            }
 
-            // ALWAYS set paired flag (0x1) - even for unmapped reads
             alignment.flag |= 0x1;
 
-            // ALWAYS set first in pair flag (0x40) - even for unmapped reads
-            alignment.flag |= 0x40;
-
-            // Only set proper pair flag for mapped reads in proper pairs
-            if !is_unmapped && is_properly_paired && idx == best_idx1 {
+            if is_properly_paired && idx == best_idx1 {
                 alignment.flag |= 0x2;
             }
 
-            // Set mate unmapped flag if mate is unmapped
+            alignment.flag |= 0x40;
+
             if mate2_ref == "*" {
                 alignment.flag |= 0x8;
             }
 
-            // Only set mate position and TLEN for mapped reads
-            if !is_unmapped && mate2_ref != "*" {
+            if mate2_ref != "*" {
                 alignment.rnext = if alignment.ref_name == mate2_ref {
                     "=".to_string()
                 } else {
@@ -2032,26 +1937,23 @@ fn output_batch_paired(
 
         // Set flags and mate information for read2
         for (idx, alignment) in alignments2.iter_mut().enumerate() {
-            let is_unmapped = alignment.flag & 0x4 != 0;
+            if alignment.flag & 0x4 != 0 {
+                continue;
+            }
 
-            // ALWAYS set paired flag (0x1) - even for unmapped reads
             alignment.flag |= 0x1;
 
-            // ALWAYS set second in pair flag (0x80) - even for unmapped reads
-            alignment.flag |= 0x80;
-
-            // Only set proper pair flag for mapped reads in proper pairs
-            if !is_unmapped && is_properly_paired && idx == best_idx2 {
+            if is_properly_paired && idx == best_idx2 {
                 alignment.flag |= 0x2;
             }
 
-            // Set mate unmapped flag if mate is unmapped
+            alignment.flag |= 0x80;
+
             if mate1_ref == "*" {
                 alignment.flag |= 0x8;
             }
 
-            // Only set mate position and TLEN for mapped reads
-            if !is_unmapped && mate1_ref != "*" {
+            if mate1_ref != "*" {
                 alignment.rnext = if alignment.ref_name == mate1_ref {
                     "=".to_string()
                 } else {
@@ -2100,63 +2002,51 @@ fn output_batch_paired(
         };
 
         // Write alignments for read1
-        for (idx, mut alignment) in alignments1.into_iter().enumerate() {
+        for mut alignment in alignments1 {
             let is_unmapped = alignment.flag & 0x4 != 0;
-            // Output unmapped reads always, or reads meeting score threshold
+            let is_secondary = alignment.flag & 0x100 != 0;
+            // Only output unmapped reads or alignments that meet score threshold (matching C++ bwa-mem2)
             let should_output = is_unmapped || alignment.score >= opt.t;
 
-            if !should_output {
-                continue;  // Skip low-scoring alignments
-            }
+            if should_output {
+                if let Some(ref rg) = rg_id {
+                    alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                }
 
-            // Mark non-best alignments as secondary (0x100)
-            if idx != best_idx1 {
-                alignment.flag |= 0x100;  // Secondary alignment flag
-            }
+                if !mate2_cigar.is_empty() {
+                    alignment
+                        .tags
+                        .push(("MC".to_string(), format!("Z:{}", mate2_cigar)));
+                }
 
-            if let Some(ref rg) = rg_id {
-                alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                let sam_record = alignment.to_sam_string();
+                writeln!(writer, "{}", sam_record)?;
+                records_written += 1;
             }
-
-            if !mate2_cigar.is_empty() {
-                alignment
-                    .tags
-                    .push(("MC".to_string(), format!("Z:{}", mate2_cigar)));
-            }
-
-            let sam_record = alignment.to_sam_string();
-            writeln!(writer, "{}", sam_record)?;
-            records_written += 1;
         }
 
         // Write alignments for read2
-        for (idx, mut alignment) in alignments2.into_iter().enumerate() {
+        for mut alignment in alignments2 {
             let is_unmapped = alignment.flag & 0x4 != 0;
-            // Output unmapped reads always, or reads meeting score threshold
+            let is_secondary = alignment.flag & 0x100 != 0;
+            // Only output unmapped reads or alignments that meet score threshold (matching C++ bwa-mem2)
             let should_output = is_unmapped || alignment.score >= opt.t;
 
-            if !should_output {
-                continue;  // Skip low-scoring alignments
-            }
+            if should_output {
+                if let Some(ref rg) = rg_id {
+                    alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                }
 
-            // Mark non-best alignments as secondary (0x100)
-            if idx != best_idx2 {
-                alignment.flag |= 0x100;  // Secondary alignment flag
-            }
+                if !mate1_cigar.is_empty() {
+                    alignment
+                        .tags
+                        .push(("MC".to_string(), format!("Z:{}", mate1_cigar)));
+                }
 
-            if let Some(ref rg) = rg_id {
-                alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                let sam_record = alignment.to_sam_string();
+                writeln!(writer, "{}", sam_record)?;
+                records_written += 1;
             }
-
-            if !mate1_cigar.is_empty() {
-                alignment
-                    .tags
-                    .push(("MC".to_string(), format!("Z:{}", mate1_cigar)));
-            }
-
-            let sam_record = alignment.to_sam_string();
-            writeln!(writer, "{}", sam_record)?;
-            records_written += 1;
         }
     }
 

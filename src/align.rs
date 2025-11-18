@@ -169,8 +169,13 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     let debug_enabled = log::log_enabled!(log::Level::Trace);
 
     if debug_enabled {
-        log::trace!("backward_ext: input smem(k={}, l={}, s={}), a={}",
-                    smem.k, smem.l, smem.s, a);
+        log::trace!(
+            "backward_ext: input smem(k={}, l={}, s={}), a={}",
+            smem.k,
+            smem.l,
+            smem.s,
+            a
+        );
     }
 
     let mut k = [0i64; 4];
@@ -190,22 +195,34 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
         s[b] = occ_ep[b] - occ_sp[b];
 
         if debug_enabled && b == a as usize {
-            log::trace!("backward_ext: base {}: sp={}, ep={}, occ_sp={}, occ_ep={}, k={}, s={}",
-                        b, sp, ep, occ_sp[b], occ_ep[b], k[b], s[b]);
+            log::trace!(
+                "backward_ext: base {}: sp={}, ep={}, occ_sp={}, occ_ep={}, k={}, s={}",
+                b,
+                sp,
+                ep,
+                occ_sp[b],
+                occ_ep[b],
+                k[b],
+                s[b]
+            );
         }
     }
 
     // Sentinel handling (matching C++ lines 1041-1042)
     let sentinel_offset = if smem.k <= bwa_idx.sentinel_index as u64
-        && (smem.k + smem.s) > bwa_idx.sentinel_index as u64 {
+        && (smem.k + smem.s) > bwa_idx.sentinel_index as u64
+    {
         1i64
     } else {
         0i64
     };
 
     if debug_enabled {
-        log::trace!("backward_ext: sentinel_offset={}, sentinel_index={}",
-                    sentinel_offset, bwa_idx.sentinel_index);
+        log::trace!(
+            "backward_ext: sentinel_offset={}, sentinel_index={}",
+            sentinel_offset,
+            bwa_idx.sentinel_index
+        );
     }
 
     // CRITICAL: Cumulative sum computation for l[] (matching C++ lines 1043-1046)
@@ -217,12 +234,27 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     l[0] = l[1] + s[1];
 
     if debug_enabled {
-        log::trace!("backward_ext: cumulative l[] = [{}, {}, {}, {}]",
-                    l[0], l[1], l[2], l[3]);
-        log::trace!("backward_ext: k[] = [{}, {}, {}, {}]",
-                    k[0], k[1], k[2], k[3]);
-        log::trace!("backward_ext: s[] = [{}, {}, {}, {}]",
-                    s[0], s[1], s[2], s[3]);
+        log::trace!(
+            "backward_ext: cumulative l[] = [{}, {}, {}, {}]",
+            l[0],
+            l[1],
+            l[2],
+            l[3]
+        );
+        log::trace!(
+            "backward_ext: k[] = [{}, {}, {}, {}]",
+            k[0],
+            k[1],
+            k[2],
+            k[3]
+        );
+        log::trace!(
+            "backward_ext: s[] = [{}, {}, {}, {}]",
+            s[0],
+            s[1],
+            s[2],
+            s[3]
+        );
     }
 
     // Update SMEM with results for base 'a' (matching C++ lines 1048-1050)
@@ -231,8 +263,13 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     smem.s = s[a as usize] as u64;
 
     if debug_enabled {
-        log::trace!("backward_ext: output smem(k={}, l={}, s={}) for base {}",
-                    smem.k, smem.l, smem.s, a);
+        log::trace!(
+            "backward_ext: output smem(k={}, l={}, s={}) for base {}",
+            smem.k,
+            smem.l,
+            smem.s,
+            a
+        );
     }
 
     smem
@@ -252,8 +289,13 @@ pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
     let debug_enabled = log::log_enabled!(log::Level::Trace);
 
     if debug_enabled {
-        log::trace!("forward_ext: input smem(k={}, l={}, s={}), a={}",
-                    smem.k, smem.l, smem.s, a);
+        log::trace!(
+            "forward_ext: input smem(k={}, l={}, s={}), a={}",
+            smem.k,
+            smem.l,
+            smem.s,
+            a
+        );
     }
 
     // Step 1: Swap k and l (lines 547-548)
@@ -262,16 +304,23 @@ pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
     smem_swapped.l = smem.k;
 
     if debug_enabled {
-        log::trace!("forward_ext: after swap smem_swapped(k={}, l={})",
-                    smem_swapped.k, smem_swapped.l);
+        log::trace!(
+            "forward_ext: after swap smem_swapped(k={}, l={})",
+            smem_swapped.k,
+            smem_swapped.l
+        );
     }
 
     // Step 2: Backward extension with complement base (line 549)
     let mut result = backward_ext(bwa_idx, smem_swapped, 3 - a);
 
     if debug_enabled {
-        log::trace!("forward_ext: after backward_ext result(k={}, l={}, s={})",
-                    result.k, result.l, result.s);
+        log::trace!(
+            "forward_ext: after backward_ext result(k={}, l={}, s={})",
+            result.k,
+            result.l,
+            result.s
+        );
     }
 
     // Step 3: Swap k and l back (lines 552-553)
@@ -282,8 +331,12 @@ pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
     result.l = k_temp;
 
     if debug_enabled {
-        log::trace!("forward_ext: after swap back result(k={}, l={}, s={})",
-                    result.k, result.l, result.s);
+        log::trace!(
+            "forward_ext: after swap back result(k={}, l={}, s={})",
+            result.k,
+            result.l,
+            result.s
+        );
     }
 
     result
@@ -315,7 +368,7 @@ pub fn reverse_complement_code(code: u8) -> u8 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Chain {
     pub score: i32,
     pub seeds: Vec<usize>, // Indices of seeds in the original seeds vector
@@ -324,6 +377,8 @@ pub struct Chain {
     pub ref_start: u64,
     pub ref_end: u64,
     pub is_rev: bool,
+    pub weight: i32, // Chain weight (seed coverage), calculated by mem_chain_weight
+    pub kept: i32,   // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
 }
 
 #[derive(Debug)]
@@ -343,15 +398,39 @@ pub struct Alignment {
     pub qual: String,          // ASCII of Phred-scaled base quality+33
     // Optional SAM tags
     pub tags: Vec<(String, String)>, // Vector of (tag_name, tag_value) pairs
+    // Internal fields for alignment selection (not output to SAM)
+    pub(crate) query_start: i32, // Query start position (0-based)
+    pub(crate) query_end: i32,   // Query end position (exclusive)
+    pub(crate) seed_coverage: i32, // Length of region covered by seeds (for MAPQ)
+    pub(crate) hash: u64,        // Hash for deterministic tie-breaking
 }
 
 impl Alignment {
     /// Get CIGAR string as a formatted string (e.g., "50M2I48M")
+    /// Returns "*" for empty CIGAR (unmapped reads per SAM spec)
     pub fn cigar_string(&self) -> String {
+        if self.cigar.is_empty() {
+            "*".to_string()
+        } else {
+            self.cigar
+                .iter()
+                .map(|&(op, len)| format!("{}{}", len, op as char))
+                .collect()
+        }
+    }
+
+    /// Calculate the aligned length on the reference from CIGAR
+    /// Sums M, D, N, =, X operations (operations that consume reference bases)
+    pub fn reference_length(&self) -> i32 {
         self.cigar
             .iter()
-            .map(|&(op, len)| format!("{}{}", len, op as char))
-            .collect()
+            .filter_map(|&(op, len)| {
+                match op as char {
+                    'M' | 'D' | 'N' | '=' | 'X' => Some(len),
+                    _ => None,
+                }
+            })
+            .sum()
     }
 
     pub fn to_sam_string(&self) -> String {
@@ -367,7 +446,8 @@ impl Alignment {
         // Matching bwa-mem2 mem_aln2sam() behavior (bwamem.cpp:1706-1716)
         let (output_seq, output_qual) = if self.flag & 0x10 != 0 {
             // Reverse strand: reverse complement the sequence and reverse the quality
-            let rev_comp_seq: String = self.seq
+            let rev_comp_seq: String = self
+                .seq
                 .chars()
                 .rev()
                 .map(|c| match c {
@@ -411,6 +491,485 @@ impl Alignment {
         }
 
         sam_line
+    }
+
+    /// Calculate the aligned length on the query from CIGAR
+    /// Sums M, I, S, =, X operations (operations that consume query bases)
+    pub fn query_length(&self) -> i32 {
+        self.cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                match op as char {
+                    'M' | 'I' | 'S' | '=' | 'X' => Some(len),
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+
+    /// Calculate edit distance (NM tag) from CIGAR string
+    /// NM = number of mismatches + insertions + deletions
+    /// Approximation: counts I, D, X operations (M operations may contain mismatches)
+    /// For exact NM, would need to compare query and reference sequences
+    pub fn calculate_edit_distance(&self) -> i32 {
+        self.cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                match op as char {
+                    'I' | 'D' | 'X' => Some(len), // Count indels and explicit mismatches
+                    'M' => {
+                        // M includes both matches and mismatches
+                        // Approximate as 0 for now (would need sequence comparison for exact count)
+                        // In practice, bwa-mem2 calculates this from alignment score
+                        None
+                    }
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+
+    /// Generate XA tag entry for this alignment (alternative alignment format)
+    /// Format: RNAME,STRAND+POS,CIGAR,NM
+    /// Example: chr1,+1000,50M,2
+    pub fn to_xa_entry(&self) -> String {
+        let strand = if self.flag & 0x10 != 0 { '-' } else { '+' };
+        let pos = self.pos + 1; // XA uses 1-based position
+        let cigar = self.cigar_string();
+        let nm = self.calculate_edit_distance();
+
+        format!("{},{}{},{},{}", self.ref_name, strand, pos, cigar, nm)
+    }
+}
+
+/// Hash function for deterministic tie-breaking (matches C++ hash_64)
+/// Used in bwa-mem2 for stable sorting when scores are equal
+fn hash_64(key: u64) -> u64 {
+    let mut key = key;
+    key = (!key).wrapping_add(key << 21);
+    key = key ^ (key >> 24);
+    key = key.wrapping_add(key << 3).wrapping_add(key << 8);
+    key = key ^ (key >> 14);
+    key = key.wrapping_add(key << 2).wrapping_add(key << 4);
+    key = key ^ (key >> 28);
+    key = key.wrapping_add(key << 31);
+    key
+}
+
+/// Check if two alignments overlap significantly on the query sequence
+/// Returns true if overlap >= mask_level * min_alignment_length
+/// Implements C++ mem_mark_primary_se_core logic (bwamem.cpp:1392-1418)
+fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
+    // Calculate query bounds
+    let a1_qb = a1.query_start;
+    let a1_qe = a1.query_end;
+    let a2_qb = a2.query_start;
+    let a2_qe = a2.query_end;
+
+    // Find overlap region
+    let b_max = a1_qb.max(a2_qb);
+    let e_min = a1_qe.min(a2_qe);
+
+    if e_min <= b_max {
+        return false; // No overlap
+    }
+
+    let overlap = e_min - b_max;
+    let min_len = (a1_qe - a1_qb).min(a2_qe - a2_qb);
+
+    // Overlap is significant if >= mask_level * min_length
+    overlap >= (min_len as f32 * mask_level) as i32
+}
+
+/// Calculate MAPQ (mapping quality) for an alignment
+/// Implements C++ mem_approx_mapq_se (bwamem.cpp:1470-1494)
+fn calculate_mapq(
+    score: i32,
+    sub_score: i32,
+    seed_coverage: i32,
+    sub_count: i32,
+    match_score: i32,
+    mismatch_penalty: i32,
+    opt: &MemOpt,
+) -> u8 {
+    const MEM_MAPQ_COEF: f64 = 30.0;
+    const MEM_MAPQ_MAX: u8 = 60;
+
+    // Use sub_score, or min_seed_len * match_score as minimum
+    let sub = if sub_score > 0 {
+        sub_score
+    } else {
+        opt.min_seed_len * match_score
+    };
+
+    // Return 0 if secondary hit is >= best hit
+    if sub >= score {
+        return 0;
+    }
+
+    // Calculate alignment length (approximate from seed coverage)
+    let l = seed_coverage;
+
+    // Calculate sequence identity
+    // identity = 1 - (l * a - score) / (a + b) / l
+    let identity = 1.0 - ((l * match_score - score) as f64)
+        / ((match_score + mismatch_penalty) as f64)
+        / (l as f64);
+
+    if score == 0 {
+        return 0;
+    }
+
+    // Traditional MAPQ formula (default when mapQ_coef_len = 0)
+    // mapq = 30.0 * (1 - sub/score) * ln(seed_coverage)
+    let mut mapq = (MEM_MAPQ_COEF
+        * (1.0 - (sub as f64) / (score as f64))
+        * (seed_coverage as f64).ln()
+        + 0.499) as i32;
+
+    // Apply identity penalty if < 95%
+    if identity < 0.95 {
+        mapq = (mapq as f64 * identity * identity + 0.499) as i32;
+    }
+
+    // Penalty for multiple suboptimal alignments
+    // mapq -= ln(sub_n+1) * 4.343
+    if sub_count > 0 {
+        mapq -= (((sub_count + 1) as f64).ln() * 4.343) as i32;
+    }
+
+    // Cap at max and floor at 0
+    if mapq > MEM_MAPQ_MAX as i32 {
+        mapq = MEM_MAPQ_MAX as i32;
+    }
+    if mapq < 0 {
+        mapq = 0;
+    }
+
+    mapq as u8
+}
+
+/// Calculate chain weight based on seed coverage
+/// Implements C++ mem_chain_weight (bwamem.cpp:429-448)
+///
+/// Weight = minimum of query coverage and reference coverage
+/// This accounts for non-overlapping seed lengths in the chain
+fn calculate_chain_weight(chain: &Chain, seeds: &[Seed]) -> i32 {
+    if chain.seeds.is_empty() {
+        return 0;
+    }
+
+    // Calculate query coverage (non-overlapping seed lengths on query)
+    let mut query_cov = 0;
+    let mut last_qe = -1i32;
+
+    for &seed_idx in &chain.seeds {
+        let seed = &seeds[seed_idx];
+        let qb = seed.query_pos;
+        let qe = seed.query_pos + seed.len;
+
+        if qb > last_qe {
+            // No overlap with previous seed
+            query_cov += seed.len;
+        } else if qe > last_qe {
+            // Partial overlap
+            query_cov += qe - last_qe;
+        }
+        // else: completely overlapped, no contribution
+
+        last_qe = last_qe.max(qe);
+    }
+
+    // Calculate reference coverage (non-overlapping seed lengths on reference)
+    let mut ref_cov = 0;
+    let mut last_re = 0u64;
+
+    for &seed_idx in &chain.seeds {
+        let seed = &seeds[seed_idx];
+        let rb = seed.ref_pos;
+        let re = seed.ref_pos + seed.len as u64;
+
+        if rb > last_re {
+            // No overlap
+            ref_cov += seed.len;
+        } else if re > last_re {
+            // Partial overlap
+            ref_cov += (re - last_re) as i32;
+        }
+
+        last_re = last_re.max(re);
+    }
+
+    // Weight = min(query_cov, ref_cov)
+    query_cov.min(ref_cov)
+}
+
+/// Filter chains using drop_ratio and score thresholds
+/// Implements C++ mem_chain_flt (bwamem.cpp:506-624)
+///
+/// Algorithm:
+/// 1. Calculate weight for each chain
+/// 2. Sort chains by weight (descending)
+/// 3. Filter by min_chain_weight
+/// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
+/// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
+fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<Chain> {
+    if chains.is_empty() {
+        return Vec::new();
+    }
+
+    // Calculate weights for all chains
+    for chain in chains.iter_mut() {
+        chain.weight = calculate_chain_weight(chain, seeds);
+        chain.kept = 0; // Initially mark as discarded
+    }
+
+    // Sort chains by weight (descending)
+    chains.sort_by(|a, b| b.weight.cmp(&a.weight));
+
+    // Filter by minimum weight
+    let mut kept_chains: Vec<Chain> = Vec::new();
+
+    for i in 0..chains.len() {
+        let chain = &chains[i];
+
+        // Skip if below minimum weight
+        if chain.weight < opt.min_chain_weight {
+            continue;
+        }
+
+        // Apply drop_ratio threshold
+        if !kept_chains.is_empty() {
+            let best_weight = kept_chains[0].weight;
+            let weight_threshold = (best_weight as f32 * opt.drop_ratio) as i32;
+            let weight_diff = best_weight - chain.weight;
+
+            // Drop if weight < best_weight * drop_ratio AND difference >= 2 * min_seed_len
+            if chain.weight < weight_threshold && weight_diff >= (opt.min_seed_len << 1) {
+                log::debug!(
+                    "Chain {} dropped: weight={} < threshold={} (best={} * drop_ratio={})",
+                    i,
+                    chain.weight,
+                    weight_threshold,
+                    best_weight,
+                    opt.drop_ratio
+                );
+                continue;
+            }
+        }
+
+        // Check overlap with already-kept chains
+        let mut overlaps = false;
+        let mut chain_copy = chain.clone();
+
+        for kept_chain in &kept_chains {
+            // Check if chains overlap on query
+            let qb_max = chain.query_start.max(kept_chain.query_start);
+            let qe_min = chain.query_end.min(kept_chain.query_end);
+
+            if qe_min > qb_max {
+                // Chains overlap on query
+                let overlap = qe_min - qb_max;
+                let min_len = (chain.query_end - chain.query_start)
+                    .min(kept_chain.query_end - kept_chain.query_start);
+
+                // Check if overlap is significant
+                if overlap >= (min_len as f32 * opt.mask_level) as i32 {
+                    overlaps = true;
+                    chain_copy.kept = 1; // Shadowed by better chain
+                    break;
+                }
+            }
+        }
+
+        if !overlaps {
+            chain_copy.kept = 3; // Primary chain
+        }
+
+        kept_chains.push(chain_copy);
+
+        // Limit number of chains to extend
+        if kept_chains.len() >= opt.max_chain_extend as usize {
+            log::debug!(
+                "Reached max_chain_extend={}, stopping chain filtering",
+                opt.max_chain_extend
+            );
+            break;
+        }
+    }
+
+    log::debug!(
+        "Chain filtering: {} input chains → {} kept chains ({} primary, {} shadowed)",
+        chains.len(),
+        kept_chains.len(),
+        kept_chains.iter().filter(|c| c.kept == 3).count(),
+        kept_chains.iter().filter(|c| c.kept == 1).count()
+    );
+
+    kept_chains
+}
+
+/// Generate XA tag for alternative alignments
+/// Implements C++ mem_gen_alt (bwamem_extra.cpp:130-183)
+///
+/// Algorithm:
+/// 1. Find secondary alignments for each primary
+/// 2. Filter by score: secondary_score >= primary_score * xa_drop_ratio
+/// 3. Limit count: max_xa_hits (5) or max_xa_hits_alt (200)
+/// 4. Format as XA:Z:chr1,+100,50M,2;chr2,-200,48M1D2M,3;
+///
+/// Returns: HashMap<read_name, XA_tag_string>
+fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+
+    let mut xa_tags: HashMap<String, String> = HashMap::new();
+
+    if alignments.is_empty() {
+        return xa_tags;
+    }
+
+    // Group alignments by query name
+    let mut by_read: HashMap<String, Vec<&Alignment>> = HashMap::new();
+    for aln in alignments {
+        by_read.entry(aln.query_name.clone())
+            .or_insert_with(Vec::new)
+            .push(aln);
+    }
+
+    // For each read, generate XA tag from secondary alignments
+    for (read_name, read_alns) in by_read.iter() {
+        // Find primary alignment (flag & 0x100 == 0)
+        let primary = read_alns.iter().find(|a| a.flag & 0x100 == 0);
+
+        if primary.is_none() {
+            continue; // No primary alignment
+        }
+
+        let primary_score = primary.unwrap().score;
+        let xa_threshold = (primary_score as f32 * opt.xa_drop_ratio) as i32;
+
+        // Collect secondary alignments that pass score threshold
+        let mut secondaries: Vec<&Alignment> = read_alns.iter()
+            .filter(|a| {
+                (a.flag & 0x100 != 0) && // Is secondary
+                (a.score >= xa_threshold) // Score passes threshold
+            })
+            .cloned()
+            .collect();
+
+        if secondaries.is_empty() {
+            continue; // No qualifying secondaries
+        }
+
+        // Sort secondaries by score (descending) for consistent output
+        secondaries.sort_by(|a, b| b.score.cmp(&a.score));
+
+        // Apply hit limit (max_xa_hits or max_xa_hits_alt)
+        // TODO: Check if any alignment is to ALT contig for max_xa_hits_alt
+        let max_hits = opt.max_xa_hits as usize;
+        if secondaries.len() > max_hits {
+            secondaries.truncate(max_hits);
+        }
+
+        // Format as XA tag: XA:Z:chr1,+100,50M,2;chr2,-200,48M,3;
+        let xa_entries: Vec<String> = secondaries.iter()
+            .map(|aln| aln.to_xa_entry())
+            .collect();
+
+        if !xa_entries.is_empty() {
+            // Return just the value portion (without XA:Z: prefix)
+            // to_sam_string() will add the tag name and type
+            let xa_tag = format!("Z:{};", xa_entries.join(";"));
+            xa_tags.insert(read_name.clone(), xa_tag);
+        }
+    }
+
+    log::debug!(
+        "Generated XA tags for {} reads (from {} total alignments, xa_drop_ratio={}, max_xa_hits={})",
+        xa_tags.len(),
+        alignments.len(),
+        opt.xa_drop_ratio,
+        opt.max_xa_hits
+    );
+
+    xa_tags
+}
+
+/// Mark secondary alignments and calculate MAPQ values
+/// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
+///
+/// Algorithm:
+/// 1. Sort alignments by score (descending), then by hash
+/// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
+/// 3. If overlap >= mask_level, mark as secondary (set 0x100 flag)
+/// 4. Calculate MAPQ based on score difference and overlap count
+fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
+    if alignments.is_empty() {
+        return;
+    }
+
+    let mask_level = opt.mask_level;
+
+    // Calculate score gap threshold for sub_count
+    // tmp = max(a+b, o_del+e_del, o_ins+e_ins)
+    let mut tmp = opt.a + opt.b;
+    tmp = tmp.max(opt.o_del + opt.e_del);
+    tmp = tmp.max(opt.o_ins + opt.e_ins);
+
+    // Track which alignments are primary (not marked secondary)
+    let mut primary_indices: Vec<usize> = Vec::new();
+    primary_indices.push(0); // First alignment is always primary
+
+    // Track sub-scores and sub-counts for MAPQ calculation
+    let mut sub_scores: Vec<i32> = vec![0; alignments.len()];
+    let mut sub_counts: Vec<i32> = vec![0; alignments.len()];
+
+    // Check each alignment against existing primaries for overlap
+    for i in 1..alignments.len() {
+        let mut is_secondary = false;
+
+        for &j in &primary_indices {
+            if alignments_overlap(&alignments[i], &alignments[j], mask_level) {
+                // Track sub-score for MAPQ calculation
+                if sub_scores[j] == 0 {
+                    sub_scores[j] = alignments[i].score;
+                }
+
+                // Count close suboptimal hits for MAPQ penalty
+                if alignments[j].score - alignments[i].score <= tmp {
+                    sub_counts[j] += 1;
+                }
+
+                // Mark as secondary
+                alignments[i].flag |= 0x100; // Set secondary flag
+                is_secondary = true;
+                break;
+            }
+        }
+
+        // If no overlap with any primary, add as new primary
+        if !is_secondary {
+            primary_indices.push(i);
+        }
+    }
+
+    // Calculate MAPQ for all alignments
+    for i in 0..alignments.len() {
+        if alignments[i].flag & 0x100 == 0 {
+            // Primary alignment: calculate MAPQ
+            alignments[i].mapq = calculate_mapq(
+                alignments[i].score,
+                sub_scores[i],
+                alignments[i].seed_coverage,
+                sub_counts[i],
+                opt.a,
+                opt.b,
+                opt,
+            );
+        } else {
+            // Secondary alignment: MAPQ = 0
+            alignments[i].mapq = 0;
+        }
     }
 }
 
@@ -465,7 +1024,7 @@ fn estimate_divergence_score(query_len: usize, target_len: usize) -> f64 {
 /// This reduces batch synchronization penalty for divergent sequences while
 /// maximizing SIMD utilization for similar sequences.
 fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
-    use crate::simd_abstraction::{detect_optimal_simd_engine, SimdEngineType};
+    use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 
     if jobs.is_empty() {
         return 16; // Default
@@ -475,10 +1034,10 @@ fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
     let engine = detect_optimal_simd_engine();
     let (max_batch, standard_batch) = match engine {
         #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => (64, 32),  // AVX-512: 64-way max, 32-way standard
+        SimdEngineType::Engine512 => (64, 32), // AVX-512: 64-way max, 32-way standard
         #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => (32, 16),  // AVX2: 32-way max, 16-way standard
-        SimdEngineType::Engine128 => (16, 16),  // SSE2/NEON: 16-way
+        SimdEngineType::Engine256 => (32, 16), // AVX2: 32-way max, 16-way standard
+        SimdEngineType::Engine128 => (16, 16), // SSE2/NEON: 16-way
     };
 
     // Calculate average divergence score for this batch of jobs
@@ -588,15 +1147,24 @@ pub(crate) fn execute_adaptive_alignments(
         return Vec::new();
     }
 
-    // Partition jobs by estimated divergence
-    let (low_div_jobs, high_div_jobs) = partition_jobs_by_divergence(jobs);
+    // SIMD routing: Use SIMD for all jobs (length-based heuristic was flawed)
+    // The previous divergence-based routing incorrectly compared query vs target lengths,
+    // but target is always larger due to alignment margins (~100bp each side).
+    // This caused ALL jobs to route to scalar (0% SIMD utilization).
+    // SIMD handles variable lengths efficiently with padding, so just use it for everything.
+    let (low_div_jobs, high_div_jobs) = (jobs.to_vec(), Vec::new());
 
-    // Calculate average divergence for logging
+    // Calculate average divergence and length statistics for logging
     let avg_divergence: f64 = jobs
         .iter()
         .map(|job| estimate_divergence_score(job.query.len(), job.target.len()))
         .sum::<f64>()
         / jobs.len() as f64;
+
+    let avg_query_len: f64 =
+        jobs.iter().map(|job| job.query.len()).sum::<usize>() as f64 / jobs.len() as f64;
+    let avg_target_len: f64 =
+        jobs.iter().map(|job| job.target.len()).sum::<usize>() as f64 / jobs.len() as f64;
 
     // Log routing statistics (INFO level - shows in default verbosity)
     log::info!(
@@ -607,6 +1175,14 @@ pub(crate) fn execute_adaptive_alignments(
         low_div_jobs.len(),
         low_div_jobs.len() as f64 / jobs.len() as f64 * 100.0,
         avg_divergence
+    );
+
+    // Show length statistics to understand why routing fails
+    log::info!(
+        "  → avg_query={:.1}bp, avg_target={:.1}bp, length_diff={:.1}%",
+        avg_query_len,
+        avg_target_len,
+        ((avg_query_len - avg_target_len).abs() / avg_query_len.max(avg_target_len) * 100.0)
     );
 
     // Create result vector with correct size
@@ -636,28 +1212,34 @@ pub(crate) fn execute_adaptive_alignments(
         Vec::new()
     };
 
-    // Merge results back in original order
-    let mut low_idx = 0;
-    let mut high_idx = 0;
+    // Since we route everything to SIMD now (high_div_jobs is always empty),
+    // just return the SIMD results directly
+    if high_div_results.is_empty() {
+        // All jobs went to SIMD - return directly (common case now)
+        low_div_results
+    } else {
+        // Mixed routing (should not happen with current logic, but keep for safety)
+        let mut low_idx = 0;
+        let mut high_idx = 0;
 
-    for (original_idx, job) in jobs.iter().enumerate() {
-        let div_score = estimate_divergence_score(job.query.len(), job.target.len());
-        let result = if div_score > 0.7 {
-            // High divergence - get from scalar results
-            let res = high_div_results[high_idx].clone();
-            high_idx += 1;
-            res
-        } else {
-            // Low divergence - get from SIMD results
-            let res = low_div_results[low_idx].clone();
-            low_idx += 1;
-            res
-        };
+        for (original_idx, job) in jobs.iter().enumerate() {
+            let div_score = estimate_divergence_score(job.query.len(), job.target.len());
+            let result = if div_score > 0.7 && high_idx < high_div_results.len() {
+                // High divergence - get from scalar results
+                let res = high_div_results[high_idx].clone();
+                high_idx += 1;
+                res
+            } else {
+                // Low divergence - get from SIMD results
+                let res = low_div_results[low_idx].clone();
+                low_idx += 1;
+                res
+            };
 
-        all_results[original_idx] = result;
+            all_results[original_idx] = result;
+        }
+        all_results
     }
-
-    all_results
 }
 
 /// Execute batched alignments with configurable batch size
@@ -697,6 +1279,34 @@ fn execute_batched_alignments_with_size(
         for (i, result) in results.iter().enumerate() {
             if i < batch_jobs.len() {
                 all_results[batch_start + i] = (result.score.score, result.cigar.clone());
+
+                // Detect pathological CIGARs in SIMD path
+                let total_insertions: i32 = result.cigar.iter()
+                    .filter(|(op, _)| *op == b'I')
+                    .map(|(_, count)| count)
+                    .sum();
+                let total_deletions: i32 = result.cigar.iter()
+                    .filter(|(op, _)| *op == b'D')
+                    .map(|(_, count)| count)
+                    .sum();
+
+                if total_insertions > 10 || total_deletions > 5 {
+                    let job = &batch_jobs[i];
+                    // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
+                    log::warn!(
+                        "PATHOLOGICAL_CIGAR_SIMD|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
+                        batch_start + i,
+                        job.query.len(),
+                        job.target.len(),
+                        job.band_width,
+                        result.score.score,
+                        total_insertions,
+                        total_deletions,
+                        result.cigar,
+                        job.query,
+                        job.target
+                    );
+                }
             }
         }
     }
@@ -723,10 +1333,45 @@ pub(crate) fn execute_scalar_alignments(
                 0, // h0
             );
 
-            if idx < 3 {  // Log first 3 alignments for debugging
-                log::debug!("Scalar alignment {}: qlen={}, tlen={}, score={}, CIGAR_len={}, first_op={:?}",
-                            idx, qlen, tlen, score_out.score, cigar.len(),
-                            cigar.first().map(|&(op, len)| (op as char, len)));
+            // Detect pathological CIGARs (excessive insertions/deletions)
+            let total_insertions: i32 = cigar.iter()
+                .filter(|(op, _)| *op == b'I')
+                .map(|(_, count)| count)
+                .sum();
+            let total_deletions: i32 = cigar.iter()
+                .filter(|(op, _)| *op == b'D')
+                .map(|(_, count)| count)
+                .sum();
+
+            // Log if CIGAR has excessive indels (likely bug)
+            if total_insertions > 10 || total_deletions > 5 {
+                // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
+                log::warn!(
+                    "PATHOLOGICAL_CIGAR_SCALAR|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
+                    idx,
+                    qlen,
+                    tlen,
+                    job.band_width,
+                    score_out.score,
+                    total_insertions,
+                    total_deletions,
+                    cigar,
+                    job.query,
+                    job.target
+                );
+            }
+
+            if idx < 3 {
+                // Log first 3 alignments for debugging
+                log::debug!(
+                    "Scalar alignment {}: qlen={}, tlen={}, score={}, CIGAR_len={}, first_op={:?}",
+                    idx,
+                    qlen,
+                    tlen,
+                    score_out.score,
+                    cigar.len(),
+                    cigar.first().map(|&(op, len)| (op as char, len))
+                );
             }
 
             (score_out.score, cigar)
@@ -756,6 +1401,15 @@ fn generate_seeds_with_mode(
     let query_len = query_seq.len();
     if query_len == 0 {
         return Vec::new();
+    }
+
+    #[cfg(feature = "debug-logging")]
+    let is_debug_read = query_name.contains("1150:14380");
+
+    #[cfg(feature = "debug-logging")]
+    if is_debug_read {
+        log::debug!("[DEBUG_READ] Generating seeds for: {}", query_name);
+        log::debug!("[DEBUG_READ] Query length: {}", query_len);
     }
 
     // Instantiate BandedPairWiseSW with parameters from MemOpt
@@ -794,15 +1448,23 @@ fn generate_seeds_with_mode(
     // The max_occ filter is applied LATER during SMEM filtering, not during generation
     let min_intv = 1u64;
 
-    log::debug!("{}: Starting SMEM generation: min_seed_len={}, min_intv={}, query_len={}",
-                query_name, min_seed_len, min_intv, query_len);
+    log::debug!(
+        "{}: Starting SMEM generation: min_seed_len={}, min_intv={}, query_len={}",
+        query_name,
+        min_seed_len,
+        min_intv,
+        query_len
+    );
 
     // OPTIMIZATION: Pre-allocate buffers to avoid repeated allocations
     // These are reused for every position x to reduce malloc overhead
+    // Note: Initial capacity = query_len, but Vec::push() will automatically
+    // grow (realloc) if SMEM count exceeds capacity (seen in IGSR samples)
     let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
     let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
     let mut prev_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
     let mut curr_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut max_smem_count = 0usize; // Track max SMEMs for capacity validation
 
     // Process each starting position in the query
     // CRITICAL FIX: Use while loop and skip ahead after each SMEM (like C++)
@@ -829,10 +1491,19 @@ fn generate_seeds_with_mode(
         };
 
         if x == 0 {
-            log::debug!("{}: Initial SMEM at x={}: a={}, k={}, l={}, s={}, l2[{}]={}, l2[{}]={}",
-                        query_name, x, a, smem.k, smem.l, smem.s,
-                        a, bwa_idx.bwt.l2[a as usize],
-                        3 - a, bwa_idx.bwt.l2[(3 - a) as usize]);
+            log::debug!(
+                "{}: Initial SMEM at x={}: a={}, k={}, l={}, s={}, l2[{}]={}, l2[{}]={}",
+                query_name,
+                x,
+                a,
+                smem.k,
+                smem.l,
+                smem.s,
+                a,
+                bwa_idx.bwt.l2[a as usize],
+                3 - a,
+                bwa_idx.bwt.l2[(3 - a) as usize]
+            );
         }
 
         // Phase 1: Forward extension (C++ lines 537-581)
@@ -848,8 +1519,12 @@ fn generate_seeds_with_mode(
             if a >= 4 {
                 // Hit 'N' base - stop forward extension
                 if x == 0 && log::log_enabled!(log::Level::Debug) {
-                    log::debug!("{}: x={}, forward extension stopped at j={} due to N base",
-                                query_name, x, j);
+                    log::debug!(
+                        "{}: x={}, forward extension stopped at j={} due to N base",
+                        query_name,
+                        x,
+                        j
+                    );
                 }
                 next_x = j; // Don't skip the 'N', let next iteration handle it
                 break;
@@ -859,16 +1534,32 @@ fn generate_seeds_with_mode(
             let new_smem = forward_ext(bwa_idx, smem, a);
 
             if x == 0 && j <= 12 {
-                log::debug!("{}: x={}, j={}, a={}, old_smem.s={}, new_smem(k={}, l={}, s={})",
-                            query_name, x, j, a, smem.s, new_smem.k, new_smem.l, new_smem.s);
+                log::debug!(
+                    "{}: x={}, j={}, a={}, old_smem.s={}, new_smem(k={}, l={}, s={})",
+                    query_name,
+                    x,
+                    j,
+                    a,
+                    smem.s,
+                    new_smem.k,
+                    new_smem.l,
+                    new_smem.s
+                );
             }
 
             // If interval size changed, save previous SMEM (C++ lines 556-559)
             if new_smem.s != smem.s {
                 if x < 3 {
                     let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                    log::debug!("{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
-                                query_name, x, j, smem.s, s_from_lk, smem.s == s_from_lk);
+                    log::debug!(
+                        "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
+                        query_name,
+                        x,
+                        j,
+                        smem.s,
+                        s_from_lk,
+                        smem.s == s_from_lk
+                    );
                 }
                 prev_array_buf.push(smem);
             }
@@ -876,8 +1567,14 @@ fn generate_seeds_with_mode(
             // Check if interval became too small (C++ lines 560-564)
             if new_smem.s < min_intv {
                 if x == 0 && log::log_enabled!(log::Level::Debug) {
-                    log::debug!("{}: x={}, forward extension stopped at j={} because new_smem.s={} < min_intv={}",
-                                query_name, x, j, new_smem.s, min_intv);
+                    log::debug!(
+                        "{}: x={}, forward extension stopped at j={} because new_smem.s={} < min_intv={}",
+                        query_name,
+                        x,
+                        j,
+                        new_smem.s,
+                        min_intv
+                    );
                 }
                 break;
             }
@@ -892,23 +1589,37 @@ fn generate_seeds_with_mode(
         }
 
         if x < 3 {
-            log::debug!("{}: Position x={}, prev_array_buf.len()={}, smem.s={}, min_intv={}",
-                        query_name, x, prev_array_buf.len(), smem.s, min_intv);
+            log::debug!(
+                "{}: Position x={}, prev_array_buf.len()={}, smem.s={}, min_intv={}",
+                query_name,
+                x,
+                prev_array_buf.len(),
+                smem.s,
+                min_intv
+            );
         }
 
-        // Reverse the prev_array_buf (C++ lines 587-592)
-        prev_array_buf.reverse();
+        // OPTIMIZATION: Skip reverse() by iterating backward with .rev() (C++ lines 587-592)
+        // prev_array_buf.reverse(); // REMOVED - use .iter().rev() instead
 
         // Phase 2: Backward search (C++ lines 595-665)
-        log::debug!("{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
-                    query_name, x, prev_array_buf.len());
+        log::debug!(
+            "{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
+            query_name,
+            x,
+            prev_array_buf.len()
+        );
 
         for j in (0..x).rev() {
             let a = encoded_query[j];
 
             if a >= 4 {
                 // Hit 'N' base - stop backward search
-                log::debug!("{}: [RUST Phase 2] Hit 'N' base at j={}, stopping", query_name, j);
+                log::debug!(
+                    "{}: [RUST Phase 2] Hit 'N' base at j={}, stopping",
+                    query_name,
+                    j
+                );
                 break;
             }
 
@@ -917,28 +1628,60 @@ fn generate_seeds_with_mode(
             let curr_array = &mut curr_array_buf;
             let mut curr_s = None;
 
-            log::debug!("{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
-                        query_name, j, a, prev_array_buf.len());
+            log::debug!(
+                "{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
+                query_name,
+                j,
+                a,
+                prev_array_buf.len()
+            );
 
-            for (i, smem) in prev_array_buf.iter().enumerate() {
+            // OPTIMIZATION: Iterate backward instead of reversing array
+            for (i, smem) in prev_array_buf.iter().rev().enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
                 let old_len = smem.n - smem.m + 1;
                 let new_len = new_smem.n - new_smem.m + 1;
 
-                log::debug!("{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
-                            query_name, x, j, i,
-                            smem.m, smem.n, old_len, smem.k, smem.l, smem.s,
-                            new_smem.m, new_smem.n, new_len, new_smem.k, new_smem.l, new_smem.s,
-                            min_intv);
+                log::debug!(
+                    "{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
+                    query_name,
+                    x,
+                    j,
+                    i,
+                    smem.m,
+                    smem.n,
+                    old_len,
+                    smem.k,
+                    smem.l,
+                    smem.s,
+                    new_smem.m,
+                    new_smem.n,
+                    new_len,
+                    new_smem.k,
+                    new_smem.l,
+                    new_smem.s,
+                    min_intv
+                );
 
                 // Check if we should output this SMEM (C++ lines 613-619)
                 if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
                     let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
                     let s_matches = smem.s == s_from_lk;
-                    log::debug!("{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
-                                query_name, smem.m, smem.n, smem.k, smem.l, smem.s, new_smem.s, min_intv, s_from_lk, s_matches);
+                    log::debug!(
+                        "{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
+                        query_name,
+                        smem.m,
+                        smem.n,
+                        smem.k,
+                        smem.l,
+                        smem.s,
+                        new_smem.s,
+                        min_intv,
+                        s_from_lk,
+                        s_matches
+                    );
                     all_smems.push(*smem);
                     break; // C++ breaks after first output in this position
                 }
@@ -947,26 +1690,46 @@ fn generate_seeds_with_mode(
                 if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
                     curr_s = Some(new_smem.s);
                     curr_array.push(new_smem);
-                    log::debug!("{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
-                                query_name, new_smem.s, min_intv);
+                    log::debug!(
+                        "{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
+                        query_name,
+                        new_smem.s,
+                        min_intv
+                    );
                     break; // C++ breaks after first successful extension
                 }
 
-                log::debug!("{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
-                            query_name, new_smem.s, min_intv, curr_s == Some(new_smem.s));
+                log::debug!(
+                    "{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
+                    query_name,
+                    new_smem.s,
+                    min_intv,
+                    curr_s == Some(new_smem.s)
+                );
             }
 
             // Continue with remaining SMEMs (C++ lines 632-649)
-            for (i, smem) in prev_array_buf.iter().skip(1).enumerate() {
+            // OPTIMIZATION: Use .rev().skip(1) to skip last element (first after reverse)
+            for (i, smem) in prev_array_buf.iter().rev().skip(1).enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
                 let new_len = new_smem.n - new_smem.m + 1;
-                log::debug!("{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
-                            query_name, x, j, i+1,
-                            smem.m, smem.n, smem.s,
-                            new_smem.m, new_smem.n, new_len, new_smem.s,
-                            new_smem.s >= min_intv && curr_s != Some(new_smem.s));
+                log::debug!(
+                    "{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
+                    query_name,
+                    x,
+                    j,
+                    i + 1,
+                    smem.m,
+                    smem.n,
+                    smem.s,
+                    new_smem.m,
+                    new_smem.n,
+                    new_len,
+                    new_smem.s,
+                    new_smem.s >= min_intv && curr_s != Some(new_smem.s)
+                );
 
                 if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
                     curr_s = Some(new_smem.s);
@@ -977,32 +1740,66 @@ fn generate_seeds_with_mode(
             // Update prev_array_buf for next iteration (C++ lines 650-654)
             // OPTIMIZATION: Swap buffers instead of copying/moving
             std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
-            log::debug!("{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
-                        query_name, j, prev_array_buf.len());
+            max_smem_count = max_smem_count.max(prev_array_buf.len());
+            log::debug!(
+                "{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
+                query_name,
+                j,
+                prev_array_buf.len()
+            );
 
             if prev_array_buf.is_empty() {
-                log::debug!("{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}", query_name, j);
+                log::debug!(
+                    "{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}",
+                    query_name,
+                    j
+                );
                 break;
             }
         }
 
         // Output any remaining SMEMs (C++ lines 656-665)
+        // CRITICAL FIX: Access last element, not first!
+        // C++ reverses the array, so prev[0] is the longest SMEM.
+        // We skip the reverse and use .iter().rev(), so the longest SMEM is at the END of our array.
         if !prev_array_buf.is_empty() {
-            let smem = prev_array_buf[0];
+            let smem = prev_array_buf[prev_array_buf.len() - 1];
             let len = smem.n - smem.m + 1;
             if len >= min_seed_len {
                 let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
                 let s_matches = smem.s == s_from_lk;
-                log::debug!("{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
-                            query_name, smem.m, smem.n, smem.k, smem.l, smem.s, len, s_from_lk, s_matches, next_x);
+                log::debug!(
+                    "{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
+                    query_name,
+                    smem.m,
+                    smem.n,
+                    smem.k,
+                    smem.l,
+                    smem.s,
+                    len,
+                    s_from_lk,
+                    s_matches,
+                    next_x
+                );
                 all_smems.push(smem);
             } else {
                 // Log SMEMs that are rejected for being too short
-                log::debug!("{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
-                            query_name, smem.m, smem.n, len, min_seed_len, smem.s);
+                log::debug!(
+                    "{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
+                    query_name,
+                    smem.m,
+                    smem.n,
+                    len,
+                    min_seed_len,
+                    smem.s
+                );
             }
         } else {
-            log::debug!("{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}", query_name, x);
+            log::debug!(
+                "{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}",
+                query_name,
+                x
+            );
         }
 
         // CRITICAL: Skip ahead to next uncovered position (C++ line 679)
@@ -1064,7 +1861,8 @@ fn generate_seeds_with_mode(
             prev_array_buf_rc.push(smem);
         }
 
-        prev_array_buf_rc.reverse();
+        // OPTIMIZATION: Skip reverse() by iterating backward with .rev()
+        // prev_array_buf_rc.reverse(); // REMOVED - use .iter().rev() instead
 
         for j in (0..x).rev() {
             let a = encoded_query_rc[j];
@@ -1078,7 +1876,8 @@ fn generate_seeds_with_mode(
             let curr_array = &mut curr_array_buf_rc;
             let mut curr_s = None;
 
-            for smem in &prev_array_buf_rc {
+            // OPTIMIZATION: Iterate backward instead of reversing array
+            for smem in prev_array_buf_rc.iter().rev() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -1094,7 +1893,9 @@ fn generate_seeds_with_mode(
                 }
             }
 
-            for smem in prev_array_buf_rc.iter().skip(1) {
+            // CRITICAL FIX: Use .rev() to match C++ iteration order (C++ lines 632-649)
+            // C++ iterates from p+1 to numPrev over the REVERSED array
+            for smem in prev_array_buf_rc.iter().rev().skip(1) {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -1106,13 +1907,17 @@ fn generate_seeds_with_mode(
 
             // OPTIMIZATION: Swap buffers instead of copying/moving
             std::mem::swap(&mut prev_array_buf_rc, &mut curr_array_buf_rc);
+            max_smem_count = max_smem_count.max(prev_array_buf_rc.len());
             if prev_array_buf_rc.is_empty() {
                 break;
             }
         }
 
+        // CRITICAL FIX: Access last element, not first! (same as forward strand)
+        // C++ reverses the array, so prev[0] is the longest SMEM.
+        // We skip the reverse and use .iter().rev(), so the longest SMEM is at the END of our array.
         if !prev_array_buf_rc.is_empty() {
-            let smem = prev_array_buf_rc[0];
+            let smem = prev_array_buf_rc[prev_array_buf_rc.len() - 1];
             if (smem.n - smem.m + 1) >= min_seed_len {
                 all_smems.push(smem);
             }
@@ -1247,20 +2052,38 @@ fn generate_seeds_with_mode(
     // Also prepare reverse complement for RC SMEMs
     // CRITICAL FIX: Use reverse_complement_code() to properly handle 'N' bases (code 4)
     // The XOR trick (b ^ 3) breaks for N: 4 ^ 3 = 7 (invalid!)
-    let mut query_segment_encoded_rc: Vec<u8> = query_segment_encoded.iter()
-        .map(|&b| reverse_complement_code(b))  // Properly handles N (4 → 4)
+    let mut query_segment_encoded_rc: Vec<u8> = query_segment_encoded
+        .iter()
+        .map(|&b| reverse_complement_code(b)) // Properly handles N (4 → 4)
         .collect();
     query_segment_encoded_rc.reverse();
 
-    log::debug!("{}: query_segment_encoded (FWD) first_10={:?}", query_name, &query_segment_encoded[..10.min(query_segment_encoded.len())]);
-    log::debug!("{}: query_segment_encoded_rc (RC) first_10={:?}", query_name, &query_segment_encoded_rc[..10.min(query_segment_encoded_rc.len())]);
+    log::debug!(
+        "{}: query_segment_encoded (FWD) first_10={:?}",
+        query_name,
+        &query_segment_encoded[..10.min(query_segment_encoded.len())]
+    );
+    log::debug!(
+        "{}: query_segment_encoded_rc (RC) first_10={:?}",
+        query_name,
+        &query_segment_encoded_rc[..10.min(query_segment_encoded_rc.len())]
+    );
 
     for (idx, smem) in useful_smems.iter().enumerate() {
         let smem = *smem;
 
         // Get SA position and log the reconstruction process
-        log::debug!("{}: SMEM {}: BWT interval [k={}, l={}, s={}], query range [m={}, n={}], is_rev_comp={}",
-                    query_name, idx, smem.k, smem.l, smem.s, smem.m, smem.n, smem.is_rev_comp);
+        log::debug!(
+            "{}: SMEM {}: BWT interval [k={}, l={}, s={}], query range [m={}, n={}], is_rev_comp={}",
+            query_name,
+            idx,
+            smem.k,
+            smem.l,
+            smem.s,
+            smem.m,
+            smem.n,
+            smem.is_rev_comp
+        );
 
         // Try multiple positions in the BWT interval to find which one is correct
         let ref_pos_at_k = get_sa_entry(bwa_idx, smem.k);
@@ -1269,8 +2092,15 @@ fn generate_seeds_with_mode(
         } else {
             ref_pos_at_k
         };
-        log::debug!("{}: SMEM {}: SA at k={} -> ref_pos {}, SA at l-1={} -> ref_pos {}",
-                    query_name, idx, smem.k, ref_pos_at_k, smem.l - 1, ref_pos_at_l_minus_1);
+        log::debug!(
+            "{}: SMEM {}: SA at k={} -> ref_pos {}, SA at l-1={} -> ref_pos {}",
+            query_name,
+            idx,
+            smem.k,
+            ref_pos_at_k,
+            smem.l - 1,
+            ref_pos_at_l_minus_1
+        );
 
         let mut ref_pos = ref_pos_at_k;
 
@@ -1283,69 +2113,35 @@ fn generate_seeds_with_mode(
         } else {
             &query_segment_encoded
         };
-        let smem_query_bases = &query_for_smem[smem.m as usize..=(smem.n as usize).min(query_for_smem.len()-1)];
+        let smem_query_bases =
+            &query_for_smem[smem.m as usize..=(smem.n as usize).min(query_for_smem.len() - 1)];
         let smem_len = smem.n - smem.m + 1;
-        log::debug!("{}: SMEM {}: Query bases at [{}..{}] (len={}): {:?}",
-                    query_name, idx, smem.m, smem.n, smem_len,
-                    &smem_query_bases[..10.min(smem_query_bases.len())]);
+        log::debug!(
+            "{}: SMEM {}: Query bases at [{}..{}] (len={}): {:?}",
+            query_name,
+            idx,
+            smem.m,
+            smem.n,
+            smem_len,
+            &smem_query_bases[..10.min(smem_query_bases.len())]
+        );
 
         // Convert positions in reverse complement region to forward strand
         // BWT contains both forward [0, l_pac) and reverse [l_pac, 2*l_pac)
         if ref_pos >= bwa_idx.bns.l_pac {
             ref_pos = (bwa_idx.bns.l_pac << 1) - 1 - ref_pos;
             is_rev = !is_rev; // Flip strand orientation
-            log::debug!("{}: SMEM {}: Was in RC region, converted ref_pos to {}, is_rev={}",
-                        query_name, idx, ref_pos, is_rev);
+            log::debug!(
+                "{}: SMEM {}: Was in RC region, converted ref_pos to {}, is_rev={}",
+                query_name,
+                idx,
+                ref_pos,
+                is_rev
+            );
         }
 
-        // CRITICAL DEBUG: Try different reference positions to find the correct mapping
-        // Test: ref_pos - 1, ref_pos, ref_pos + 1, ref_pos - smem_len + 1 (points to end instead of start)
-        let test_positions = vec![
-            ("ref_pos", ref_pos),
-            ("ref_pos+1", ref_pos.saturating_add(1)),
-            ("ref_pos-1", ref_pos.saturating_sub(1)),
-            ("ref_pos-(len-1)", ref_pos.saturating_sub(smem_len as u64 - 1)),
-        ];
-
-        let mut best_matches = 0;
-        let mut best_pos_label = "";
-
-        for (label, test_pos) in test_positions.iter() {
-            let ref_fetch_len = (smem_len as u64).min(30).min(bwa_idx.bns.l_pac.saturating_sub(*test_pos));
-            if ref_fetch_len == 0 {
-                continue;
-            }
-
-            if let Ok(ref_bases) = bwa_idx.bns.get_reference_segment(*test_pos, ref_fetch_len) {
-                let comparison_len = smem_query_bases.len().min(ref_bases.len());
-                let mut matches = 0;
-                for i in 0..comparison_len {
-                    if smem_query_bases[i] == ref_bases[i] {
-                        matches += 1;
-                    }
-                }
-
-                if matches > best_matches {
-                    best_matches = matches;
-                    best_pos_label = label;
-                }
-
-                if matches == comparison_len {
-                    log::info!("{}: SMEM {}: ✅ PERFECT MATCH at {} (pos={}): {} matches!",
-                               query_name, idx, label, test_pos, matches);
-                } else if matches >= comparison_len / 2 {
-                    log::debug!("{}: SMEM {}: Partial match at {} (pos={}): {}/{} matches",
-                                query_name, idx, label, test_pos, matches, comparison_len);
-                }
-            }
-        }
-
-        if best_matches < smem_len as usize {
-            log::warn!("{}: SMEM {}: ⚠️ NO PERFECT MATCH FOUND! Best: {} at {} ({}/{} bases)",
-                       query_name, idx, best_pos_label, best_matches, best_matches, smem_len);
-            log::warn!("{}: SMEM {}:   Query: {:?}", query_name, idx,
-                       &smem_query_bases[..5.min(smem_query_bases.len())]);
-        }
+        // Diagnostic validation removed - was causing 79,000% performance regression
+        // The SMEM validation loop with log::info/warn was being called millions of times
 
         // Use query position in the coordinate system of the query we're aligning
         // For RC seeds, use smem.m directly (RC query coordinates)
@@ -1371,16 +2167,9 @@ fn generate_seeds_with_mode(
         };
 
         // Prepare reference segment (query_len + 2*band_width for diagonal extension)
-        let ref_segment_len =
-            (query_len as u64 + 2 * _opt.w as u64).min(bwa_idx.bns.l_pac - ref_start_for_full_query);
+        let ref_segment_len = (query_len as u64 + 2 * _opt.w as u64)
+            .min(bwa_idx.bns.l_pac - ref_start_for_full_query);
         let ref_segment_start = ref_start_for_full_query;
-
-        // Debug: fetch a small segment at the original ref_pos to see if it matches the SMEM
-        let debug_ref_at_smem = bwa_idx.bns.get_reference_segment(ref_pos, 21.min(bwa_idx.bns.l_pac - ref_pos));
-        let debug_ref_bases = debug_ref_at_smem.as_ref().map(|v| &v[..10.min(v.len())]).unwrap_or(&[]);
-
-        log::debug!("{}: Seed {}: original_ref_pos={}, query_pos={}, adjusted_ref_start={}, ref_segment_len={}, query_len={}, ref_at_smem_pos={:?}",
-                    query_name, idx, ref_pos, seed.query_pos, ref_start_for_full_query, ref_segment_len, query_len, debug_ref_bases);
 
         let target_segment_result = bwa_idx
             .bns
@@ -1396,10 +2185,15 @@ fn generate_seeds_with_mode(
                     query_segment_encoded.clone()
                 };
 
-                log::debug!("{}: Seed {}: target_segment_len={}, is_rev={}, query_first_10={:?}, target_first_10={:?}",
-                            query_name, idx, target_segment.len(), is_rev,
-                            &query_for_alignment[..10.min(query_for_alignment.len())],
-                            &target_segment[..10.min(target_segment.len())]);
+                log::debug!(
+                    "{}: Seed {}: target_segment_len={}, is_rev={}, query_first_10={:?}, target_first_10={:?}",
+                    query_name,
+                    idx,
+                    target_segment.len(),
+                    is_rev,
+                    &query_for_alignment[..10.min(query_for_alignment.len())],
+                    &target_segment[..10.min(target_segment.len())]
+                );
                 alignment_jobs.push(AlignmentJob {
                     seed_idx: idx,
                     query: query_for_alignment,
@@ -1438,7 +2232,10 @@ fn generate_seeds_with_mode(
 
     // Separate scores and CIGARs
     let alignment_scores: Vec<i32> = extended_cigars.iter().map(|(score, _)| *score).collect();
-    let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars.into_iter().map(|(_, cigar)| cigar).collect();
+    let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars
+        .into_iter()
+        .map(|(_, cigar)| cigar)
+        .collect();
 
     log::debug!(
         "{}: Extended {} seeds, {} CIGARs produced",
@@ -1448,43 +2245,60 @@ fn generate_seeds_with_mode(
     );
 
     // --- Seed Chaining ---
-    let chained_results = chain_seeds(seeds.clone(), _opt);
+    let mut chained_results = chain_seeds(seeds.clone(), _opt);
     log::debug!(
         "{}: Chaining produced {} chains",
         query_name,
         chained_results.len()
     );
+
+    // --- Chain Filtering ---
+    // Implements bwa-mem2 mem_chain_flt logic (bwamem.cpp:506-624)
+    let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt);
+    log::debug!(
+        "{}: Chain filtering kept {} chains (from {} total)",
+        query_name,
+        filtered_chains.len(),
+        chained_results.len()
+    );
     // --- End Seed Chaining ---
 
-    // Select the best alignment from ALL seeds, not just those in the chain
-    // This is a simplification - C++ bwa-mem2 uses chain filtering and multi-alignment logic
+    // === MULTI-ALIGNMENT GENERATION FROM FILTERED CHAINS ===
+    // Generate one alignment per filtered chain (matching C++ bwa-mem2 behavior)
+    // Each chain represents a distinct mapping location for the read
     let mut alignments = Vec::new();
-    if !alignment_scores.is_empty() {
-        // Find the seed with the best alignment score across all seeds
-        let mut best_seed_idx = 0;
-        let mut best_score = alignment_scores[0];
 
-        for (seed_idx, &score) in alignment_scores.iter().enumerate() {
-            if score > best_score {
-                best_score = score;
-                best_seed_idx = seed_idx;
+    for (chain_idx, chain) in filtered_chains.iter().enumerate() {
+        if chain.seeds.is_empty() {
+            continue;
+        }
+
+        // Find the best-scoring seed in this chain
+        let mut best_seed_idx_in_chain = chain.seeds[0];
+        let mut best_score = alignment_scores[chain.seeds[0]];
+
+        for &seed_idx in &chain.seeds {
+            if alignment_scores[seed_idx] > best_score {
+                best_score = alignment_scores[seed_idx];
+                best_seed_idx_in_chain = seed_idx;
             }
         }
 
-        log::debug!("{}: Selected best seed {} (score={}) from {} total seeds",
-                    query_name, best_seed_idx, best_score, alignment_scores.len());
+        let cigar_for_alignment = alignment_cigars[best_seed_idx_in_chain].clone();
+        let best_seed = &seeds[best_seed_idx_in_chain];
 
-        let cigar_for_alignment = alignment_cigars[best_seed_idx].clone();
-
-        log::debug!("{}: Best alignment CIGAR={:?}",
-                    query_name,
-                    cigar_for_alignment.iter().take(5).collect::<Vec<_>>());
-
-        // Get the best seed's information
-        let best_seed = &seeds[best_seed_idx];
+        log::debug!(
+            "{}: Chain {} (weight={}, kept={}): best_seed={} score={} len={}",
+            query_name,
+            chain_idx,
+            chain.weight,
+            chain.kept,
+            best_seed_idx_in_chain,
+            best_score,
+            best_seed.len
+        );
 
         // Calculate the adjusted reference start position for full query alignment
-        // The alignment was performed with the reference adjusted backwards by query_pos
         let adjusted_ref_start = if best_seed.query_pos as u64 > best_seed.ref_pos {
             0
         } else {
@@ -1501,9 +2315,22 @@ fn generate_seeds_with_mode(
             let chr_relative_pos = pos_f - ann.offset as i64;
             (ann.name.clone(), rid as usize, chr_relative_pos as u64)
         } else {
-            log::warn!("{}: Invalid reference ID {} for position {}", query_name, rid, global_pos);
+            log::warn!(
+                "{}: Invalid reference ID {} for position {}",
+                query_name,
+                rid,
+                global_pos
+            );
             ("unknown_ref".to_string(), 0, best_seed.ref_pos)
         };
+
+        // Calculate query bounds from chain (more accurate than single seed)
+        let query_start = chain.query_start;
+        let query_end = chain.query_end;
+        let seed_coverage = chain.weight; // Use chain weight as seed coverage for MAPQ
+
+        // Generate hash for tie-breaking (based on position and strand)
+        let hash = hash_64((chr_pos << 1) | (if best_seed.is_rev { 1 } else { 0 }));
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
@@ -1511,16 +2338,105 @@ fn generate_seeds_with_mode(
             ref_name,
             ref_id,
             pos: chr_pos,
-            mapq: 60,                 // Placeholder, needs proper calculation
-            score: best_score,        // Use actual alignment score
+            mapq: 60,          // Will be calculated by mark_secondary_alignments
+            score: best_score, // Use best alignment score from chain
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
             pnext: 0,
             tlen: 0,
             seq: String::from_utf8_lossy(query_seq).to_string(),
             qual: query_qual.to_string(),
-            tags: Vec::new(), // Optional tags to be added later
+            tags: Vec::new(),
+            // Internal fields for alignment selection
+            query_start,
+            query_end,
+            seed_coverage,
+            hash,
         });
+    }
+
+    // Log buffer capacity validation
+    if max_smem_count > query_len {
+        log::debug!(
+            "{}: SMEM buffer grew beyond initial capacity! max_smem_count={} > query_len={} (growth factor: {:.2}x)",
+            query_name,
+            max_smem_count,
+            query_len,
+            max_smem_count as f64 / query_len as f64
+        );
+    } else {
+        log::debug!(
+            "{}: SMEM buffer stayed within capacity. max_smem_count={} <= query_len={} (utilization: {:.1}%)",
+            query_name,
+            max_smem_count,
+            query_len,
+            (max_smem_count as f64 / query_len as f64) * 100.0
+        );
+    }
+
+    #[cfg(feature = "debug-logging")]
+    if is_debug_read {
+        log::debug!("[DEBUG_READ] Generated {} SMEM(s)", all_smems.len());
+        log::debug!("[DEBUG_READ] Created {} alignment(s)", alignments.len());
+        for (i, aln) in alignments.iter().enumerate() {
+            log::debug!(
+                "[DEBUG_READ] Alignment[{}]: {}:{} MAPQ={} Score={} CIGAR={}",
+                i,
+                aln.ref_name,
+                aln.pos,
+                aln.mapq,
+                aln.score,
+                aln.cigar_string()
+            );
+        }
+    }
+
+    // === ALIGNMENT SELECTION: Sort, Mark Secondary, Calculate MAPQ ===
+    // Implements bwa-mem2 mem_mark_primary_se logic (bwamem.cpp:1420-1464)
+    if !alignments.is_empty() {
+        // Sort alignments by score (descending), then by hash (for tie-breaking)
+        // Matches C++ alnreg_hlt comparator in bwamem.cpp:155
+        alignments.sort_by(|a, b| {
+            match b.score.cmp(&a.score) {
+                std::cmp::Ordering::Equal => a.hash.cmp(&b.hash), // Tie-breaker
+                other => other,
+            }
+        });
+
+        // Mark secondary alignments and calculate MAPQ
+        // This modifies alignments in-place:
+        // - Sets 0x100 flag for secondary alignments
+        // - Calculates proper MAPQ values (0-60) based on score differences
+        mark_secondary_alignments(&mut alignments, _opt);
+
+        log::debug!(
+            "{}: After alignment selection: {} alignments ({} primary, {} secondary)",
+            query_name,
+            alignments.len(),
+            alignments.iter().filter(|a| a.flag & 0x100 == 0).count(),
+            alignments.iter().filter(|a| a.flag & 0x100 != 0).count()
+        );
+
+        // === XA TAG GENERATION ===
+        // Generate XA tags for primary alignments with qualifying secondaries
+        // Format: XA:Z:chr1,+100,50M,2;chr2,-200,48M,3;
+        let xa_tags = generate_xa_tags(&alignments, _opt);
+
+        // Add XA tags to primary alignments
+        for aln in alignments.iter_mut() {
+            if aln.flag & 0x100 == 0 {
+                // This is a primary alignment
+                if let Some(xa_tag) = xa_tags.get(&aln.query_name) {
+                    // Add XA tag to this alignment's tags
+                    aln.tags.push(("XA".to_string(), xa_tag.clone()));
+                    log::debug!(
+                        "{}: Added XA tag with {} alternative alignments",
+                        aln.query_name,
+                        xa_tag.matches(';').count()
+                    );
+                }
+            }
+        }
     }
 
     alignments
@@ -1574,32 +2490,37 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
         }
     }
 
-    // 3. Backtracking to reconstruct chains
-    // TODO: Implement full chain dropping (-D drop_ratio)
-    // Currently only returns best chain. Full implementation should:
-    // 1. Generate multiple chains (not just best)
-    // 2. Compare overlapping chains
-    // 3. Drop chains where seed_coverage < drop_ratio * better_chain_coverage
-    // See C++ bwamem.cpp mem_chain_flt() for full algorithm
-
-    let mut best_chain_score = 0;
-    let mut best_chain_end_idx = None;
-
-    for i in 0..num_seeds {
-        if dp[i] > best_chain_score {
-            best_chain_score = dp[i];
-            best_chain_end_idx = Some(i);
-        }
-    }
-
-    // Apply min_chain_weight filter (-W parameter)
-    // If best chain score is below minimum, return empty
-    if best_chain_score < opt.min_chain_weight {
-        return Vec::new();
-    }
+    // 3. Multi-chain extraction via iterative peak finding
+    // Algorithm:
+    // 1. Find highest-scoring peak in DP array
+    // 2. Backtrack to reconstruct chain
+    // 3. Mark seeds in chain as "used"
+    // 4. Repeat until no more peaks above min_chain_weight
+    // This matches bwa-mem2's approach to multi-chain generation
 
     let mut chains = Vec::new();
-    if let Some(mut current_idx) = best_chain_end_idx {
+    let mut used_seeds = vec![false; num_seeds]; // Track which seeds are already in chains
+
+    // Iteratively extract chains by finding peaks
+    loop {
+        // Find the highest unused peak
+        let mut best_chain_score = opt.min_chain_weight; // Only consider chains above minimum
+        let mut best_chain_end_idx: Option<usize> = None;
+
+        for i in 0..num_seeds {
+            if !used_seeds[i] && dp[i] >= best_chain_score {
+                best_chain_score = dp[i];
+                best_chain_end_idx = Some(i);
+            }
+        }
+
+        // Stop if no more chains above threshold
+        if best_chain_end_idx.is_none() {
+            break;
+        }
+
+        // Backtrack to reconstruct this chain
+        let mut current_idx = best_chain_end_idx.unwrap();
         let mut chain_seeds_indices = Vec::new();
         let mut current_seed = &seeds[current_idx];
 
@@ -1609,17 +2530,25 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
         let mut ref_end = current_seed.ref_pos + current_seed.len as u64;
         let is_rev = current_seed.is_rev;
 
-        while let Some(prev_idx) = prev_seed_idx[current_idx] {
+        // Backtrack through the chain
+        loop {
             chain_seeds_indices.push(current_idx);
-            current_idx = prev_idx;
-            current_seed = &seeds[current_idx];
+            used_seeds[current_idx] = true; // Mark seed as used
 
-            query_start = query_start.min(current_seed.query_pos);
-            query_end = query_end.max(current_seed.query_pos + current_seed.len);
-            ref_start = ref_start.min(current_seed.ref_pos);
-            ref_end = ref_end.max(current_seed.ref_pos + current_seed.len as u64);
+            // Get previous seed in chain
+            if let Some(prev_idx) = prev_seed_idx[current_idx] {
+                current_idx = prev_idx;
+                current_seed = &seeds[current_idx];
+
+                // Update chain bounds
+                query_start = query_start.min(current_seed.query_pos);
+                query_end = query_end.max(current_seed.query_pos + current_seed.len);
+                ref_start = ref_start.min(current_seed.ref_pos);
+                ref_end = ref_end.max(current_seed.ref_pos + current_seed.len as u64);
+            } else {
+                break; // Reached start of chain
+            }
         }
-        chain_seeds_indices.push(current_idx); // Add the first seed in the chain
 
         chain_seeds_indices.reverse(); // Order from start to end
 
@@ -1631,8 +2560,27 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
             ref_start,
             ref_end,
             is_rev,
+            weight: 0,  // Will be calculated by filter_chains()
+            kept: 0,    // Will be set by filter_chains()
         });
+
+        // Safety limit: stop after extracting a reasonable number of chains
+        // This prevents pathological cases from consuming too much memory
+        if chains.len() >= 100 {
+            log::debug!(
+                "Extracted maximum of 100 chains from {} seeds, stopping",
+                num_seeds
+            );
+            break;
+        }
     }
+
+    log::debug!(
+        "Chain extraction: {} seeds → {} chains (min_weight={})",
+        num_seeds,
+        chains.len(),
+        opt.min_chain_weight
+    );
 
     chains
 }
@@ -1744,7 +2692,11 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     let sentinel_pos = (bwa_idx.bns.l_pac << 1);
     let adjusted_sa_val = if sa_val >= sentinel_pos {
         // SA points to or past sentinel - wrap to beginning (position 0)
-        log::debug!("SA value {} is at/past sentinel {} - wrapping to 0", sa_val, sentinel_pos);
+        log::debug!(
+            "SA value {} is at/past sentinel {} - wrapping to 0",
+            sa_val,
+            sentinel_pos
+        );
         0
     } else {
         sa_val
@@ -1752,8 +2704,18 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
     let result = adjusted_sa_val + count;
 
-    log::debug!("get_sa_entry: original_pos={}, final_pos={}, count={}, sa_index={}, sa_val={}, adjusted={}, result={}, l_pac={}, sentinel={}",
-               original_pos, pos, count, sa_index, sa_val, adjusted_sa_val, result, bwa_idx.bns.l_pac, (bwa_idx.bns.l_pac << 1));
+    log::debug!(
+        "get_sa_entry: original_pos={}, final_pos={}, count={}, sa_index={}, sa_val={}, adjusted={}, result={}, l_pac={}, sentinel={}",
+        original_pos,
+        pos,
+        count,
+        sa_index,
+        sa_val,
+        adjusted_sa_val,
+        result,
+        bwa_idx.bns.l_pac,
+        (bwa_idx.bns.l_pac << 1)
+    );
     result
 }
 
@@ -2163,7 +3125,11 @@ mod tests {
 
         // Test scalar execution
         let scalar_results = super::execute_scalar_alignments(&sw_params, &jobs);
-        assert_eq!(scalar_results.len(), 2, "Should return 2 results for 2 jobs");
+        assert_eq!(
+            scalar_results.len(),
+            2,
+            "Should return 2 results for 2 jobs"
+        );
         assert!(
             !scalar_results[0].1.is_empty(),
             "First CIGAR should not be empty"
@@ -2175,7 +3141,11 @@ mod tests {
 
         // Test batched execution
         let batched_results = super::execute_batched_alignments(&sw_params, &jobs);
-        assert_eq!(batched_results.len(), 2, "Should return 2 results for 2 jobs");
+        assert_eq!(
+            batched_results.len(),
+            2,
+            "Should return 2 results for 2 jobs"
+        );
 
         // Results should be identical (CIGARs and scores)
         assert_eq!(
