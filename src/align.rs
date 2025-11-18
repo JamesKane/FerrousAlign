@@ -412,6 +412,20 @@ impl Alignment {
         }
     }
 
+    /// Calculate the aligned length on the reference from CIGAR
+    /// Sums M, D, N, =, X operations (operations that consume reference bases)
+    pub fn reference_length(&self) -> i32 {
+        self.cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                match op as char {
+                    'M' | 'D' | 'N' | '=' | 'X' => Some(len),
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+
     pub fn to_sam_string(&self) -> String {
         // Convert CIGAR to string format
         let cigar_string = self.cigar_string();

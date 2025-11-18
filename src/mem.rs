@@ -1820,12 +1820,22 @@ fn output_batch_paired(
                 if alignment.ref_name == mate2_ref {
                     let pos1 = alignment.pos as i64;
                     let pos2 = mate2_pos as i64;
-                    let (_, dist) = infer_orientation(l_pac, pos1, pos2);
-                    alignment.tlen = if pos1 <= pos2 {
-                        dist as i32
+
+                    // Calculate TLEN: outer_end - outer_start
+                    // For FR orientation: leftmost_start to rightmost_end
+                    if pos1 <= pos2 {
+                        // R1 is leftmost: TLEN = (R2_start - R1_start) + R2_aligned_length
+                        let mate2_len = if !alignments2.is_empty() && best_idx2 < alignments2.len() {
+                            alignments2[best_idx2].reference_length()
+                        } else {
+                            0
+                        };
+                        alignment.tlen = ((pos2 - pos1) + mate2_len as i64) as i32;
                     } else {
-                        -(dist as i32)
-                    };
+                        // R1 is rightmost: TLEN = -((R1_start - R2_start) + R1_aligned_length)
+                        let r1_len = alignment.reference_length();
+                        alignment.tlen = -(((pos1 - pos2) + r1_len as i64) as i32);
+                    }
                 }
             }
         }
@@ -1863,12 +1873,22 @@ fn output_batch_paired(
                 if alignment.ref_name == mate1_ref {
                     let pos1 = mate1_pos as i64;
                     let pos2 = alignment.pos as i64;
-                    let (_, dist) = infer_orientation(l_pac, pos1, pos2);
-                    alignment.tlen = if pos2 <= pos1 {
-                        dist as i32
+
+                    // Calculate TLEN: outer_end - outer_start
+                    // For FR orientation: leftmost_start to rightmost_end
+                    if pos2 <= pos1 {
+                        // R2 is leftmost: TLEN = (R1_start - R2_start) + R1_aligned_length
+                        let mate1_len = if !alignments1.is_empty() && best_idx1 < alignments1.len() {
+                            alignments1[best_idx1].reference_length()
+                        } else {
+                            0
+                        };
+                        alignment.tlen = ((pos1 - pos2) + mate1_len as i64) as i32;
                     } else {
-                        -(dist as i32)
-                    };
+                        // R2 is rightmost: TLEN = -((R2_start - R1_start) + R2_aligned_length)
+                        let r2_len = alignment.reference_length();
+                        alignment.tlen = -(((pos2 - pos1) + r2_len as i64) as i32);
+                    }
                 }
             }
         }
