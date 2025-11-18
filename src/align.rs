@@ -982,6 +982,9 @@ pub(crate) struct AlignmentJob {
     pub query: Vec<u8>,
     pub target: Vec<u8>,
     pub band_width: i32,
+    // C++ STRATEGY: Track query offset for seed-boundary-based alignment
+    // Only align seed-covered region, soft-clip the rest like bwa-mem2
+    pub query_offset: i32, // Offset of query in full read (for soft-clipping)
 }
 
 /// Estimate divergence likelihood based on sequence length mismatch
@@ -2155,65 +2158,123 @@ fn generate_seeds_with_mode(
             is_rev,
         };
 
-        // --- Prepare Seed Extension Job ---
-        // The SMEM matched at query position smem.m (or adjusted for reverse complement)
-        // But we want to align the ENTIRE query starting from position 0
-        // So we need to adjust the reference position backwards
-        let ref_start_for_full_query = if seed.query_pos as u64 > ref_pos {
-            // Edge case: can't go back far enough
-            0
-        } else {
-            ref_pos - seed.query_pos as u64
-        };
-
-        // Prepare reference segment (query_len + 2*band_width for diagonal extension)
-        let ref_segment_len = (query_len as u64 + 2 * _opt.w as u64)
-            .min(bwa_idx.bns.l_pac - ref_start_for_full_query);
-        let ref_segment_start = ref_start_for_full_query;
-
-        let target_segment_result = bwa_idx
-            .bns
-            .get_reference_segment(ref_segment_start, ref_segment_len);
-
-        match target_segment_result {
-            Ok(target_segment) => {
-                // CRITICAL FIX: Use correct query orientation for alignment
-                // Use is_rev (updated after RC region conversion) not smem.is_rev_comp
-                let query_for_alignment = if is_rev {
-                    query_segment_encoded_rc.clone()
-                } else {
-                    query_segment_encoded.clone()
-                };
-
-                log::debug!(
-                    "{}: Seed {}: target_segment_len={}, is_rev={}, query_first_10={:?}, target_first_10={:?}",
-                    query_name,
-                    idx,
-                    target_segment.len(),
-                    is_rev,
-                    &query_for_alignment[..10.min(query_for_alignment.len())],
-                    &target_segment[..10.min(target_segment.len())]
-                );
-                alignment_jobs.push(AlignmentJob {
-                    seed_idx: idx,
-                    query: query_for_alignment,
-                    target: target_segment,
-                    band_width: _opt.w, // Use band width from options
-                });
-            }
-            Err(e) => {
-                log::error!("Error getting reference segment for seed {:?}: {}", seed, e);
-            }
-        }
+        // === CHAIN-BASED ALIGNMENT STRATEGY (C++ bwa-mem2) ===
+        // Instead of aligning each seed individually, we now:
+        // 1. Create all seeds first
+        // 2. Chain them together
+        // 3. Create alignment jobs using CHAIN bounds (not per-seed bounds)
+        // This prevents N-rich regions from being included in DP alignment
+        // (Per-seed bounds were too conservative and still included N bases)
 
         seeds.push(seed);
     }
 
     log::debug!(
-        "{}: Found {} seeds, {} alignment jobs",
+        "{}: Found {} seeds (alignment jobs will be created from chains)",
         query_name,
-        seeds.len(),
-        alignment_jobs.len()
+        seeds.len()
+    );
+
+    // === NEW FLOW: Chain seeds FIRST, then create alignment jobs from chains ===
+    // This matches C++ bwa-mem2 mem_align1_core() flow exactly
+
+    // --- Seed Chaining ---
+    let mut chained_results = chain_seeds(seeds.clone(), _opt);
+    log::debug!(
+        "{}: Chaining produced {} chains",
+        query_name,
+        chained_results.len()
+    );
+
+    // --- Chain Filtering ---
+    // Implements bwa-mem2 mem_chain_flt logic (bwamem.cpp:506-624)
+    let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt);
+    log::debug!(
+        "{}: Chain filtering kept {} chains (from {} total)",
+        query_name,
+        filtered_chains.len(),
+        chained_results.len()
+    );
+
+    // === CREATE ALIGNMENT JOBS FROM FILTERED CHAINS (C++ Strategy) ===
+    // Now create alignment jobs using chain bounds instead of per-seed bounds
+    // This matches C++ bwa-mem2 mem_reg2aln() behavior exactly
+    let mut chain_to_job_map: Vec<Option<usize>> = Vec::new(); // Map chain_idx → job_idx
+
+    for (chain_idx, chain) in filtered_chains.iter().enumerate() {
+        if chain.seeds.is_empty() {
+            chain_to_job_map.push(None);
+            continue;
+        }
+
+        // Use chain bounds (covers all seeds in chain)
+        let qb = chain.query_start;
+        let qe = chain.query_end;
+        let bounded_query_len = (qe - qb) as usize;
+
+        log::debug!(
+            "{}: Chain {}: Creating alignment job for bounds=[{}, {}) len={}",
+            query_name,
+            chain_idx,
+            qb,
+            qe,
+            bounded_query_len
+        );
+
+        // Extract bounded query using chain bounds
+        let full_query = if chain.is_rev {
+            &query_segment_encoded_rc
+        } else {
+            &query_segment_encoded
+        };
+
+        let bounded_query: Vec<u8> = full_query[qb as usize..qe as usize].to_vec();
+
+        // Calculate reference position for bounded query
+        // Use first seed's ref_pos and adjust for query offset
+        let first_seed_idx = chain.seeds[0];
+        let first_seed = &seeds[first_seed_idx];
+
+        let ref_start_for_bounded = if first_seed.query_pos < qb {
+            first_seed.ref_pos
+        } else {
+            let offset = first_seed.query_pos - qb;
+            if offset as u64 > first_seed.ref_pos {
+                0
+            } else {
+                first_seed.ref_pos - offset as u64
+            }
+        };
+
+        // Get reference segment
+        let ref_segment_len = (bounded_query_len as u64 + 2 * _opt.w as u64)
+            .min(bwa_idx.bns.l_pac - ref_start_for_bounded);
+
+        match bwa_idx.bns.get_reference_segment(ref_start_for_bounded, ref_segment_len) {
+            Ok(target_segment) => {
+                let job_idx = alignment_jobs.len();
+                chain_to_job_map.push(Some(job_idx));
+
+                alignment_jobs.push(AlignmentJob {
+                    seed_idx: chain_idx, // Repurpose as chain_idx
+                    query: bounded_query,
+                    target: target_segment,
+                    band_width: _opt.w,
+                    query_offset: qb, // Use chain qb as offset
+                });
+            }
+            Err(e) => {
+                log::error!("{}: Chain {}: Error getting reference segment: {}", query_name, chain_idx, e);
+                chain_to_job_map.push(None);
+            }
+        }
+    }
+
+    log::debug!(
+        "{}: Created {} alignment jobs from {} filtered chains",
+        query_name,
+        alignment_jobs.len(),
+        filtered_chains.len()
     );
 
     // --- Execute Alignments (Adaptive Strategy) ---
@@ -2237,31 +2298,15 @@ fn generate_seeds_with_mode(
         .map(|(_, cigar)| cigar)
         .collect();
 
-    log::debug!(
-        "{}: Extended {} seeds, {} CIGARs produced",
-        query_name,
-        seeds.len(),
-        alignment_cigars.len()
-    );
+    // Extract query offsets for soft-clipping (C++ strategy: match mem_reg2aln)
+    let query_offsets: Vec<i32> = alignment_jobs.iter().map(|job| job.query_offset).collect();
 
-    // --- Seed Chaining ---
-    let mut chained_results = chain_seeds(seeds.clone(), _opt);
     log::debug!(
-        "{}: Chaining produced {} chains",
-        query_name,
-        chained_results.len()
-    );
-
-    // --- Chain Filtering ---
-    // Implements bwa-mem2 mem_chain_flt logic (bwamem.cpp:506-624)
-    let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt);
-    log::debug!(
-        "{}: Chain filtering kept {} chains (from {} total)",
+        "{}: Extended {} chains, {} CIGARs produced",
         query_name,
         filtered_chains.len(),
-        chained_results.len()
+        alignment_cigars.len()
     );
-    // --- End Seed Chaining ---
 
     // === MULTI-ALIGNMENT GENERATION FROM FILTERED CHAINS ===
     // Generate one alignment per filtered chain (matching C++ bwa-mem2 behavior)
@@ -2273,36 +2318,83 @@ fn generate_seeds_with_mode(
             continue;
         }
 
-        // Find the best-scoring seed in this chain
-        let mut best_seed_idx_in_chain = chain.seeds[0];
-        let mut best_score = alignment_scores[chain.seeds[0]];
-
-        for &seed_idx in &chain.seeds {
-            if alignment_scores[seed_idx] > best_score {
-                best_score = alignment_scores[seed_idx];
-                best_seed_idx_in_chain = seed_idx;
+        // Get alignment result for this chain
+        let job_idx = match chain_to_job_map[chain_idx] {
+            Some(idx) => idx,
+            None => {
+                log::warn!("{}: Chain {} has no alignment job, skipping", query_name, chain_idx);
+                continue; // Skip chains without alignment jobs
             }
-        }
+        };
 
-        let cigar_for_alignment = alignment_cigars[best_seed_idx_in_chain].clone();
-        let best_seed = &seeds[best_seed_idx_in_chain];
+        let mut cigar_for_alignment = alignment_cigars[job_idx].clone();
+        let score = alignment_scores[job_idx];
+        let query_offset = query_offsets[job_idx]; // Same as chain.query_start
+
+        // Use first seed for reference position calculation
+        let first_seed_idx = chain.seeds[0];
+        let first_seed = &seeds[first_seed_idx];
 
         log::debug!(
-            "{}: Chain {} (weight={}, kept={}): best_seed={} score={} len={}",
+            "{}: Chain {} (weight={}, kept={}): score={} bounds=[{}, {})",
             query_name,
             chain_idx,
             chain.weight,
             chain.kept,
-            best_seed_idx_in_chain,
-            best_score,
-            best_seed.len
+            score,
+            chain.query_start,
+            chain.query_end
         );
 
-        // Calculate the adjusted reference start position for full query alignment
-        let adjusted_ref_start = if best_seed.query_pos as u64 > best_seed.ref_pos {
-            0
+        // === C++ STRATEGY: Add soft-clipping like mem_reg2aln (bwamem.cpp:1783-1796) ===
+        // CIGAR from DP only covers bounded region [query_offset, query_offset + bounded_len)
+        // Add soft-clips for [0, query_offset) and [query_offset + bounded_len, query_len)
+
+        // Calculate bounded query length from CIGAR (sum of M, I, S operations)
+        let bounded_query_len: i32 = cigar_for_alignment
+            .iter()
+            .filter_map(|&(op, len)| match op as char {
+                'M' | 'I' | 'S' => Some(len),
+                _ => None,
+            })
+            .sum();
+
+        let clip5 = query_offset; // Bases before aligned region
+        let clip3 = query_len as i32 - query_offset - bounded_query_len; // Bases after aligned region
+
+        log::debug!(
+            "{}: Chain {}: Adding soft-clipping: clip5={}, clip3={} (query_offset={}, bounded_len={}, full_len={})",
+            query_name,
+            chain_idx,
+            clip5,
+            clip3,
+            query_offset,
+            bounded_query_len,
+            query_len
+        );
+
+        // Add 5' soft-clipping (like C++ bwamem.cpp:1789-1791)
+        if clip5 > 0 {
+            cigar_for_alignment.insert(0, (b'S', clip5));
+        }
+
+        // Add 3' soft-clipping (like C++ bwamem.cpp:1793-1795)
+        if clip3 > 0 {
+            cigar_for_alignment.push((b'S', clip3));
+        }
+
+        // Calculate the adjusted reference start position for bounded query alignment
+        // Need to adjust based on query_offset since we're aligning a bounded region
+        let adjusted_ref_start = if first_seed.query_pos < query_offset {
+            // Seed is before our bounded region (shouldn't happen, but handle gracefully)
+            first_seed.ref_pos
         } else {
-            best_seed.ref_pos - best_seed.query_pos as u64
+            let offset_within_bounded = first_seed.query_pos - query_offset;
+            if offset_within_bounded as u64 > first_seed.ref_pos {
+                0
+            } else {
+                first_seed.ref_pos - offset_within_bounded as u64
+            }
         };
 
         // Convert global position to chromosome-specific position
@@ -2321,7 +2413,7 @@ fn generate_seeds_with_mode(
                 rid,
                 global_pos
             );
-            ("unknown_ref".to_string(), 0, best_seed.ref_pos)
+            ("unknown_ref".to_string(), 0, first_seed.ref_pos)
         };
 
         // Calculate query bounds from chain (more accurate than single seed)
@@ -2330,16 +2422,16 @@ fn generate_seeds_with_mode(
         let seed_coverage = chain.weight; // Use chain weight as seed coverage for MAPQ
 
         // Generate hash for tie-breaking (based on position and strand)
-        let hash = hash_64((chr_pos << 1) | (if best_seed.is_rev { 1 } else { 0 }));
+        let hash = hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 }));
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
-            flag: if best_seed.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
+            flag: if chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
             ref_name,
             ref_id,
             pos: chr_pos,
             mapq: 60,          // Will be calculated by mark_secondary_alignments
-            score: best_score, // Use best alignment score from chain
+            score,             // Use alignment score from chain-based DP
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
             pnext: 0,
@@ -2437,6 +2529,36 @@ fn generate_seeds_with_mode(
                 }
             }
         }
+    } else {
+        // === NO ALIGNMENTS FOUND: Create unmapped read (C++ bwa-mem2 behavior) ===
+        // When no seeds/chains were generated, we must still output the read as unmapped
+        // (SAM flag 0x4) to match C++ bwa-mem2 behavior and avoid silently dropping reads
+        log::debug!(
+            "{}: No alignments generated (no seeds or all chains filtered), creating unmapped read",
+            query_name
+        );
+
+        alignments.push(Alignment {
+            query_name: query_name.to_string(),
+            flag: 0x4, // 0x4 = read unmapped
+            ref_name: "*".to_string(),
+            ref_id: 0, // 0 for unmapped (doesn't correspond to any real chromosome)
+            pos: 0,
+            mapq: 0,
+            score: 0,
+            cigar: Vec::new(), // Empty CIGAR = "*" in SAM format
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: String::from_utf8_lossy(query_seq).to_string(),
+            qual: query_qual.to_string(),
+            tags: Vec::new(),
+            // Internal fields (not used for unmapped reads)
+            query_start: 0,
+            query_end: 0,
+            seed_coverage: 0,
+            hash: 0,
+        });
     }
 
     alignments
@@ -3114,12 +3236,14 @@ mod tests {
                 query: query1.clone(),
                 target: target1.clone(),
                 band_width: 10,
+                query_offset: 0, // Test: align from start
             },
             super::AlignmentJob {
                 seed_idx: 1,
                 query: query2.clone(),
                 target: target2.clone(),
                 band_width: 10,
+                query_offset: 0, // Test: align from start
             },
         ];
 
