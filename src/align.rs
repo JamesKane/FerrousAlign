@@ -2293,32 +2293,37 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
         }
     }
 
-    // 3. Backtracking to reconstruct chains
-    // TODO: Implement full chain dropping (-D drop_ratio)
-    // Currently only returns best chain. Full implementation should:
-    // 1. Generate multiple chains (not just best)
-    // 2. Compare overlapping chains
-    // 3. Drop chains where seed_coverage < drop_ratio * better_chain_coverage
-    // See C++ bwamem.cpp mem_chain_flt() for full algorithm
-
-    let mut best_chain_score = 0;
-    let mut best_chain_end_idx = None;
-
-    for i in 0..num_seeds {
-        if dp[i] > best_chain_score {
-            best_chain_score = dp[i];
-            best_chain_end_idx = Some(i);
-        }
-    }
-
-    // Apply min_chain_weight filter (-W parameter)
-    // If best chain score is below minimum, return empty
-    if best_chain_score < opt.min_chain_weight {
-        return Vec::new();
-    }
+    // 3. Multi-chain extraction via iterative peak finding
+    // Algorithm:
+    // 1. Find highest-scoring peak in DP array
+    // 2. Backtrack to reconstruct chain
+    // 3. Mark seeds in chain as "used"
+    // 4. Repeat until no more peaks above min_chain_weight
+    // This matches bwa-mem2's approach to multi-chain generation
 
     let mut chains = Vec::new();
-    if let Some(mut current_idx) = best_chain_end_idx {
+    let mut used_seeds = vec![false; num_seeds]; // Track which seeds are already in chains
+
+    // Iteratively extract chains by finding peaks
+    loop {
+        // Find the highest unused peak
+        let mut best_chain_score = opt.min_chain_weight; // Only consider chains above minimum
+        let mut best_chain_end_idx: Option<usize> = None;
+
+        for i in 0..num_seeds {
+            if !used_seeds[i] && dp[i] >= best_chain_score {
+                best_chain_score = dp[i];
+                best_chain_end_idx = Some(i);
+            }
+        }
+
+        // Stop if no more chains above threshold
+        if best_chain_end_idx.is_none() {
+            break;
+        }
+
+        // Backtrack to reconstruct this chain
+        let mut current_idx = best_chain_end_idx.unwrap();
         let mut chain_seeds_indices = Vec::new();
         let mut current_seed = &seeds[current_idx];
 
@@ -2328,17 +2333,25 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
         let mut ref_end = current_seed.ref_pos + current_seed.len as u64;
         let is_rev = current_seed.is_rev;
 
-        while let Some(prev_idx) = prev_seed_idx[current_idx] {
+        // Backtrack through the chain
+        loop {
             chain_seeds_indices.push(current_idx);
-            current_idx = prev_idx;
-            current_seed = &seeds[current_idx];
+            used_seeds[current_idx] = true; // Mark seed as used
 
-            query_start = query_start.min(current_seed.query_pos);
-            query_end = query_end.max(current_seed.query_pos + current_seed.len);
-            ref_start = ref_start.min(current_seed.ref_pos);
-            ref_end = ref_end.max(current_seed.ref_pos + current_seed.len as u64);
+            // Get previous seed in chain
+            if let Some(prev_idx) = prev_seed_idx[current_idx] {
+                current_idx = prev_idx;
+                current_seed = &seeds[current_idx];
+
+                // Update chain bounds
+                query_start = query_start.min(current_seed.query_pos);
+                query_end = query_end.max(current_seed.query_pos + current_seed.len);
+                ref_start = ref_start.min(current_seed.ref_pos);
+                ref_end = ref_end.max(current_seed.ref_pos + current_seed.len as u64);
+            } else {
+                break; // Reached start of chain
+            }
         }
-        chain_seeds_indices.push(current_idx); // Add the first seed in the chain
 
         chain_seeds_indices.reverse(); // Order from start to end
 
@@ -2353,7 +2366,24 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
             weight: 0,  // Will be calculated by filter_chains()
             kept: 0,    // Will be set by filter_chains()
         });
+
+        // Safety limit: stop after extracting a reasonable number of chains
+        // This prevents pathological cases from consuming too much memory
+        if chains.len() >= 100 {
+            log::debug!(
+                "Extracted maximum of 100 chains from {} seeds, stopping",
+                num_seeds
+            );
+            break;
+        }
     }
+
+    log::debug!(
+        "Chain extraction: {} seeds → {} chains (min_weight={})",
+        num_seeds,
+        chains.len(),
+        opt.min_chain_weight
+    );
 
     chains
 }
