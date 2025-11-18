@@ -506,6 +506,40 @@ impl Alignment {
             })
             .sum()
     }
+
+    /// Calculate edit distance (NM tag) from CIGAR string
+    /// NM = number of mismatches + insertions + deletions
+    /// Approximation: counts I, D, X operations (M operations may contain mismatches)
+    /// For exact NM, would need to compare query and reference sequences
+    pub fn calculate_edit_distance(&self) -> i32 {
+        self.cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                match op as char {
+                    'I' | 'D' | 'X' => Some(len), // Count indels and explicit mismatches
+                    'M' => {
+                        // M includes both matches and mismatches
+                        // Approximate as 0 for now (would need sequence comparison for exact count)
+                        // In practice, bwa-mem2 calculates this from alignment score
+                        None
+                    }
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+
+    /// Generate XA tag entry for this alignment (alternative alignment format)
+    /// Format: RNAME,STRAND+POS,CIGAR,NM
+    /// Example: chr1,+1000,50M,2
+    pub fn to_xa_entry(&self) -> String {
+        let strand = if self.flag & 0x10 != 0 { '-' } else { '+' };
+        let pos = self.pos + 1; // XA uses 1-based position
+        let cigar = self.cigar_string();
+        let nm = self.calculate_edit_distance();
+
+        format!("{},{}{},{},{}", self.ref_name, strand, pos, cigar, nm)
+    }
 }
 
 /// Hash function for deterministic tie-breaking (matches C++ hash_64)
@@ -773,6 +807,92 @@ fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<C
     );
 
     kept_chains
+}
+
+/// Generate XA tag for alternative alignments
+/// Implements C++ mem_gen_alt (bwamem_extra.cpp:130-183)
+///
+/// Algorithm:
+/// 1. Find secondary alignments for each primary
+/// 2. Filter by score: secondary_score >= primary_score * xa_drop_ratio
+/// 3. Limit count: max_xa_hits (5) or max_xa_hits_alt (200)
+/// 4. Format as XA:Z:chr1,+100,50M,2;chr2,-200,48M1D2M,3;
+///
+/// Returns: HashMap<read_name, XA_tag_string>
+fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+
+    let mut xa_tags: HashMap<String, String> = HashMap::new();
+
+    if alignments.is_empty() {
+        return xa_tags;
+    }
+
+    // Group alignments by query name
+    let mut by_read: HashMap<String, Vec<&Alignment>> = HashMap::new();
+    for aln in alignments {
+        by_read.entry(aln.query_name.clone())
+            .or_insert_with(Vec::new)
+            .push(aln);
+    }
+
+    // For each read, generate XA tag from secondary alignments
+    for (read_name, read_alns) in by_read.iter() {
+        // Find primary alignment (flag & 0x100 == 0)
+        let primary = read_alns.iter().find(|a| a.flag & 0x100 == 0);
+
+        if primary.is_none() {
+            continue; // No primary alignment
+        }
+
+        let primary_score = primary.unwrap().score;
+        let xa_threshold = (primary_score as f32 * opt.xa_drop_ratio) as i32;
+
+        // Collect secondary alignments that pass score threshold
+        let mut secondaries: Vec<&Alignment> = read_alns.iter()
+            .filter(|a| {
+                (a.flag & 0x100 != 0) && // Is secondary
+                (a.score >= xa_threshold) // Score passes threshold
+            })
+            .cloned()
+            .collect();
+
+        if secondaries.is_empty() {
+            continue; // No qualifying secondaries
+        }
+
+        // Sort secondaries by score (descending) for consistent output
+        secondaries.sort_by(|a, b| b.score.cmp(&a.score));
+
+        // Apply hit limit (max_xa_hits or max_xa_hits_alt)
+        // TODO: Check if any alignment is to ALT contig for max_xa_hits_alt
+        let max_hits = opt.max_xa_hits as usize;
+        if secondaries.len() > max_hits {
+            secondaries.truncate(max_hits);
+        }
+
+        // Format as XA tag: XA:Z:chr1,+100,50M,2;chr2,-200,48M,3;
+        let xa_entries: Vec<String> = secondaries.iter()
+            .map(|aln| aln.to_xa_entry())
+            .collect();
+
+        if !xa_entries.is_empty() {
+            // Return just the value portion (without XA:Z: prefix)
+            // to_sam_string() will add the tag name and type
+            let xa_tag = format!("Z:{};", xa_entries.join(";"));
+            xa_tags.insert(read_name.clone(), xa_tag);
+        }
+    }
+
+    log::debug!(
+        "Generated XA tags for {} reads (from {} total alignments, xa_drop_ratio={}, max_xa_hits={})",
+        xa_tags.len(),
+        alignments.len(),
+        opt.xa_drop_ratio,
+        opt.max_xa_hits
+    );
+
+    xa_tags
 }
 
 /// Mark secondary alignments and calculate MAPQ values
@@ -2240,6 +2360,27 @@ fn generate_seeds_with_mode(
             alignments.iter().filter(|a| a.flag & 0x100 == 0).count(),
             alignments.iter().filter(|a| a.flag & 0x100 != 0).count()
         );
+
+        // === XA TAG GENERATION ===
+        // Generate XA tags for primary alignments with qualifying secondaries
+        // Format: XA:Z:chr1,+100,50M,2;chr2,-200,48M,3;
+        let xa_tags = generate_xa_tags(&alignments, _opt);
+
+        // Add XA tags to primary alignments
+        for aln in alignments.iter_mut() {
+            if aln.flag & 0x100 == 0 {
+                // This is a primary alignment
+                if let Some(xa_tag) = xa_tags.get(&aln.query_name) {
+                    // Add XA tag to this alignment's tags
+                    aln.tags.push(("XA".to_string(), xa_tag.clone()));
+                    log::debug!(
+                        "{}: Added XA tag with {} alternative alignments",
+                        aln.query_name,
+                        xa_tag.matches(';').count()
+                    );
+                }
+            }
+        }
     }
 
     alignments
