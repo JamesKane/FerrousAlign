@@ -1279,6 +1279,34 @@ fn execute_batched_alignments_with_size(
         for (i, result) in results.iter().enumerate() {
             if i < batch_jobs.len() {
                 all_results[batch_start + i] = (result.score.score, result.cigar.clone());
+
+                // Detect pathological CIGARs in SIMD path
+                let total_insertions: i32 = result.cigar.iter()
+                    .filter(|(op, _)| *op == b'I')
+                    .map(|(_, count)| count)
+                    .sum();
+                let total_deletions: i32 = result.cigar.iter()
+                    .filter(|(op, _)| *op == b'D')
+                    .map(|(_, count)| count)
+                    .sum();
+
+                if total_insertions > 10 || total_deletions > 5 {
+                    let job = &batch_jobs[i];
+                    // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
+                    log::warn!(
+                        "PATHOLOGICAL_CIGAR_SIMD|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
+                        batch_start + i,
+                        job.query.len(),
+                        job.target.len(),
+                        job.band_width,
+                        result.score.score,
+                        total_insertions,
+                        total_deletions,
+                        result.cigar,
+                        job.query,
+                        job.target
+                    );
+                }
             }
         }
     }
@@ -1304,6 +1332,34 @@ pub(crate) fn execute_scalar_alignments(
                 job.band_width,
                 0, // h0
             );
+
+            // Detect pathological CIGARs (excessive insertions/deletions)
+            let total_insertions: i32 = cigar.iter()
+                .filter(|(op, _)| *op == b'I')
+                .map(|(_, count)| count)
+                .sum();
+            let total_deletions: i32 = cigar.iter()
+                .filter(|(op, _)| *op == b'D')
+                .map(|(_, count)| count)
+                .sum();
+
+            // Log if CIGAR has excessive indels (likely bug)
+            if total_insertions > 10 || total_deletions > 5 {
+                // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
+                log::warn!(
+                    "PATHOLOGICAL_CIGAR_SCALAR|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
+                    idx,
+                    qlen,
+                    tlen,
+                    job.band_width,
+                    score_out.score,
+                    total_insertions,
+                    total_deletions,
+                    cigar,
+                    job.query,
+                    job.target
+                );
+            }
 
             if idx < 3 {
                 // Log first 3 alignments for debugging

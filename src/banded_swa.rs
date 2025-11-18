@@ -2225,4 +2225,345 @@ mod tests {
 
         println!("✅ Random sequence stress test completed");
     }
+
+    /// Reproducer test for CIGAR generation bug found in Session 30 validation
+    ///
+    /// This test uses a simple perfect match case that should produce "12M"
+    /// but may produce spurious indels due to the DP traceback bug.
+    ///
+    /// Problem: The DP loop selects max(M, E, F) using OLD E and F values instead
+    /// of calculating NEW E and F first, leading to wrong traceback codes.
+    ///
+    /// This test currently PASSES with the buggy code (too simple to trigger bug)
+    /// but validates the basic expectation for perfect matches.
+    #[test]
+    fn test_cigar_perfect_match_simple() {
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Perfect match: should produce 12M
+        let query = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT
+        let target = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT
+
+        let (result, cigar) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            100, // Large bandwidth
+            0,   // h0 = 0
+        );
+
+        // Validate the CIGAR string
+        assert_eq!(cigar.len(), 1, "Perfect match should produce single CIGAR operation, got: {:?}", cigar);
+        assert_eq!(cigar[0].0, b'M', "Perfect match should be 'M' operation, got: {:?}", cigar);
+        assert_eq!(cigar[0].1, 12, "Perfect match should be 12M, got: {:?}", cigar);
+
+        // Validate alignment endpoints (qle/tle are end positions, may be 0-indexed or 1-indexed)
+        // Check that we aligned the full length
+        assert!(result.qle >= 11, "Query should align to near end, got qle={}", result.qle);
+        assert!(result.tle >= 11, "Target should align to near end, got tle={}", result.tle);
+        assert_eq!(result.score, 12, "Score should be 12 (12 matches)");
+
+        println!("✅ Perfect match CIGAR test passed!");
+    }
+
+    /// More complex test that may expose the CIGAR bug with partial alignments
+    ///
+    /// Uses a read pattern similar to real sequencing data:
+    /// - Good quality start that aligns well
+    /// - Poor quality end that should be soft-clipped
+    ///
+    /// Expected: Should produce simple CIGAR like "49M99S"
+    /// Buggy code might produce: Excessive insertions like "30I1M3I3M..."
+    #[test]
+    fn test_cigar_with_soft_clip_pattern() {
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Simulate a read with:
+        // - First 49 bases: good quality, matches target
+        // - Remaining 99 bases: poor quality, should be soft-clipped
+        let mut query = Vec::new();
+        for i in 0..49 {
+            query.push((i % 4) as u8); // ACGTACGT... pattern
+        }
+        for i in 49..148 {
+            // Add non-matching bases (simulating low quality)
+            query.push(((i * 7 + 3) % 4) as u8); // Different pattern
+        }
+
+        // Target: just the first 49 bases (matches the good part)
+        let target: Vec<u8> = (0..49).map(|i| (i % 4) as u8).collect();
+
+        let (result, cigar) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            100,
+            0,
+        );
+
+        println!("CIGAR for soft-clip test: {:?}", cigar);
+        println!("Score: {}, qle: {}, tle: {}", result.score, result.qle, result.tle);
+
+        // Check that we don't have pathological insertions
+        let total_insertions: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'I')
+            .map(|(_, count)| count)
+            .sum();
+
+        assert!(
+            total_insertions < 10,
+            "Should not have excessive insertions (found {}). CIGAR: {:?}",
+            total_insertions,
+            cigar
+        );
+
+        // Check that we have a reasonable number of matches
+        let total_matches: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'M')
+            .map(|(_, count)| count)
+            .sum();
+
+        assert!(
+            total_matches >= 40,
+            "Should have at least 40 matches (found {}). CIGAR: {:?}",
+            total_matches,
+            cigar
+        );
+
+        // Should have soft-clipping at the end
+        let total_soft_clips: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'S')
+            .map(|(_, count)| count)
+            .sum();
+
+        assert!(
+            total_soft_clips > 90,
+            "Should have significant soft-clipping at end (found {}). CIGAR: {:?}",
+            total_soft_clips,
+            cigar
+        );
+
+        println!("✅ Soft-clip pattern CIGAR test passed!");
+    }
+
+    /// Test with PRODUCTION-SIZE target (348bp) vs query (148bp)
+    ///
+    /// This test matches the dimensions seen in production:
+    /// - Query: 148bp (typical read length)
+    /// - Target: 348bp (larger reference segment)
+    /// - Band width: 100
+    ///
+    /// In production, this pattern produces pathological CIGARs like "30I1M3I3M111S"
+    /// with 89 insertions when it should produce something like "49M99S".
+    ///
+    /// The difference from the previous test is the TARGET SIZE:
+    /// - Previous test: target=49bp (smaller than query)
+    /// - This test: target=348bp (larger than query, like production)
+    #[test]
+    fn test_production_dimensions_large_target() {
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Simulate a 148bp query with:
+        // - First 49 bases: match the target well
+        // - Remaining 99 bases: poor quality, should be soft-clipped
+        let mut query = Vec::new();
+        for i in 0..49 {
+            query.push((i % 4) as u8); // ACGTACGT... pattern
+        }
+        for i in 49..148 {
+            // Add bases that don't match well (simulating low quality / N's)
+            query.push(((i * 7 + 3) % 4) as u8);
+        }
+
+        // Target: 348bp (like production), with good match for first 49 bases
+        let mut target = Vec::new();
+        for i in 0..49 {
+            target.push((i % 4) as u8); // Matches query's first 49bp
+        }
+        // Fill the rest of target with a different pattern
+        for i in 49..348 {
+            target.push(((i * 5 + 2) % 4) as u8);
+        }
+
+        let (result, cigar) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            100, // Same band_width as production
+            0,   // h0 = 0
+        );
+
+        println!("\n=== Production Dimensions Test ===");
+        println!("Query length: {}, Target length: {}", query.len(), target.len());
+        println!("CIGAR: {:?}", cigar);
+        println!("Score: {}, qle: {}, tle: {}", result.score, result.qle, result.tle);
+
+        // Decode CIGAR for readability
+        let cigar_str: String = cigar
+            .iter()
+            .map(|(op, count)| format!("{}{}", count, *op as char))
+            .collect::<Vec<_>>()
+            .join("");
+        println!("CIGAR string: {}", cigar_str);
+
+        // Count operations
+        let total_insertions: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'I')
+            .map(|(_, count)| count)
+            .sum();
+        let total_deletions: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'D')
+            .map(|(_, count)| count)
+            .sum();
+        let total_matches: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'M')
+            .map(|(_, count)| count)
+            .sum();
+        let total_soft_clips: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'S')
+            .map(|(_, count)| count)
+            .sum();
+
+        println!("Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
+            total_insertions, total_deletions, total_matches, total_soft_clips);
+
+        // Check for pathological CIGAR (production bug)
+        if total_insertions > 10 {
+            panic!(
+                "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {}\nCIGAR: {}\nThis matches the production pathological pattern.",
+                total_insertions,
+                cigar_str
+            );
+        }
+
+        // Expected behavior: should align first ~49bp and soft-clip the rest
+        assert!(
+            total_insertions < 10,
+            "Should not have excessive insertions (found {}). CIGAR: {}",
+            total_insertions,
+            cigar_str
+        );
+
+        assert!(
+            total_matches >= 40,
+            "Should have at least 40 matches (found {}). CIGAR: {}",
+            total_matches,
+            cigar_str
+        );
+
+        assert!(
+            total_soft_clips > 90,
+            "Should soft-clip the unmatched query end (found {}). CIGAR: {}",
+            total_soft_clips,
+            cigar_str
+        );
+
+        println!("✅ Production dimensions test passed! No pathological CIGAR.");
+    }
+
+    /// Test with MISMATCHED start (like real production data)
+    ///
+    /// In production logs, we see query and target that DON'T match at the start.
+    /// This test simulates:
+    /// - Query: starts with pattern A
+    /// - Target: starts with different pattern B, then has pattern A later
+    ///
+    /// Expected: Smith-Waterman should find the best local alignment,
+    /// possibly soft-clipping the mismatched start or finding match later.
+    ///
+    /// Bug manifestation: May produce excessive insertions at start
+    #[test]
+    fn test_mismatched_start_pattern() {
+        let mat = bwa_fill_scmat(1, 4, -1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+
+        // Query: 148bp with consistent pattern
+        let mut query = Vec::new();
+        for i in 0..49 {
+            query.push((i % 4) as u8); // ACGTACGT...
+        }
+        for i in 49..148 {
+            query.push(((i * 7 + 3) % 4) as u8); // Different pattern
+        }
+
+        // Target: 348bp that DOESN'T match query at start
+        // First 50bp: completely different pattern
+        // Then starting at position 50: matches query's pattern
+        let mut target = Vec::new();
+        for i in 0..50 {
+            target.push(((i * 5 + 2) % 4) as u8); // Different pattern (no match)
+        }
+        for i in 50..99 {
+            target.push(((i - 50) % 4) as u8); // Matches query's first 49bp (offset by 50)
+        }
+        for i in 99..348 {
+            target.push(((i * 3 + 1) % 4) as u8); // Fill rest
+        }
+
+        let (result, cigar) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            100,
+            0,
+        );
+
+        println!("\n=== Mismatched Start Test ===");
+        println!("Query length: {}, Target length: {}", query.len(), target.len());
+        println!("CIGAR: {:?}", cigar);
+        println!("Score: {}, qle: {}, tle: {}", result.score, result.qle, result.tle);
+
+        let cigar_str: String = cigar
+            .iter()
+            .map(|(op, count)| format!("{}{}", count, *op as char))
+            .collect::<Vec<_>>()
+            .join("");
+        println!("CIGAR string: {}", cigar_str);
+
+        let total_insertions: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'I')
+            .map(|(_, count)| count)
+            .sum();
+        let total_deletions: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'D')
+            .map(|(_, count)| count)
+            .sum();
+        let total_matches: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'M')
+            .map(|(_, count)| count)
+            .sum();
+        let total_soft_clips: i32 = cigar.iter()
+            .filter(|(op, _)| *op == b'S')
+            .map(|(_, count)| count)
+            .sum();
+
+        println!("Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
+            total_insertions, total_deletions, total_matches, total_soft_clips);
+
+        // Check for pathological CIGAR (production bug)
+        if total_insertions > 10 {
+            panic!(
+                "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {}\nCIGAR: {}\nThis matches the production pathological pattern.",
+                total_insertions,
+                cigar_str
+            );
+        }
+
+        // Should not have excessive insertions
+        assert!(
+            total_insertions < 10,
+            "Should not have excessive insertions (found {}). CIGAR: {}",
+            total_insertions,
+            cigar_str
+        );
+
+        println!("✅ Mismatched start test passed! No pathological CIGAR.");
+    }
 }

@@ -2005,7 +2005,8 @@ fn output_batch_paired(
         for mut alignment in alignments1 {
             let is_unmapped = alignment.flag & 0x4 != 0;
             let is_secondary = alignment.flag & 0x100 != 0;
-            let should_output = is_unmapped || !is_secondary || alignment.score >= opt.t;
+            // Only output unmapped reads or alignments that meet score threshold (matching C++ bwa-mem2)
+            let should_output = is_unmapped || alignment.score >= opt.t;
 
             if should_output {
                 if let Some(ref rg) = rg_id {
@@ -2028,7 +2029,8 @@ fn output_batch_paired(
         for mut alignment in alignments2 {
             let is_unmapped = alignment.flag & 0x4 != 0;
             let is_secondary = alignment.flag & 0x100 != 0;
-            let should_output = is_unmapped || !is_secondary || alignment.score >= opt.t;
+            // Only output unmapped reads or alignments that meet score threshold (matching C++ bwa-mem2)
+            let should_output = is_unmapped || alignment.score >= opt.t;
 
             if should_output {
                 if let Some(ref rg) = rg_id {
