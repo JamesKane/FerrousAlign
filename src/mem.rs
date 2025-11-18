@@ -1362,6 +1362,11 @@ fn mem_matesw(
             .unwrap(),
             qual: mate_qual.to_string(),
             tags: Vec::new(),
+            // Internal fields for alignment selection
+            query_start: out_score.qle - out_score.qle, // Full query alignment
+            query_end: out_score.qle,
+            seed_coverage: l_ms, // Mate sequence length as coverage
+            hash: 0, // Will be set later if needed
         };
 
         rescued_alignments.push(rescued_aln);
@@ -1811,6 +1816,11 @@ fn output_batch_paired(
                 seq: String::from_utf8_lossy(seq1).to_string(),
                 qual: qual1.clone(),
                 tags: Vec::new(),
+                // Internal fields for alignment selection (unmapped = defaults)
+                query_start: 0,
+                query_end: seq1.len() as i32,
+                seed_coverage: 0,
+                hash: 0,
             };
 
             if mate2_ref_initial != "*" {
@@ -1840,6 +1850,11 @@ fn output_batch_paired(
                 seq: String::from_utf8_lossy(seq2).to_string(),
                 qual: qual2.clone(),
                 tags: Vec::new(),
+                // Internal fields for alignment selection (unmapped = defaults)
+                query_start: 0,
+                query_end: seq2.len() as i32,
+                seed_coverage: 0,
+                hash: 0,
             };
 
             if mate1_ref_initial != "*" {

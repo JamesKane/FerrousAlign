@@ -396,6 +396,11 @@ pub struct Alignment {
     pub qual: String,          // ASCII of Phred-scaled base quality+33
     // Optional SAM tags
     pub tags: Vec<(String, String)>, // Vector of (tag_name, tag_value) pairs
+    // Internal fields for alignment selection (not output to SAM)
+    pub(crate) query_start: i32, // Query start position (0-based)
+    pub(crate) query_end: i32,   // Query end position (exclusive)
+    pub(crate) seed_coverage: i32, // Length of region covered by seeds (for MAPQ)
+    pub(crate) hash: u64,        // Hash for deterministic tie-breaking
 }
 
 impl Alignment {
@@ -484,6 +489,205 @@ impl Alignment {
         }
 
         sam_line
+    }
+
+    /// Calculate the aligned length on the query from CIGAR
+    /// Sums M, I, S, =, X operations (operations that consume query bases)
+    pub fn query_length(&self) -> i32 {
+        self.cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                match op as char {
+                    'M' | 'I' | 'S' | '=' | 'X' => Some(len),
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+}
+
+/// Hash function for deterministic tie-breaking (matches C++ hash_64)
+/// Used in bwa-mem2 for stable sorting when scores are equal
+fn hash_64(key: u64) -> u64 {
+    let mut key = key;
+    key = (!key).wrapping_add(key << 21);
+    key = key ^ (key >> 24);
+    key = key.wrapping_add(key << 3).wrapping_add(key << 8);
+    key = key ^ (key >> 14);
+    key = key.wrapping_add(key << 2).wrapping_add(key << 4);
+    key = key ^ (key >> 28);
+    key = key.wrapping_add(key << 31);
+    key
+}
+
+/// Check if two alignments overlap significantly on the query sequence
+/// Returns true if overlap >= mask_level * min_alignment_length
+/// Implements C++ mem_mark_primary_se_core logic (bwamem.cpp:1392-1418)
+fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
+    // Calculate query bounds
+    let a1_qb = a1.query_start;
+    let a1_qe = a1.query_end;
+    let a2_qb = a2.query_start;
+    let a2_qe = a2.query_end;
+
+    // Find overlap region
+    let b_max = a1_qb.max(a2_qb);
+    let e_min = a1_qe.min(a2_qe);
+
+    if e_min <= b_max {
+        return false; // No overlap
+    }
+
+    let overlap = e_min - b_max;
+    let min_len = (a1_qe - a1_qb).min(a2_qe - a2_qb);
+
+    // Overlap is significant if >= mask_level * min_length
+    overlap >= (min_len as f32 * mask_level) as i32
+}
+
+/// Calculate MAPQ (mapping quality) for an alignment
+/// Implements C++ mem_approx_mapq_se (bwamem.cpp:1470-1494)
+fn calculate_mapq(
+    score: i32,
+    sub_score: i32,
+    seed_coverage: i32,
+    sub_count: i32,
+    match_score: i32,
+    mismatch_penalty: i32,
+    opt: &MemOpt,
+) -> u8 {
+    const MEM_MAPQ_COEF: f64 = 30.0;
+    const MEM_MAPQ_MAX: u8 = 60;
+
+    // Use sub_score, or min_seed_len * match_score as minimum
+    let sub = if sub_score > 0 {
+        sub_score
+    } else {
+        opt.min_seed_len * match_score
+    };
+
+    // Return 0 if secondary hit is >= best hit
+    if sub >= score {
+        return 0;
+    }
+
+    // Calculate alignment length (approximate from seed coverage)
+    let l = seed_coverage;
+
+    // Calculate sequence identity
+    // identity = 1 - (l * a - score) / (a + b) / l
+    let identity = 1.0 - ((l * match_score - score) as f64)
+        / ((match_score + mismatch_penalty) as f64)
+        / (l as f64);
+
+    if score == 0 {
+        return 0;
+    }
+
+    // Traditional MAPQ formula (default when mapQ_coef_len = 0)
+    // mapq = 30.0 * (1 - sub/score) * ln(seed_coverage)
+    let mut mapq = (MEM_MAPQ_COEF
+        * (1.0 - (sub as f64) / (score as f64))
+        * (seed_coverage as f64).ln()
+        + 0.499) as i32;
+
+    // Apply identity penalty if < 95%
+    if identity < 0.95 {
+        mapq = (mapq as f64 * identity * identity + 0.499) as i32;
+    }
+
+    // Penalty for multiple suboptimal alignments
+    // mapq -= ln(sub_n+1) * 4.343
+    if sub_count > 0 {
+        mapq -= (((sub_count + 1) as f64).ln() * 4.343) as i32;
+    }
+
+    // Cap at max and floor at 0
+    if mapq > MEM_MAPQ_MAX as i32 {
+        mapq = MEM_MAPQ_MAX as i32;
+    }
+    if mapq < 0 {
+        mapq = 0;
+    }
+
+    mapq as u8
+}
+
+/// Mark secondary alignments and calculate MAPQ values
+/// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
+///
+/// Algorithm:
+/// 1. Sort alignments by score (descending), then by hash
+/// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
+/// 3. If overlap >= mask_level, mark as secondary (set 0x100 flag)
+/// 4. Calculate MAPQ based on score difference and overlap count
+fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
+    if alignments.is_empty() {
+        return;
+    }
+
+    let mask_level = opt.mask_level;
+
+    // Calculate score gap threshold for sub_count
+    // tmp = max(a+b, o_del+e_del, o_ins+e_ins)
+    let mut tmp = opt.a + opt.b;
+    tmp = tmp.max(opt.o_del + opt.e_del);
+    tmp = tmp.max(opt.o_ins + opt.e_ins);
+
+    // Track which alignments are primary (not marked secondary)
+    let mut primary_indices: Vec<usize> = Vec::new();
+    primary_indices.push(0); // First alignment is always primary
+
+    // Track sub-scores and sub-counts for MAPQ calculation
+    let mut sub_scores: Vec<i32> = vec![0; alignments.len()];
+    let mut sub_counts: Vec<i32> = vec![0; alignments.len()];
+
+    // Check each alignment against existing primaries for overlap
+    for i in 1..alignments.len() {
+        let mut is_secondary = false;
+
+        for &j in &primary_indices {
+            if alignments_overlap(&alignments[i], &alignments[j], mask_level) {
+                // Track sub-score for MAPQ calculation
+                if sub_scores[j] == 0 {
+                    sub_scores[j] = alignments[i].score;
+                }
+
+                // Count close suboptimal hits for MAPQ penalty
+                if alignments[j].score - alignments[i].score <= tmp {
+                    sub_counts[j] += 1;
+                }
+
+                // Mark as secondary
+                alignments[i].flag |= 0x100; // Set secondary flag
+                is_secondary = true;
+                break;
+            }
+        }
+
+        // If no overlap with any primary, add as new primary
+        if !is_secondary {
+            primary_indices.push(i);
+        }
+    }
+
+    // Calculate MAPQ for all alignments
+    for i in 0..alignments.len() {
+        if alignments[i].flag & 0x100 == 0 {
+            // Primary alignment: calculate MAPQ
+            alignments[i].mapq = calculate_mapq(
+                alignments[i].score,
+                sub_scores[i],
+                alignments[i].seed_coverage,
+                sub_counts[i],
+                opt.a,
+                opt.b,
+                opt,
+            );
+        } else {
+            // Secondary alignment: MAPQ = 0
+            alignments[i].mapq = 0;
+        }
     }
 }
 
@@ -1772,13 +1976,21 @@ fn generate_seeds_with_mode(
             ("unknown_ref".to_string(), 0, best_seed.ref_pos)
         };
 
+        // Calculate query bounds and seed coverage from CIGAR
+        let mut query_start = best_seed.query_pos;
+        let mut query_end = best_seed.query_pos + best_seed.len;
+        let seed_coverage = best_seed.len;
+
+        // Generate hash for tie-breaking (based on position and strand)
+        let hash = hash_64((chr_pos << 1) | (if best_seed.is_rev { 1 } else { 0 }));
+
         alignments.push(Alignment {
             query_name: query_name.to_string(),
             flag: if best_seed.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
             ref_name,
             ref_id,
             pos: chr_pos,
-            mapq: 60,          // Placeholder, needs proper calculation
+            mapq: 60,          // Will be calculated by mark_secondary_alignments
             score: best_score, // Use actual alignment score
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
@@ -1786,7 +1998,12 @@ fn generate_seeds_with_mode(
             tlen: 0,
             seq: String::from_utf8_lossy(query_seq).to_string(),
             qual: query_qual.to_string(),
-            tags: Vec::new(), // Optional tags to be added later
+            tags: Vec::new(),
+            // Internal fields for alignment selection
+            query_start,
+            query_end,
+            seed_coverage,
+            hash,
         });
     }
 
@@ -1824,6 +2041,33 @@ fn generate_seeds_with_mode(
                 aln.cigar_string()
             );
         }
+    }
+
+    // === ALIGNMENT SELECTION: Sort, Mark Secondary, Calculate MAPQ ===
+    // Implements bwa-mem2 mem_mark_primary_se logic (bwamem.cpp:1420-1464)
+    if !alignments.is_empty() {
+        // Sort alignments by score (descending), then by hash (for tie-breaking)
+        // Matches C++ alnreg_hlt comparator in bwamem.cpp:155
+        alignments.sort_by(|a, b| {
+            match b.score.cmp(&a.score) {
+                std::cmp::Ordering::Equal => a.hash.cmp(&b.hash), // Tie-breaker
+                other => other,
+            }
+        });
+
+        // Mark secondary alignments and calculate MAPQ
+        // This modifies alignments in-place:
+        // - Sets 0x100 flag for secondary alignments
+        // - Calculates proper MAPQ values (0-60) based on score differences
+        mark_secondary_alignments(&mut alignments, _opt);
+
+        log::debug!(
+            "{}: After alignment selection: {} alignments ({} primary, {} secondary)",
+            query_name,
+            alignments.len(),
+            alignments.iter().filter(|a| a.flag & 0x100 == 0).count(),
+            alignments.iter().filter(|a| a.flag & 0x100 != 0).count()
+        );
     }
 
     alignments
