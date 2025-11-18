@@ -1203,8 +1203,11 @@ fn generate_seeds_with_mode(
         }
 
         // Output any remaining SMEMs (C++ lines 656-665)
+        // CRITICAL FIX: Access last element, not first!
+        // C++ reverses the array, so prev[0] is the longest SMEM.
+        // We skip the reverse and use .iter().rev(), so the longest SMEM is at the END of our array.
         if !prev_array_buf.is_empty() {
-            let smem = prev_array_buf[0];
+            let smem = prev_array_buf[prev_array_buf.len() - 1];
             let len = smem.n - smem.m + 1;
             if len >= min_seed_len {
                 let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
@@ -1334,7 +1337,9 @@ fn generate_seeds_with_mode(
                 }
             }
 
-            for smem in prev_array_buf_rc.iter().skip(1) {
+            // CRITICAL FIX: Use .rev() to match C++ iteration order (C++ lines 632-649)
+            // C++ iterates from p+1 to numPrev over the REVERSED array
+            for smem in prev_array_buf_rc.iter().rev().skip(1) {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
                 new_smem.m = j as i32;
 
@@ -1352,8 +1357,11 @@ fn generate_seeds_with_mode(
             }
         }
 
+        // CRITICAL FIX: Access last element, not first! (same as forward strand)
+        // C++ reverses the array, so prev[0] is the longest SMEM.
+        // We skip the reverse and use .iter().rev(), so the longest SMEM is at the END of our array.
         if !prev_array_buf_rc.is_empty() {
-            let smem = prev_array_buf_rc[0];
+            let smem = prev_array_buf_rc[prev_array_buf_rc.len() - 1];
             if (smem.n - smem.m + 1) >= min_seed_len {
                 all_smems.push(smem);
             }
