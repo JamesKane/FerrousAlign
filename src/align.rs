@@ -738,28 +738,10 @@ fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<C
             continue;
         }
 
-        // Apply drop_ratio threshold
-        if !kept_chains.is_empty() {
-            let best_weight = kept_chains[0].weight;
-            let weight_threshold = (best_weight as f32 * opt.drop_ratio) as i32;
-            let weight_diff = best_weight - chain.weight;
-
-            // Drop if weight < best_weight * drop_ratio AND difference >= 2 * min_seed_len
-            if chain.weight < weight_threshold && weight_diff >= (opt.min_seed_len << 1) {
-                log::debug!(
-                    "Chain {} dropped: weight={} < threshold={} (best={} * drop_ratio={})",
-                    i,
-                    chain.weight,
-                    weight_threshold,
-                    best_weight,
-                    opt.drop_ratio
-                );
-                continue;
-            }
-        }
-
-        // Check overlap with already-kept chains
+        // Check overlap with already-kept chains (matching C++ bwamem.cpp:568-589)
+        // IMPORTANT: drop_ratio only applies to OVERLAPPING chains, not all chains
         let mut overlaps = false;
+        let mut should_discard = false;
         let mut chain_copy = chain.clone();
 
         for kept_chain in &kept_chains {
@@ -777,13 +759,37 @@ fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<C
                 if overlap >= (min_len as f32 * opt.mask_level) as i32 {
                     overlaps = true;
                     chain_copy.kept = 1; // Shadowed by better chain
+
+                    // C++ bwamem.cpp:580-581: Apply drop_ratio ONLY for overlapping chains
+                    // Drop if weight < kept_weight * drop_ratio AND difference >= 2 * min_seed_len
+                    let weight_threshold = (kept_chain.weight as f32 * opt.drop_ratio) as i32;
+                    let weight_diff = kept_chain.weight - chain.weight;
+
+                    if chain.weight < weight_threshold && weight_diff >= (opt.min_seed_len << 1) {
+                        log::debug!(
+                            "Chain {} dropped: overlaps with kept chain, weight={} < threshold={} (kept_weight={} * drop_ratio={})",
+                            i,
+                            chain.weight,
+                            weight_threshold,
+                            kept_chain.weight,
+                            opt.drop_ratio
+                        );
+                        should_discard = true;
+                        break;
+                    }
                     break;
                 }
             }
         }
 
+        // Skip discarded chains
+        if should_discard {
+            continue;
+        }
+
+        // Non-overlapping chains are always kept (C++ line 588: kept = large_ovlp? 2 : 3)
         if !overlaps {
-            chain_copy.kept = 3; // Primary chain
+            chain_copy.kept = 3; // Primary chain (no overlap)
         }
 
         kept_chains.push(chain_copy);
