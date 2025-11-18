@@ -368,7 +368,7 @@ pub fn reverse_complement_code(code: u8) -> u8 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Chain {
     pub score: i32,
     pub seeds: Vec<usize>, // Indices of seeds in the original seeds vector
@@ -377,6 +377,8 @@ pub struct Chain {
     pub ref_start: u64,
     pub ref_end: u64,
     pub is_rev: bool,
+    pub weight: i32, // Chain weight (seed coverage), calculated by mem_chain_weight
+    pub kept: i32,   // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
 }
 
 #[derive(Debug)]
@@ -611,6 +613,166 @@ fn calculate_mapq(
     }
 
     mapq as u8
+}
+
+/// Calculate chain weight based on seed coverage
+/// Implements C++ mem_chain_weight (bwamem.cpp:429-448)
+///
+/// Weight = minimum of query coverage and reference coverage
+/// This accounts for non-overlapping seed lengths in the chain
+fn calculate_chain_weight(chain: &Chain, seeds: &[Seed]) -> i32 {
+    if chain.seeds.is_empty() {
+        return 0;
+    }
+
+    // Calculate query coverage (non-overlapping seed lengths on query)
+    let mut query_cov = 0;
+    let mut last_qe = -1i32;
+
+    for &seed_idx in &chain.seeds {
+        let seed = &seeds[seed_idx];
+        let qb = seed.query_pos;
+        let qe = seed.query_pos + seed.len;
+
+        if qb > last_qe {
+            // No overlap with previous seed
+            query_cov += seed.len;
+        } else if qe > last_qe {
+            // Partial overlap
+            query_cov += qe - last_qe;
+        }
+        // else: completely overlapped, no contribution
+
+        last_qe = last_qe.max(qe);
+    }
+
+    // Calculate reference coverage (non-overlapping seed lengths on reference)
+    let mut ref_cov = 0;
+    let mut last_re = 0u64;
+
+    for &seed_idx in &chain.seeds {
+        let seed = &seeds[seed_idx];
+        let rb = seed.ref_pos;
+        let re = seed.ref_pos + seed.len as u64;
+
+        if rb > last_re {
+            // No overlap
+            ref_cov += seed.len;
+        } else if re > last_re {
+            // Partial overlap
+            ref_cov += (re - last_re) as i32;
+        }
+
+        last_re = last_re.max(re);
+    }
+
+    // Weight = min(query_cov, ref_cov)
+    query_cov.min(ref_cov)
+}
+
+/// Filter chains using drop_ratio and score thresholds
+/// Implements C++ mem_chain_flt (bwamem.cpp:506-624)
+///
+/// Algorithm:
+/// 1. Calculate weight for each chain
+/// 2. Sort chains by weight (descending)
+/// 3. Filter by min_chain_weight
+/// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
+/// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
+fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<Chain> {
+    if chains.is_empty() {
+        return Vec::new();
+    }
+
+    // Calculate weights for all chains
+    for chain in chains.iter_mut() {
+        chain.weight = calculate_chain_weight(chain, seeds);
+        chain.kept = 0; // Initially mark as discarded
+    }
+
+    // Sort chains by weight (descending)
+    chains.sort_by(|a, b| b.weight.cmp(&a.weight));
+
+    // Filter by minimum weight
+    let mut kept_chains: Vec<Chain> = Vec::new();
+
+    for i in 0..chains.len() {
+        let chain = &chains[i];
+
+        // Skip if below minimum weight
+        if chain.weight < opt.min_chain_weight {
+            continue;
+        }
+
+        // Apply drop_ratio threshold
+        if !kept_chains.is_empty() {
+            let best_weight = kept_chains[0].weight;
+            let weight_threshold = (best_weight as f32 * opt.drop_ratio) as i32;
+            let weight_diff = best_weight - chain.weight;
+
+            // Drop if weight < best_weight * drop_ratio AND difference >= 2 * min_seed_len
+            if chain.weight < weight_threshold && weight_diff >= (opt.min_seed_len << 1) {
+                log::debug!(
+                    "Chain {} dropped: weight={} < threshold={} (best={} * drop_ratio={})",
+                    i,
+                    chain.weight,
+                    weight_threshold,
+                    best_weight,
+                    opt.drop_ratio
+                );
+                continue;
+            }
+        }
+
+        // Check overlap with already-kept chains
+        let mut overlaps = false;
+        let mut chain_copy = chain.clone();
+
+        for kept_chain in &kept_chains {
+            // Check if chains overlap on query
+            let qb_max = chain.query_start.max(kept_chain.query_start);
+            let qe_min = chain.query_end.min(kept_chain.query_end);
+
+            if qe_min > qb_max {
+                // Chains overlap on query
+                let overlap = qe_min - qb_max;
+                let min_len = (chain.query_end - chain.query_start)
+                    .min(kept_chain.query_end - kept_chain.query_start);
+
+                // Check if overlap is significant
+                if overlap >= (min_len as f32 * opt.mask_level) as i32 {
+                    overlaps = true;
+                    chain_copy.kept = 1; // Shadowed by better chain
+                    break;
+                }
+            }
+        }
+
+        if !overlaps {
+            chain_copy.kept = 3; // Primary chain
+        }
+
+        kept_chains.push(chain_copy);
+
+        // Limit number of chains to extend
+        if kept_chains.len() >= opt.max_chain_extend as usize {
+            log::debug!(
+                "Reached max_chain_extend={}, stopping chain filtering",
+                opt.max_chain_extend
+            );
+            break;
+        }
+    }
+
+    log::debug!(
+        "Chain filtering: {} input chains → {} kept chains ({} primary, {} shadowed)",
+        chains.len(),
+        kept_chains.len(),
+        kept_chains.iter().filter(|c| c.kept == 3).count(),
+        kept_chains.iter().filter(|c| c.kept == 1).count()
+    );
+
+    kept_chains
 }
 
 /// Mark secondary alignments and calculate MAPQ values
@@ -1907,50 +2069,60 @@ fn generate_seeds_with_mode(
     );
 
     // --- Seed Chaining ---
-    let chained_results = chain_seeds(seeds.clone(), _opt);
+    let mut chained_results = chain_seeds(seeds.clone(), _opt);
     log::debug!(
         "{}: Chaining produced {} chains",
         query_name,
         chained_results.len()
     );
+
+    // --- Chain Filtering ---
+    // Implements bwa-mem2 mem_chain_flt logic (bwamem.cpp:506-624)
+    let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt);
+    log::debug!(
+        "{}: Chain filtering kept {} chains (from {} total)",
+        query_name,
+        filtered_chains.len(),
+        chained_results.len()
+    );
     // --- End Seed Chaining ---
 
-    // Select the best alignment from ALL seeds, not just those in the chain
-    // This is a simplification - C++ bwa-mem2 uses chain filtering and multi-alignment logic
+    // === MULTI-ALIGNMENT GENERATION FROM FILTERED CHAINS ===
+    // Generate one alignment per filtered chain (matching C++ bwa-mem2 behavior)
+    // Each chain represents a distinct mapping location for the read
     let mut alignments = Vec::new();
-    if !alignment_scores.is_empty() {
-        // Find the seed with the best alignment score across all seeds
-        let mut best_seed_idx = 0;
-        let mut best_score = alignment_scores[0];
 
-        for (seed_idx, &score) in alignment_scores.iter().enumerate() {
-            if score > best_score {
-                best_score = score;
-                best_seed_idx = seed_idx;
+    for (chain_idx, chain) in filtered_chains.iter().enumerate() {
+        if chain.seeds.is_empty() {
+            continue;
+        }
+
+        // Find the best-scoring seed in this chain
+        let mut best_seed_idx_in_chain = chain.seeds[0];
+        let mut best_score = alignment_scores[chain.seeds[0]];
+
+        for &seed_idx in &chain.seeds {
+            if alignment_scores[seed_idx] > best_score {
+                best_score = alignment_scores[seed_idx];
+                best_seed_idx_in_chain = seed_idx;
             }
         }
 
+        let cigar_for_alignment = alignment_cigars[best_seed_idx_in_chain].clone();
+        let best_seed = &seeds[best_seed_idx_in_chain];
+
         log::debug!(
-            "{}: Selected best seed {} (score={}) from {} total seeds",
+            "{}: Chain {} (weight={}, kept={}): best_seed={} score={} len={}",
             query_name,
-            best_seed_idx,
+            chain_idx,
+            chain.weight,
+            chain.kept,
+            best_seed_idx_in_chain,
             best_score,
-            alignment_scores.len()
+            best_seed.len
         );
-
-        let cigar_for_alignment = alignment_cigars[best_seed_idx].clone();
-
-        log::debug!(
-            "{}: Best alignment CIGAR={:?}",
-            query_name,
-            cigar_for_alignment.iter().take(5).collect::<Vec<_>>()
-        );
-
-        // Get the best seed's information
-        let best_seed = &seeds[best_seed_idx];
 
         // Calculate the adjusted reference start position for full query alignment
-        // The alignment was performed with the reference adjusted backwards by query_pos
         let adjusted_ref_start = if best_seed.query_pos as u64 > best_seed.ref_pos {
             0
         } else {
@@ -1976,10 +2148,10 @@ fn generate_seeds_with_mode(
             ("unknown_ref".to_string(), 0, best_seed.ref_pos)
         };
 
-        // Calculate query bounds and seed coverage from CIGAR
-        let mut query_start = best_seed.query_pos;
-        let mut query_end = best_seed.query_pos + best_seed.len;
-        let seed_coverage = best_seed.len;
+        // Calculate query bounds from chain (more accurate than single seed)
+        let query_start = chain.query_start;
+        let query_end = chain.query_end;
+        let seed_coverage = chain.weight; // Use chain weight as seed coverage for MAPQ
 
         // Generate hash for tie-breaking (based on position and strand)
         let hash = hash_64((chr_pos << 1) | (if best_seed.is_rev { 1 } else { 0 }));
@@ -1991,7 +2163,7 @@ fn generate_seeds_with_mode(
             ref_id,
             pos: chr_pos,
             mapq: 60,          // Will be calculated by mark_secondary_alignments
-            score: best_score, // Use actual alignment score
+            score: best_score, // Use best alignment score from chain
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
             pnext: 0,
@@ -2178,6 +2350,8 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
             ref_start,
             ref_end,
             is_rev,
+            weight: 0,  // Will be calculated by filter_chains()
+            kept: 0,    // Will be set by filter_chains()
         });
     }
 
