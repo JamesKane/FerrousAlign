@@ -470,6 +470,9 @@ fn reader_thread(
         reads_per_batch
     );
 
+    let mut batch_count = 0usize;
+    let mut total_pairs_read = 0usize;
+
     loop {
         // Read batch from both files
         let batch1 = match reader1.read_batch(reads_per_batch) {
@@ -504,23 +507,30 @@ fn reader_thread(
         }
 
         let batch_size = batch1.names.len();
-        log::debug!("[Reader thread] Read {} read pairs", batch_size);
+        total_pairs_read += batch_size;
+        log::debug!("[Reader thread] Batch {}: Read {} read pairs (cumulative: {})",
+                    batch_count, batch_size, total_pairs_read);
 
         // Send batch through channel
+        log::debug!("[Reader thread] Batch {}: Sending to channel...", batch_count);
         if sender.send(Some((batch1, batch2))).is_err() {
-            log::error!("[Reader thread] Channel closed, shutting down");
+            log::error!("[Reader thread] Batch {}: Channel closed, shutting down", batch_count);
             break;
         }
+        log::debug!("[Reader thread] Batch {}: Successfully sent", batch_count);
+        batch_count += 1;
 
         // If this was a partial batch, it's the last one
         if batch_size < reads_per_batch {
-            log::debug!("[Reader thread] Final partial batch, shutting down");
+            log::debug!("[Reader thread] Batch {} was partial ({}), sending EOF signal",
+                       batch_count - 1, batch_size);
             let _ = sender.send(None); // Signal EOF
             break;
         }
     }
 
-    log::debug!("[Reader thread] Exiting");
+    log::debug!("[Reader thread] Exiting - sent {} batches, {} total pairs",
+               batch_count, total_pairs_read);
 }
 
 // Process paired-end reads with parallel batching
@@ -590,6 +600,7 @@ fn process_paired_end(
     log::info!("Phase 1: Bootstrapping insert size statistics from first batch");
 
     // Receive first batch
+    log::debug!("[Main] Waiting for first batch (batch 0)...");
     let first_batch_msg = match receiver.recv() {
         Ok(msg) => msg,
         Err(_) => {
@@ -612,6 +623,8 @@ fn process_paired_end(
     total_reads += first_batch_size * 2;
     total_bases += first_batch_bp;
 
+    log::debug!("[Main] Batch 0: Received {} pairs from channel",
+               first_batch_size);
     log::info!(
         "Read {} sequences ({} bp) [first batch]",
         first_batch_size * 2,
@@ -759,10 +772,11 @@ fn process_paired_end(
 
     loop {
         // Receive batch from reader thread (blocks until batch available)
+        log::debug!("[Main] Waiting for batch {}...", batch_num);
         let batch_msg = match receiver.recv() {
             Ok(msg) => msg,
             Err(_) => {
-                log::debug!("[Main] Reader channel closed");
+                log::debug!("[Main] Reader channel closed (after {} batches)", batch_num);
                 break;
             }
         };
@@ -771,7 +785,7 @@ fn process_paired_end(
         let (batch1, batch2) = match batch_msg {
             Some((b1, b2)) => (b1, b2),
             None => {
-                log::debug!("[Main] Received EOF/error signal from reader");
+                log::debug!("[Main] Received EOF/error signal from reader (after {} batches)", batch_num);
                 break;
             }
         };
@@ -784,6 +798,8 @@ fn process_paired_end(
         total_reads += batch_size * 2;
         total_bases += batch_bp;
 
+        log::debug!("[Main] Batch {}: Received {} pairs from channel (cumulative: {} reads)",
+                   batch_num, batch_size, total_reads);
         log::info!("Read {} sequences ({} bp)", batch_size * 2, batch_bp);
 
         // Process batch in parallel
@@ -2084,7 +2100,7 @@ fn output_batch_paired(
         };
 
         // Write alignments for read1
-        for mut alignment in alignments1 {
+        for (idx, mut alignment) in alignments1.into_iter().enumerate() {
             let is_unmapped = alignment.flag & 0x4 != 0;
             // Output unmapped reads always, or reads meeting score threshold
             let should_output = is_unmapped || alignment.score >= opt.t;
@@ -2092,6 +2108,12 @@ fn output_batch_paired(
             if !should_output {
                 continue;  // Skip low-scoring alignments
             }
+
+            // Mark non-best alignments as secondary (0x100)
+            if idx != best_idx1 {
+                alignment.flag |= 0x100;  // Secondary alignment flag
+            }
+
             if let Some(ref rg) = rg_id {
                 alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
             }
@@ -2108,7 +2130,7 @@ fn output_batch_paired(
         }
 
         // Write alignments for read2
-        for mut alignment in alignments2 {
+        for (idx, mut alignment) in alignments2.into_iter().enumerate() {
             let is_unmapped = alignment.flag & 0x4 != 0;
             // Output unmapped reads always, or reads meeting score threshold
             let should_output = is_unmapped || alignment.score >= opt.t;
@@ -2116,6 +2138,12 @@ fn output_batch_paired(
             if !should_output {
                 continue;  // Skip low-scoring alignments
             }
+
+            // Mark non-best alignments as secondary (0x100)
+            if idx != best_idx2 {
+                alignment.flag |= 0x100;  // Secondary alignment flag
+            }
+
             if let Some(ref rg) = rg_id {
                 alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
             }
