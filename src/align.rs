@@ -1398,6 +1398,301 @@ pub fn generate_seeds(
     generate_seeds_with_mode(bwa_idx, query_name, query_seq, query_qual, true, opt)
 }
 
+/// Generate SMEMs for a single strand (forward or reverse complement)
+fn generate_smems_for_strand(
+    bwa_idx: &BwaIndex,
+    query_name: &str,
+    query_len: usize,
+    encoded_query: &[u8],
+    is_rev_comp: bool,
+    min_seed_len: i32,
+    min_intv: u64,
+    all_smems: &mut Vec<SMEM>,
+    max_smem_count: &mut usize,
+) {
+    // OPTIMIZATION: Pre-allocate buffers to avoid repeated allocations
+    let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+
+    let mut x = 0;
+    while x < query_len {
+        let a = encoded_query[x];
+
+        if a >= 4 {
+            // Skip 'N' bases
+            x += 1;
+            continue;
+        }
+
+        // Initialize SMEM at position x
+        let mut smem = SMEM {
+            rid: 0,
+            m: x as i32,
+            n: x as i32,
+            k: bwa_idx.bwt.l2[a as usize],
+            l: bwa_idx.bwt.l2[(3 - a) as usize],
+            s: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
+            is_rev_comp,
+        };
+
+        if x == 0 && !is_rev_comp {
+            log::debug!(
+                "{}: Initial SMEM at x={}: a={}, k={}, l={}, s={}, l2[{}]={}, l2[{}]={}",
+                query_name,
+                x,
+                a,
+                smem.k,
+                smem.l,
+                smem.s,
+                a,
+                bwa_idx.bwt.l2[a as usize],
+                3 - a,
+                bwa_idx.bwt.l2[(3 - a) as usize]
+            );
+        }
+
+        // Phase 1: Forward extension
+        prev_array_buf.clear();
+        let mut next_x = x + 1;
+
+        for j in (x + 1)..query_len {
+            let a = encoded_query[j];
+            next_x = j + 1;
+
+            if a >= 4 {
+                if x == 0 && !is_rev_comp && log::log_enabled!(log::Level::Debug) {
+                    log::debug!(
+                        "{}: x={}, forward extension stopped at j={} due to N base",
+                        query_name,
+                        x,
+                        j
+                    );
+                }
+                next_x = j;
+                break;
+            }
+
+            let new_smem = forward_ext(bwa_idx, smem, a);
+
+            if x == 0 && j <= 12 && !is_rev_comp {
+                log::debug!(
+                    "{}: x={}, j={}, a={}, old_smem.s={}, new_smem(k={}, l={}, s={})",
+                    query_name,
+                    x,
+                    j,
+                    a,
+                    smem.s,
+                    new_smem.k,
+                    new_smem.l,
+                    new_smem.s
+                );
+            }
+
+            if new_smem.s != smem.s {
+                if x < 3 && !is_rev_comp {
+                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+                    log::debug!(
+                        "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
+                        query_name,
+                        x,
+                        j,
+                        smem.s,
+                        s_from_lk,
+                        smem.s == s_from_lk
+                    );
+                }
+                prev_array_buf.push(smem);
+            }
+
+            if new_smem.s < min_intv {
+                if x == 0 && !is_rev_comp && log::log_enabled!(log::Level::Debug) {
+                    log::debug!(
+                        "{}: x={}, forward extension stopped at j={} because new_smem.s={} < min_intv={}",
+                        query_name,
+                        x,
+                        j,
+                        new_smem.s,
+                        min_intv
+                    );
+                }
+                break;
+            }
+
+            smem = new_smem;
+            smem.n = j as i32;
+        }
+
+        if smem.s >= min_intv {
+            prev_array_buf.push(smem);
+        }
+
+        if x < 3 && !is_rev_comp {
+            log::debug!(
+                "{}: Position x={}, prev_array_buf.len()={}, smem.s={}, min_intv={}",
+                query_name,
+                x,
+                prev_array_buf.len(),
+                smem.s,
+                min_intv
+            );
+        }
+
+        // Phase 2: Backward search
+        if !is_rev_comp {
+            log::debug!(
+                "{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
+                query_name,
+                x,
+                prev_array_buf.len()
+            );
+        }
+
+        for j in (0..x).rev() {
+            let a = encoded_query[j];
+            if a >= 4 {
+                if !is_rev_comp {
+                    log::debug!(
+                        "{}: [RUST Phase 2] Hit 'N' base at j={}, stopping",
+                        query_name,
+                        j
+                    );
+                }
+                break;
+            }
+
+            curr_array_buf.clear();
+            let curr_array = &mut curr_array_buf;
+            let mut curr_s = None;
+
+            if !is_rev_comp {
+                log::debug!(
+                    "{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
+                    query_name,
+                    j,
+                    a,
+                    prev_array_buf.len()
+                );
+            }
+
+            for (i, smem) in prev_array_buf.iter().rev().enumerate() {
+                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+                new_smem.m = j as i32;
+
+                if !is_rev_comp {
+                    let old_len = smem.n - smem.m + 1;
+                    let new_len = new_smem.n - new_smem.m + 1;
+                    log::debug!(
+                        "{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
+                        query_name, x, j, i, smem.m, smem.n, old_len, smem.k, smem.l, smem.s,
+                        new_smem.m, new_smem.n, new_len, new_smem.k, new_smem.l, new_smem.s, min_intv
+                    );
+                }
+
+                if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
+                    if !is_rev_comp {
+                        let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+                        let s_matches = smem.s == s_from_lk;
+                        log::debug!(
+                            "{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
+                            query_name, smem.m, smem.n, smem.k, smem.l, smem.s, new_smem.s, min_intv, s_from_lk, s_matches
+                        );
+                    }
+                    all_smems.push(*smem);
+                    break;
+                }
+
+                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
+                    curr_s = Some(new_smem.s);
+                    curr_array.push(new_smem);
+                    if !is_rev_comp {
+                        log::debug!(
+                            "{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
+                            query_name, new_smem.s, min_intv
+                        );
+                    }
+                    break;
+                }
+
+                if !is_rev_comp {
+                    log::debug!(
+                        "{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
+                        query_name, new_smem.s, min_intv, curr_s == Some(new_smem.s)
+                    );
+                }
+            }
+
+            for (i, smem) in prev_array_buf.iter().rev().skip(1).enumerate() {
+                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+                new_smem.m = j as i32;
+
+                if !is_rev_comp {
+                    let new_len = new_smem.n - new_smem.m + 1;
+                    log::debug!(
+                        "{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
+                        query_name, x, j, i + 1, smem.m, smem.n, smem.s,
+                        new_smem.m, new_smem.n, new_len, new_smem.s,
+                        new_smem.s >= min_intv && curr_s != Some(new_smem.s)
+                    );
+                }
+
+                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
+                    curr_s = Some(new_smem.s);
+                    curr_array.push(new_smem);
+                }
+            }
+
+            std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
+            *max_smem_count = (*max_smem_count).max(prev_array_buf.len());
+
+            if !is_rev_comp {
+                log::debug!(
+                    "{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
+                    query_name, j, prev_array_buf.len()
+                );
+            }
+
+            if prev_array_buf.is_empty() {
+                if !is_rev_comp {
+                    log::debug!(
+                        "{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}",
+                        query_name, j
+                    );
+                }
+                break;
+            }
+        }
+
+        if !prev_array_buf.is_empty() {
+            let smem = prev_array_buf[prev_array_buf.len() - 1];
+            let len = smem.n - smem.m + 1;
+            if len >= min_seed_len {
+                if !is_rev_comp {
+                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+                    let s_matches = smem.s == s_from_lk;
+                    log::debug!(
+                        "{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
+                        query_name, smem.m, smem.n, smem.k, smem.l, smem.s, len, s_from_lk, s_matches, next_x
+                    );
+                }
+                all_smems.push(smem);
+            } else if !is_rev_comp {
+                log::debug!(
+                    "{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
+                    query_name, smem.m, smem.n, len, min_seed_len, smem.s
+                );
+            }
+        } else if !is_rev_comp {
+            log::debug!(
+                "{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}",
+                query_name, x
+            );
+        }
+
+        x = next_x;
+    }
+}
+
+
 // Internal implementation with option to use batched SIMD
 fn generate_seeds_with_mode(
     bwa_idx: &BwaIndex,
@@ -1465,476 +1760,33 @@ fn generate_seeds_with_mode(
         query_len
     );
 
-    // OPTIMIZATION: Pre-allocate buffers to avoid repeated allocations
-    // These are reused for every position x to reduce malloc overhead
-    // Note: Initial capacity = query_len, but Vec::push() will automatically
-    // grow (realloc) if SMEM count exceeds capacity (seen in IGSR samples)
-    let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
-    let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
-    let mut prev_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
-    let mut curr_array_buf_rc: Vec<SMEM> = Vec::with_capacity(query_len);
-    let mut max_smem_count = 0usize; // Track max SMEMs for capacity validation
+    let mut max_smem_count = 0usize;
 
-    // Process each starting position in the query
-    // CRITICAL FIX: Use while loop and skip ahead after each SMEM (like C++)
-    // This prevents outputting the same SMEM at every position x!
-    let mut x = 0;
-    while x < query_len {
-        let a = encoded_query[x];
+    // Process forward strand
+    generate_smems_for_strand(
+        bwa_idx,
+        query_name,
+        query_len,
+        &encoded_query,
+        false, // is_rev_comp
+        min_seed_len,
+        min_intv,
+        &mut all_smems,
+        &mut max_smem_count,
+    );
 
-        if a >= 4 {
-            // Skip 'N' bases
-            x += 1;
-            continue;
-        }
-
-        // Initialize SMEM at position x (C++ lines 527-533)
-        let mut smem = SMEM {
-            rid: 0,
-            m: x as i32,
-            n: x as i32,
-            k: bwa_idx.bwt.l2[a as usize],
-            l: bwa_idx.bwt.l2[(3 - a) as usize],
-            s: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
-            is_rev_comp: false,
-        };
-
-        if x == 0 {
-            log::debug!(
-                "{}: Initial SMEM at x={}: a={}, k={}, l={}, s={}, l2[{}]={}, l2[{}]={}",
-                query_name,
-                x,
-                a,
-                smem.k,
-                smem.l,
-                smem.s,
-                a,
-                bwa_idx.bwt.l2[a as usize],
-                3 - a,
-                bwa_idx.bwt.l2[(3 - a) as usize]
-            );
-        }
-
-        // Phase 1: Forward extension (C++ lines 537-581)
-        // OPTIMIZATION: Reuse pre-allocated buffer instead of allocating fresh Vec
-        prev_array_buf.clear();
-        let mut next_x = x + 1; // Track next uncovered position (C++ line 518, 541)
-
-        for j in (x + 1)..query_len {
-            let a = encoded_query[j];
-
-            next_x = j + 1; // Update next position (C++ line 541)
-
-            if a >= 4 {
-                // Hit 'N' base - stop forward extension
-                if x == 0 && log::log_enabled!(log::Level::Debug) {
-                    log::debug!(
-                        "{}: x={}, forward extension stopped at j={} due to N base",
-                        query_name,
-                        x,
-                        j
-                    );
-                }
-                next_x = j; // Don't skip the 'N', let next iteration handle it
-                break;
-            }
-
-            // Forward extension (C++ lines 546-554)
-            let new_smem = forward_ext(bwa_idx, smem, a);
-
-            if x == 0 && j <= 12 {
-                log::debug!(
-                    "{}: x={}, j={}, a={}, old_smem.s={}, new_smem(k={}, l={}, s={})",
-                    query_name,
-                    x,
-                    j,
-                    a,
-                    smem.s,
-                    new_smem.k,
-                    new_smem.l,
-                    new_smem.s
-                );
-            }
-
-            // If interval size changed, save previous SMEM (C++ lines 556-559)
-            if new_smem.s != smem.s {
-                if x < 3 {
-                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                    log::debug!(
-                        "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
-                        query_name,
-                        x,
-                        j,
-                        smem.s,
-                        s_from_lk,
-                        smem.s == s_from_lk
-                    );
-                }
-                prev_array_buf.push(smem);
-            }
-
-            // Check if interval became too small (C++ lines 560-564)
-            if new_smem.s < min_intv {
-                if x == 0 && log::log_enabled!(log::Level::Debug) {
-                    log::debug!(
-                        "{}: x={}, forward extension stopped at j={} because new_smem.s={} < min_intv={}",
-                        query_name,
-                        x,
-                        j,
-                        new_smem.s,
-                        min_intv
-                    );
-                }
-                break;
-            }
-
-            smem = new_smem;
-            smem.n = j as i32; // Update end position
-        }
-
-        // Save final forward-extended SMEM if large enough (C++ lines 576-581)
-        if smem.s >= min_intv {
-            prev_array_buf.push(smem);
-        }
-
-        if x < 3 {
-            log::debug!(
-                "{}: Position x={}, prev_array_buf.len()={}, smem.s={}, min_intv={}",
-                query_name,
-                x,
-                prev_array_buf.len(),
-                smem.s,
-                min_intv
-            );
-        }
-
-        // OPTIMIZATION: Skip reverse() by iterating backward with .rev() (C++ lines 587-592)
-        // prev_array_buf.reverse(); // REMOVED - use .iter().rev() instead
-
-        // Phase 2: Backward search (C++ lines 595-665)
-        log::debug!(
-            "{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
-            query_name,
-            x,
-            prev_array_buf.len()
-        );
-
-        for j in (0..x).rev() {
-            let a = encoded_query[j];
-
-            if a >= 4 {
-                // Hit 'N' base - stop backward search
-                log::debug!(
-                    "{}: [RUST Phase 2] Hit 'N' base at j={}, stopping",
-                    query_name,
-                    j
-                );
-                break;
-            }
-
-            // OPTIMIZATION: Reuse pre-allocated buffer
-            curr_array_buf.clear();
-            let curr_array = &mut curr_array_buf;
-            let mut curr_s = None;
-
-            log::debug!(
-                "{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
-                query_name,
-                j,
-                a,
-                prev_array_buf.len()
-            );
-
-            // OPTIMIZATION: Iterate backward instead of reversing array
-            for (i, smem) in prev_array_buf.iter().rev().enumerate() {
-                let mut new_smem = backward_ext(bwa_idx, *smem, a);
-                new_smem.m = j as i32;
-
-                let old_len = smem.n - smem.m + 1;
-                let new_len = new_smem.n - new_smem.m + 1;
-
-                log::debug!(
-                    "{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
-                    query_name,
-                    x,
-                    j,
-                    i,
-                    smem.m,
-                    smem.n,
-                    old_len,
-                    smem.k,
-                    smem.l,
-                    smem.s,
-                    new_smem.m,
-                    new_smem.n,
-                    new_len,
-                    new_smem.k,
-                    new_smem.l,
-                    new_smem.s,
-                    min_intv
-                );
-
-                // Check if we should output this SMEM (C++ lines 613-619)
-                if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
-                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                    let s_matches = smem.s == s_from_lk;
-                    log::debug!(
-                        "{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
-                        query_name,
-                        smem.m,
-                        smem.n,
-                        smem.k,
-                        smem.l,
-                        smem.s,
-                        new_smem.s,
-                        min_intv,
-                        s_from_lk,
-                        s_matches
-                    );
-                    all_smems.push(*smem);
-                    break; // C++ breaks after first output in this position
-                }
-
-                // Keep extending if interval is large enough and different from previous (C++ lines 620-629)
-                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
-                    curr_s = Some(new_smem.s);
-                    curr_array.push(new_smem);
-                    log::debug!(
-                        "{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
-                        query_name,
-                        new_smem.s,
-                        min_intv
-                    );
-                    break; // C++ breaks after first successful extension
-                }
-
-                log::debug!(
-                    "{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
-                    query_name,
-                    new_smem.s,
-                    min_intv,
-                    curr_s == Some(new_smem.s)
-                );
-            }
-
-            // Continue with remaining SMEMs (C++ lines 632-649)
-            // OPTIMIZATION: Use .rev().skip(1) to skip last element (first after reverse)
-            for (i, smem) in prev_array_buf.iter().rev().skip(1).enumerate() {
-                let mut new_smem = backward_ext(bwa_idx, *smem, a);
-                new_smem.m = j as i32;
-
-                let new_len = new_smem.n - new_smem.m + 1;
-                log::debug!(
-                    "{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
-                    query_name,
-                    x,
-                    j,
-                    i + 1,
-                    smem.m,
-                    smem.n,
-                    smem.s,
-                    new_smem.m,
-                    new_smem.n,
-                    new_len,
-                    new_smem.s,
-                    new_smem.s >= min_intv && curr_s != Some(new_smem.s)
-                );
-
-                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
-                    curr_s = Some(new_smem.s);
-                    curr_array.push(new_smem);
-                }
-            }
-
-            // Update prev_array_buf for next iteration (C++ lines 650-654)
-            // OPTIMIZATION: Swap buffers instead of copying/moving
-            std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
-            max_smem_count = max_smem_count.max(prev_array_buf.len());
-            log::debug!(
-                "{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
-                query_name,
-                j,
-                prev_array_buf.len()
-            );
-
-            if prev_array_buf.is_empty() {
-                log::debug!(
-                    "{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}",
-                    query_name,
-                    j
-                );
-                break;
-            }
-        }
-
-        // Output any remaining SMEMs (C++ lines 656-665)
-        // CRITICAL FIX: Access last element, not first!
-        // C++ reverses the array, so prev[0] is the longest SMEM.
-        // We skip the reverse and use .iter().rev(), so the longest SMEM is at the END of our array.
-        if !prev_array_buf.is_empty() {
-            let smem = prev_array_buf[prev_array_buf.len() - 1];
-            let len = smem.n - smem.m + 1;
-            if len >= min_seed_len {
-                let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                let s_matches = smem.s == s_from_lk;
-                log::debug!(
-                    "{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
-                    query_name,
-                    smem.m,
-                    smem.n,
-                    smem.k,
-                    smem.l,
-                    smem.s,
-                    len,
-                    s_from_lk,
-                    s_matches,
-                    next_x
-                );
-                all_smems.push(smem);
-            } else {
-                // Log SMEMs that are rejected for being too short
-                log::debug!(
-                    "{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
-                    query_name,
-                    smem.m,
-                    smem.n,
-                    len,
-                    min_seed_len,
-                    smem.s
-                );
-            }
-        } else {
-            log::debug!(
-                "{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}",
-                query_name,
-                x
-            );
-        }
-
-        // CRITICAL: Skip ahead to next uncovered position (C++ line 679)
-        // This prevents processing the same SMEM multiple times!
-        x = next_x;
-    }
-
-    // --- Process Reverse Complement Strand ---
-    // Same two-phase algorithm on reverse complement
-    // CRITICAL FIX: Use while loop and skip ahead (same as forward strand)
-    let mut x = 0;
-    while x < query_len {
-        let a = encoded_query_rc[x];
-
-        if a >= 4 {
-            x += 1;
-            continue;
-        }
-
-        let mut smem = SMEM {
-            rid: 0,
-            m: x as i32,
-            n: x as i32,
-            k: bwa_idx.bwt.l2[a as usize],
-            l: bwa_idx.bwt.l2[(3 - a) as usize],
-            s: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
-            is_rev_comp: true,
-        };
-
-        // OPTIMIZATION: Reuse pre-allocated buffer instead of allocating fresh Vec
-        prev_array_buf_rc.clear();
-        let mut next_x = x + 1; // Track next uncovered position
-
-        for j in (x + 1)..query_len {
-            let a = encoded_query_rc[j];
-
-            next_x = j + 1; // Update next position
-
-            if a >= 4 {
-                next_x = j; // Don't skip the 'N'
-                break;
-            }
-
-            let new_smem = forward_ext(bwa_idx, smem, a);
-
-            if new_smem.s != smem.s {
-                prev_array_buf_rc.push(smem);
-            }
-
-            if new_smem.s < min_intv {
-                break;
-            }
-
-            smem = new_smem;
-            smem.n = j as i32;
-        }
-
-        if smem.s >= min_intv {
-            prev_array_buf_rc.push(smem);
-        }
-
-        // OPTIMIZATION: Skip reverse() by iterating backward with .rev()
-        // prev_array_buf_rc.reverse(); // REMOVED - use .iter().rev() instead
-
-        for j in (0..x).rev() {
-            let a = encoded_query_rc[j];
-
-            if a >= 4 {
-                break;
-            }
-
-            // OPTIMIZATION: Reuse pre-allocated buffer
-            curr_array_buf_rc.clear();
-            let curr_array = &mut curr_array_buf_rc;
-            let mut curr_s = None;
-
-            // OPTIMIZATION: Iterate backward instead of reversing array
-            for smem in prev_array_buf_rc.iter().rev() {
-                let mut new_smem = backward_ext(bwa_idx, *smem, a);
-                new_smem.m = j as i32;
-
-                if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
-                    all_smems.push(*smem);
-                    break;
-                }
-
-                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
-                    curr_s = Some(new_smem.s);
-                    curr_array.push(new_smem);
-                    break;
-                }
-            }
-
-            // CRITICAL FIX: Use .rev() to match C++ iteration order (C++ lines 632-649)
-            // C++ iterates from p+1 to numPrev over the REVERSED array
-            for smem in prev_array_buf_rc.iter().rev().skip(1) {
-                let mut new_smem = backward_ext(bwa_idx, *smem, a);
-                new_smem.m = j as i32;
-
-                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
-                    curr_s = Some(new_smem.s);
-                    curr_array.push(new_smem);
-                }
-            }
-
-            // OPTIMIZATION: Swap buffers instead of copying/moving
-            std::mem::swap(&mut prev_array_buf_rc, &mut curr_array_buf_rc);
-            max_smem_count = max_smem_count.max(prev_array_buf_rc.len());
-            if prev_array_buf_rc.is_empty() {
-                break;
-            }
-        }
-
-        // CRITICAL FIX: Access last element, not first! (same as forward strand)
-        // C++ reverses the array, so prev[0] is the longest SMEM.
-        // We skip the reverse and use .iter().rev(), so the longest SMEM is at the END of our array.
-        if !prev_array_buf_rc.is_empty() {
-            let smem = prev_array_buf_rc[prev_array_buf_rc.len() - 1];
-            if (smem.n - smem.m + 1) >= min_seed_len {
-                all_smems.push(smem);
-            }
-        }
-
-        // CRITICAL: Skip ahead to next uncovered position (same as forward strand)
-        x = next_x;
-    }
+    // Process reverse complement strand
+    generate_smems_for_strand(
+        bwa_idx,
+        query_name,
+        query_len,
+        &encoded_query_rc,
+        true, // is_rev_comp
+        min_seed_len,
+        min_intv,
+        &mut all_smems,
+        &mut max_smem_count,
+    );
 
     // eprintln!("all_smems: {:?}", all_smems);
 
@@ -3297,5 +3149,45 @@ mod tests {
             scalar_results[1].1, batched_results[1].1,
             "CIGARs should match"
         );
+    }
+
+    #[test]
+    fn test_generate_seeds_basic() {
+        use crate::mem_opt::MemOpt;
+        use std::path::Path;
+
+        let prefix = Path::new("test_data/test_ref.fa");
+        if !prefix.exists() {
+            eprintln!("Skipping test_generate_seeds_basic - test data not found");
+            return;
+        }
+
+        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+            Ok(idx) => idx,
+            Err(_) => {
+                eprintln!("Skipping test_generate_seeds_basic - could not load index");
+                return;
+            }
+        };
+
+        let mut opt = MemOpt::default();
+        opt.min_seed_len = 10; // Ensure our seed is long enough
+
+        let query_name = "test_query";
+        let query_seq = b"ACGTACGTACGT"; // 12bp
+        let query_qual = "IIIIIIIIIIII";
+
+        let alignments = super::generate_seeds(&bwa_idx, query_name, query_seq, query_qual, &opt);
+
+        assert!(!alignments.is_empty(), "Expected at least one alignment for a matching query");
+
+        let primary_alignment = alignments.iter().find(|a| a.flag & 0x100 == 0);
+        assert!(primary_alignment.is_some(), "Expected a primary alignment");
+
+        let pa = primary_alignment.unwrap();
+        assert_eq!(pa.ref_name, "test_sequence");
+        assert!(pa.score > 0, "Expected a positive score for a good match, got {}", pa.score);
+        assert!(pa.pos < 60, "Position should be within reference length");
+        assert_eq!(pa.cigar_string(), "12M", "Expected a perfect match CIGAR");
     }
 }
