@@ -14,6 +14,9 @@ pub mod kseq; // Used for FASTA reference reading during index building
 pub mod mem;
 pub mod mem_opt;
 pub mod paired_end; // Paired-end read processing
+pub mod pairing; // Paired-end alignment scoring
+pub mod mate_rescue; // Mate rescue using Smith-Waterman
+pub mod insert_size; // Insert size statistics
 pub mod simd_abstraction;
 pub mod single_end; // Single-end read processing
 pub mod utils;

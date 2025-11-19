@@ -2,7 +2,7 @@
 
 // Import BwaIndex and MemOpt
 use crate::banded_swa::BandedPairWiseSW;
-use crate::fm_index::{CP_SHIFT, CpOcc, backward_ext, forward_ext, get_occ, get_occ_all_bases};
+use crate::fm_index::{CP_SHIFT, CpOcc, backward_ext, forward_ext, get_occ};
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::utils::hash_64;
