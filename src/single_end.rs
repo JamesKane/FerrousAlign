@@ -125,18 +125,47 @@ pub fn process_single_end(
                 .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
 
             for alignment_vec in alignments {
-                for mut alignment in alignment_vec {
-                    // Filter alignments below score threshold (opt.t)
-                    if alignment.score >= opt.t {
-                        // Add RG tag if read group is specified
-                        if let Some(ref rg) = rg_id {
-                            alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
-                        }
+                // Find the best (highest scoring) alignment as primary
+                let best_idx = alignment_vec
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, aln)| aln.score)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
 
-                        let sam_record = alignment.to_sam_string();
-                        if let Err(e) = writeln!(writer, "{}", sam_record) {
-                            log::error!("Error writing SAM record: {}", e);
-                        }
+                for (idx, mut alignment) in alignment_vec.into_iter().enumerate() {
+                    let is_unmapped = alignment.flag & align::sam_flags::UNMAPPED != 0;
+                    let is_primary = idx == best_idx;
+
+                    // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
+                    // With -a flag, output all alignments meeting score threshold
+                    let should_output = if opt.output_all_alignments {
+                        is_unmapped || alignment.score >= opt.t
+                    } else {
+                        is_primary
+                    };
+
+                    if !should_output {
+                        continue; // Skip non-primary alignments (unless -a flag set)
+                    }
+
+                    // Clear or set secondary flag based on whether this is the primary alignment
+                    if is_primary {
+                        // This is the best alignment - ensure it's PRIMARY (clear secondary flag)
+                        alignment.flag &= !align::sam_flags::SECONDARY;
+                    } else if !is_unmapped {
+                        // Non-best alignment - mark as secondary
+                        alignment.flag |= align::sam_flags::SECONDARY;
+                    }
+
+                    // Add RG tag if read group is specified
+                    if let Some(ref rg) = rg_id {
+                        alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                    }
+
+                    let sam_record = alignment.to_sam_string();
+                    if let Err(e) = writeln!(writer, "{}", sam_record) {
+                        log::error!("Error writing SAM record: {}", e);
                     }
                 }
             }
