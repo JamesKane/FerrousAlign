@@ -1308,6 +1308,7 @@ pub(crate) fn execute_batched_alignments(
         let batch_jobs = &jobs[batch_start..batch_end];
 
         // Prepare batch data for SIMD dispatch
+        // CRITICAL: h0 must be seed_len, not 0 (C++ bwamem.cpp:2232)
         let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
             .iter()
             .map(|job| {
@@ -1317,7 +1318,7 @@ pub(crate) fn execute_batched_alignments(
                     job.target.len() as i32,
                     job.target.as_slice(),
                     job.band_width,
-                    0,
+                    job.seed_len, // h0 = seed_len (initial score from existing seed)
                 )
             })
             .collect();
@@ -1471,6 +1472,7 @@ fn execute_batched_alignments_with_size(
         let batch_jobs = &jobs[batch_start..batch_end];
 
         // Prepare batch data
+        // CRITICAL: h0 must be seed_len, not 0 (C++ bwamem.cpp:2232)
         let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
             .iter()
             .map(|job| {
@@ -1480,7 +1482,7 @@ fn execute_batched_alignments_with_size(
                     job.target.len() as i32,
                     job.target.as_slice(),
                     job.band_width,
-                    0,
+                    job.seed_len, // h0 = seed_len (initial score from existing seed)
                 )
             })
             .collect();
