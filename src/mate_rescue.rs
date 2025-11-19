@@ -24,7 +24,7 @@ pub fn mem_matesw(
 ) -> usize {
     use crate::banded_swa::BandedPairWiseSW;
 
-    let l_pac = bwa_idx.bns.l_pac as i64;
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
     let l_ms = mate_seq.len() as i32;
     let min_seed_len = bwa_idx.min_seed_len;
 

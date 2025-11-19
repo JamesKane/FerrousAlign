@@ -312,7 +312,10 @@ pub fn process_paired_end(
             },
         ]
     } else {
-        bootstrap_insert_size_stats(&first_batch_alignments, bwa_idx.bns.l_pac as i64)
+        bootstrap_insert_size_stats(
+            &first_batch_alignments,
+            bwa_idx.bns.packed_sequence_length as i64,
+        )
     };
 
     // Prepare sequences for mate rescue and output
@@ -354,7 +357,7 @@ pub fn process_paired_end(
         &stats,
         writer,
         &opt,
-        bwa_idx.bns.l_pac as i64,
+        bwa_idx.bns.packed_sequence_length as i64,
         0,
     )
     .unwrap_or_else(|e| {
@@ -475,7 +478,7 @@ pub fn process_paired_end(
             &stats,
             writer,
             &opt,
-            bwa_idx.bns.l_pac as i64,
+            bwa_idx.bns.packed_sequence_length as i64,
             batch_num * reads_per_batch as u64,
         )
         .unwrap_or_else(|e| {

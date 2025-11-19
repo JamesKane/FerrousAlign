@@ -2075,8 +2075,8 @@ fn generate_seeds_with_mode(
 
         // Convert positions in reverse complement region to forward strand
         // BWT contains both forward [0, l_pac) and reverse [l_pac, 2*l_pac)
-        if ref_pos >= bwa_idx.bns.l_pac {
-            ref_pos = (bwa_idx.bns.l_pac << 1) - 1 - ref_pos;
+        if ref_pos >= bwa_idx.bns.packed_sequence_length {
+            ref_pos = (bwa_idx.bns.packed_sequence_length << 1) - 1 - ref_pos;
             is_rev = !is_rev; // Flip strand orientation
             log::debug!(
                 "{}: SMEM {}: Was in RC region, converted ref_pos to {}, is_rev={}",
@@ -2202,7 +2202,7 @@ fn generate_seeds_with_mode(
 
         // Get reference segment
         let ref_segment_len = (bounded_query_len as u64 + 2 * _opt.w as u64)
-            .min(bwa_idx.bns.l_pac - ref_start_for_bounded);
+            .min(bwa_idx.bns.packed_sequence_length - ref_start_for_bounded);
 
         match bwa_idx
             .bns
@@ -2368,19 +2368,20 @@ fn generate_seeds_with_mode(
         let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(global_pos);
         let rid = bwa_idx.bns.bns_pos2rid(pos_f);
 
-        let (ref_name, ref_id, chr_pos) = if rid >= 0 && (rid as usize) < bwa_idx.bns.anns.len() {
-            let ann = &bwa_idx.bns.anns[rid as usize];
-            let chr_relative_pos = pos_f - ann.offset as i64;
-            (ann.name.clone(), rid as usize, chr_relative_pos as u64)
-        } else {
-            log::warn!(
-                "{}: Invalid reference ID {} for position {}",
-                query_name,
-                rid,
-                global_pos
-            );
-            ("unknown_ref".to_string(), 0, first_seed.ref_pos)
-        };
+        let (ref_name, ref_id, chr_pos) =
+            if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
+                let ann = &bwa_idx.bns.annotations[rid as usize];
+                let chr_relative_pos = pos_f - ann.offset as i64;
+                (ann.name.clone(), rid as usize, chr_relative_pos as u64)
+            } else {
+                log::warn!(
+                    "{}: Invalid reference ID {} for position {}",
+                    query_name,
+                    rid,
+                    global_pos
+                );
+                ("unknown_ref".to_string(), 0, first_seed.ref_pos)
+            };
 
         // Calculate query bounds from chain (more accurate than single seed)
         let query_start = chain.query_start;
@@ -2794,7 +2795,7 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     // The sentinel represents the end-of-string marker, which wraps to position 0
     // seq_len = (l_pac << 1) + 1 (forward + RC + sentinel)
     // So sentinel position is seq_len - 1 = (l_pac << 1)
-    let sentinel_pos = bwa_idx.bns.l_pac << 1;
+    let sentinel_pos = bwa_idx.bns.packed_sequence_length << 1;
     let adjusted_sa_val = if sa_val >= sentinel_pos {
         // SA points to or past sentinel - wrap to beginning (position 0)
         log::debug!(
@@ -2818,8 +2819,8 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
         sa_val,
         adjusted_sa_val,
         result,
-        bwa_idx.bns.l_pac,
-        (bwa_idx.bns.l_pac << 1)
+        bwa_idx.bns.packed_sequence_length,
+        (bwa_idx.bns.packed_sequence_length << 1)
     );
     result
 }

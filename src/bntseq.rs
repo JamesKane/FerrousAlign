@@ -34,14 +34,26 @@ pub struct BntAmb1 {
     pub amb: char,
 }
 
+/// Reference sequence database (BNT format)
+/// Corresponds to C++ bntseq_t (bntseq.h:56-64)
+///
+/// Stores reference genome sequences in 2-bit packed format (.pac file)
+/// along with annotations for each sequence and ambiguous base regions.
 #[derive(Debug)]
 pub struct BntSeq {
-    pub l_pac: u64,
-    pub n_seqs: i32,
+    /// Total length of packed sequence (sum of all reference sequences)
+    pub packed_sequence_length: u64,
+    /// Number of reference sequences (e.g., chromosomes)
+    pub sequence_count: i32,
+    /// Random seed for ambiguous base replacement (fixed at 11)
     pub seed: u32,
-    pub anns: Vec<BntAnn1>,
-    pub n_holes: i32,
-    pub ambs: Vec<BntAmb1>,
+    /// Per-sequence annotations (sequence_count elements)
+    pub annotations: Vec<BntAnn1>,
+    /// Number of ambiguous base regions (N-base "holes")
+    pub ambiguous_region_count: i32,
+    /// Ambiguous base regions (ambiguous_region_count elements)
+    pub ambiguous_regions: Vec<BntAmb1>,
+    /// Optional path to .pac file for on-demand loading
     pub pac_file_path: Option<PathBuf>,
 }
 
@@ -51,12 +63,12 @@ mod bntseq_test;
 impl BntSeq {
     pub fn new() -> Self {
         BntSeq {
-            l_pac: 0,
-            n_seqs: 0,
+            packed_sequence_length: 0,
+            sequence_count: 0,
             seed: 0,
-            anns: Vec::new(),
-            n_holes: 0,
-            ambs: Vec::new(),
+            annotations: Vec::new(),
+            ambiguous_region_count: 0,
+            ambiguous_regions: Vec::new(),
             pac_file_path: None,
         }
     }
@@ -137,14 +149,14 @@ impl BntSeq {
             }
             ann.n_ambs = n_ambs_in_seq; // Update n_ambs for the current annotation
 
-            bns.anns.push(ann); // Push the completed annotation
+            bns.annotations.push(ann); // Push the completed annotation
             seq_id += 1;
         }
 
-        bns.l_pac = packed_base_count; // ALL bases including ambiguous (replaced with random)
-        bns.n_seqs = seq_id;
-        bns.ambs = current_ambs;
-        bns.n_holes = bns.ambs.len() as i32;
+        bns.packed_sequence_length = packed_base_count; // ALL bases including ambiguous (replaced with random)
+        bns.sequence_count = seq_id;
+        bns.ambiguous_regions = current_ambs;
+        bns.ambiguous_region_count = bns.ambiguous_regions.len() as i32;
         bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
 
         // Write .pac file with C++ bwa-mem2 format (bntseq.cpp lines 340-347)
@@ -153,19 +165,23 @@ impl BntSeq {
         pac_file.write_all(&pac_data)?;
 
         // C++: if (bns->l_pac % 4 == 0) { ct = 0; err_fwrite(&ct, 1, 1, fp); }
-        if bns.l_pac % 4 == 0 {
+        if bns.packed_sequence_length % 4 == 0 {
             pac_file.write_all(&[0u8])?;
         }
 
         // C++: ct = bns->l_pac % 4; err_fwrite(&ct, 1, 1, fp);
-        let remainder = (bns.l_pac % 4) as u8;
+        let remainder = (bns.packed_sequence_length % 4) as u8;
         pac_file.write_all(&[remainder])?;
 
         log::info!(
             "Created .pac file: l_pac={}, file_bytes={}, metadata_bytes={}",
-            bns.l_pac,
+            bns.packed_sequence_length,
             pac_data.len(),
-            if bns.l_pac % 4 == 0 { 2 } else { 1 }
+            if bns.packed_sequence_length % 4 == 0 {
+                2
+            } else {
+                1
+            }
         );
 
         Ok(bns)
@@ -175,8 +191,12 @@ impl BntSeq {
         // Dump annotations
         let ann_file_path = prefix.with_extension("ann");
         let mut ann_file = BufWriter::new(File::create(&ann_file_path)?);
-        writeln!(ann_file, "{} {} {}", self.l_pac, self.n_seqs, self.seed)?;
-        for p in &self.anns {
+        writeln!(
+            ann_file,
+            "{} {} {}",
+            self.packed_sequence_length, self.sequence_count, self.seed
+        )?;
+        for p in &self.annotations {
             if p.anno.is_empty() || p.anno == "(null)" {
                 writeln!(ann_file, "{} {}", p.gi, p.name)?;
             } else {
@@ -189,8 +209,12 @@ impl BntSeq {
         // Dump ambiguous bases
         let amb_file_path = prefix.with_extension("amb");
         let mut amb_file = BufWriter::new(File::create(&amb_file_path)?);
-        writeln!(amb_file, "{} {} {}", self.l_pac, self.n_seqs, self.n_holes)?;
-        for p in &self.ambs {
+        writeln!(
+            amb_file,
+            "{} {} {}",
+            self.packed_sequence_length, self.sequence_count, self.ambiguous_region_count
+        )?;
+        for p in &self.ambiguous_regions {
             writeln!(amb_file, "{} {} {}", p.offset, p.len, p.amb)?;
         }
         amb_file.flush()?;
@@ -216,18 +240,18 @@ impl BntSeq {
             )
         })??;
         let parts: Vec<&str> = first_line.split_whitespace().collect();
-        bns.l_pac = parts[0]
+        bns.packed_sequence_length = parts[0]
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid l_pac in .ann"))?;
-        bns.n_seqs = parts[1]
+        bns.sequence_count = parts[1]
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_seqs in .ann"))?;
         bns.seed = parts[2]
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid seed in .ann"))?;
 
-        bns.anns.reserve(bns.n_seqs as usize);
-        for _ in 0..bns.n_seqs {
+        bns.annotations.reserve(bns.sequence_count as usize);
+        for _ in 0..bns.sequence_count {
             // Read name and anno line: gi name [anno]
             let name_anno_line = lines.next().ok_or_else(|| {
                 io::Error::new(
@@ -265,7 +289,7 @@ impl BntSeq {
                 io::Error::new(io::ErrorKind::InvalidData, "Invalid n_ambs in .ann")
             })?;
 
-            bns.anns.push(BntAnn1 {
+            bns.annotations.push(BntAnn1 {
                 offset,
                 len,
                 n_ambs,
@@ -292,12 +316,13 @@ impl BntSeq {
         })??;
         let amb_parts: Vec<&str> = amb_first_line.split_whitespace().collect();
         // We already have l_pac and n_seqs from .ann, so just read n_holes
-        bns.n_holes = amb_parts[2]
+        bns.ambiguous_region_count = amb_parts[2]
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid n_holes in .amb"))?;
 
-        bns.ambs.reserve(bns.n_holes as usize);
-        for _ in 0..bns.n_holes {
+        bns.ambiguous_regions
+            .reserve(bns.ambiguous_region_count as usize);
+        for _ in 0..bns.ambiguous_region_count {
             let amb_data_line = amb_lines.next().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -315,7 +340,7 @@ impl BntSeq {
                 io::Error::new(io::ErrorKind::InvalidData, "Missing amb char in .amb")
             })?;
 
-            bns.ambs.push(BntAmb1 { offset, len, amb });
+            bns.ambiguous_regions.push(BntAmb1 { offset, len, amb });
         }
 
         bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
@@ -336,29 +361,29 @@ impl BntSeq {
         let end = start + len;
 
         // Check if we're bridging the forward-reverse boundary
-        if start < self.l_pac && end > self.l_pac {
+        if start < self.packed_sequence_length && end > self.packed_sequence_length {
             log::warn!(
                 "get_reference_segment: bridging forward-reverse boundary at start={}, end={}, l_pac={} - returning empty",
                 start,
                 end,
-                self.l_pac
+                self.packed_sequence_length
             );
             return Ok(Vec::new());
         }
 
         let mut segment = Vec::with_capacity(len as usize);
 
-        if start >= self.l_pac {
+        if start >= self.packed_sequence_length {
             // Reverse complement strand: convert to forward coordinates
             // C++ formula: beg_f = (l_pac<<1) - 1 - end, end_f = (l_pac<<1) - 1 - beg
-            let beg_f = ((self.l_pac << 1) - 1).saturating_sub(end - 1);
-            let end_f = ((self.l_pac << 1) - 1).saturating_sub(start);
+            let beg_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(end - 1);
+            let end_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(start);
 
             log::debug!(
                 "get_reference_segment: RC strand start={}, len={}, l_pac={}, beg_f={}, end_f={}",
                 start,
                 len,
-                self.l_pac,
+                self.packed_sequence_length,
                 beg_f,
                 end_f
             );
@@ -391,7 +416,7 @@ impl BntSeq {
                 "get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, bytes_to_read={}",
                 start,
                 len,
-                self.l_pac,
+                self.packed_sequence_length,
                 start_byte_offset,
                 bytes_to_read
             );
@@ -420,9 +445,9 @@ impl BntSeq {
     /// Helper function: Convert position to forward strand position and determine if reverse
     /// Equivalent to C's bns_depos
     pub fn bns_depos(&self, pos: i64) -> (i64, bool) {
-        let is_rev = pos >= self.l_pac as i64;
+        let is_rev = pos >= self.packed_sequence_length as i64;
         let pos_f = if is_rev {
-            ((self.l_pac as i64) << 1) - 1 - pos
+            ((self.packed_sequence_length as i64) << 1) - 1 - pos
         } else {
             pos
         };
@@ -432,21 +457,21 @@ impl BntSeq {
     /// Helper function: Find which reference sequence contains the given forward position
     /// Equivalent to C's bns_pos2rid
     pub fn bns_pos2rid(&self, pos_f: i64) -> i32 {
-        if pos_f >= self.l_pac as i64 {
+        if pos_f >= self.packed_sequence_length as i64 {
             return -1;
         }
 
         let mut left = 0;
-        let mut right = self.n_seqs as usize;
+        let mut right = self.sequence_count as usize;
         let mut mid = 0;
 
         while left < right {
             mid = (left + right) >> 1;
-            if pos_f >= self.anns[mid].offset as i64 {
-                if mid == self.n_seqs as usize - 1 {
+            if pos_f >= self.annotations[mid].offset as i64 {
+                if mid == self.sequence_count as usize - 1 {
                     break;
                 }
-                if pos_f < self.anns[mid + 1].offset as i64 {
+                if pos_f < self.annotations[mid + 1].offset as i64 {
                     break;
                 }
                 left = mid + 1;
@@ -475,22 +500,22 @@ impl BntSeq {
         }
 
         // Clamp to valid range
-        if end > (self.l_pac as i64) << 1 {
-            end = (self.l_pac as i64) << 1;
+        if end > (self.packed_sequence_length as i64) << 1 {
+            end = (self.packed_sequence_length as i64) << 1;
         }
         if beg < 0 {
             beg = 0;
         }
 
         // Check if bridging forward-reverse boundary
-        if beg >= self.l_pac as i64 || end <= self.l_pac as i64 {
+        if beg >= self.packed_sequence_length as i64 || end <= self.packed_sequence_length as i64 {
             let len = (end - beg) as usize;
             let mut seq = Vec::with_capacity(len);
 
-            if beg >= self.l_pac as i64 {
+            if beg >= self.packed_sequence_length as i64 {
                 // Reverse strand
-                let beg_f = ((self.l_pac as i64) << 1) - 1 - end;
-                let end_f = ((self.l_pac as i64) << 1) - 1 - beg;
+                let beg_f = ((self.packed_sequence_length as i64) << 1) - 1 - end;
+                let end_f = ((self.packed_sequence_length as i64) << 1) - 1 - beg;
                 for k in (beg_f + 1..=end_f).rev() {
                     seq.push(3 - Self::get_pac(pac, k));
                 }
@@ -531,14 +556,14 @@ impl BntSeq {
         }
 
         // Get reference boundaries
-        let mut far_beg = self.anns[rid as usize].offset as i64;
-        let mut far_end = far_beg + self.anns[rid as usize].len as i64;
+        let mut far_beg = self.annotations[rid as usize].offset as i64;
+        let mut far_end = far_beg + self.annotations[rid as usize].len as i64;
 
         if is_rev {
             // Flip to reverse strand
             let tmp = far_beg;
-            far_beg = ((self.l_pac as i64) << 1) - far_end;
-            far_end = ((self.l_pac as i64) << 1) - tmp;
+            far_beg = ((self.packed_sequence_length as i64) << 1) - far_end;
+            far_end = ((self.packed_sequence_length as i64) << 1) - tmp;
         }
 
         // Clamp to reference boundaries

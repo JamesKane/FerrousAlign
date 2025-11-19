@@ -46,12 +46,12 @@ AGCT
     #[test]
     fn test_new() {
         let bnt = BntSeq::new();
-        assert_eq!(bnt.l_pac, 0);
-        assert_eq!(bnt.n_seqs, 0);
+        assert_eq!(bnt.packed_sequence_length, 0);
+        assert_eq!(bnt.sequence_count, 0);
         assert_eq!(bnt.seed, 0);
-        assert!(bnt.anns.is_empty());
-        assert_eq!(bnt.n_holes, 0);
-        assert!(bnt.ambs.is_empty());
+        assert!(bnt.annotations.is_empty());
+        assert_eq!(bnt.ambiguous_region_count, 0);
+        assert!(bnt.ambiguous_regions.is_empty());
         assert!(bnt.pac_file_path.is_none());
     }
 
@@ -62,25 +62,25 @@ AGCT
         let reader = Cursor::new(FASTA_CONTENT_SIMPLE.as_bytes());
         let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
 
-        // assert_eq!(bns.l_pac, 8); // Corrected expected value
-        // assert_eq!(bns.n_seqs, 2);
-        // eprintln!("test_bns_fasta2bntseq_simple: bns.anns.len() = {}", bns.anns.len());
-        assert_eq!(bns.anns.len(), 2);
-        // assert_eq!(bns.ambs.len(), 0);
+        // assert_eq!(bns.packed_sequence_length, 8); // Corrected expected value
+        // assert_eq!(bns.sequence_count, 2);
+        // eprintln!("test_bns_fasta2bntseq_simple: bns.annotations.len() = {}", bns.annotations.len());
+        assert_eq!(bns.annotations.len(), 2);
+        // assert_eq!(bns.ambiguous_regions.len(), 0);
 
         // // Verify ann1
-        // assert_eq!(bns.anns[0].offset, 0);
-        // assert_eq!(bns.anns[0].len, 4);
-        // assert_eq!(bns.anns[0].n_ambs, 0);
-        // assert_eq!(bns.anns[0].name, "seq1");
-        // assert_eq!(bns.anns[0].anno, "desc1");
+        // assert_eq!(bns.annotations[0].offset, 0);
+        // assert_eq!(bns.annotations[0].len, 4);
+        // assert_eq!(bns.annotations[0].n_ambs, 0);
+        // assert_eq!(bns.annotations[0].name, "seq1");
+        // assert_eq!(bns.annotations[0].anno, "desc1");
 
         // // Verify ann2
-        // assert_eq!(bns.anns[1].offset, 4);
-        // assert_eq!(bns.anns[1].len, 6);
-        // assert_eq!(bns.anns[1].n_ambs, 0);
-        // assert_eq!(bns.anns[1].name, "seq2");
-        // assert_eq!(bns.anns[1].anno, "desc2");
+        // assert_eq!(bns.annotations[1].offset, 4);
+        // assert_eq!(bns.annotations[1].len, 6);
+        // assert_eq!(bns.annotations[1].n_ambs, 0);
+        // assert_eq!(bns.annotations[1].name, "seq2");
+        // assert_eq!(bns.annotations[1].anno, "desc2");
 
         // // Verify PAC file content
         // let pac_file_path = prefix.with_extension("pac");
@@ -105,25 +105,25 @@ AGCT
 
         // Session 29 fix: ambiguous bases are replaced with random bases and INCLUDED in l_pac
         // "NAGNT" => l_pac = 5 (all bases including N's replaced with random)
-        assert_eq!(bns.l_pac, 5); // All 5 bases (N's replaced with random, not skipped)
-        assert_eq!(bns.n_seqs, 1);
-        assert_eq!(bns.anns.len(), 1);
-        assert_eq!(bns.n_holes, 2);
-        assert_eq!(bns.ambs.len(), 2);
+        assert_eq!(bns.packed_sequence_length, 5); // All 5 bases (N's replaced with random, not skipped)
+        assert_eq!(bns.sequence_count, 1);
+        assert_eq!(bns.annotations.len(), 1);
+        assert_eq!(bns.ambiguous_region_count, 2);
+        assert_eq!(bns.ambiguous_regions.len(), 2);
 
         // Verify ann1
-        assert_eq!(bns.anns[0].offset, 0);
-        assert_eq!(bns.anns[0].len, 5); // Original sequence length including ambiguous
-        assert_eq!(bns.anns[0].n_ambs, 2); // N and N
+        assert_eq!(bns.annotations[0].offset, 0);
+        assert_eq!(bns.annotations[0].len, 5); // Original sequence length including ambiguous
+        assert_eq!(bns.annotations[0].n_ambs, 2); // N and N
 
         // Verify ambs - offsets refer to positions in the FULL sequence (including replaced N's)
-        assert_eq!(bns.ambs[0].offset, 0); // First 'N'
-        assert_eq!(bns.ambs[0].len, 1);
-        assert_eq!(bns.ambs[0].amb, 'N');
+        assert_eq!(bns.ambiguous_regions[0].offset, 0); // First 'N'
+        assert_eq!(bns.ambiguous_regions[0].len, 1);
+        assert_eq!(bns.ambiguous_regions[0].amb, 'N');
 
-        assert_eq!(bns.ambs[1].offset, 3); // Second 'N'
-        assert_eq!(bns.ambs[1].len, 1);
-        assert_eq!(bns.ambs[1].amb, 'N');
+        assert_eq!(bns.ambiguous_regions[1].offset, 3); // Second 'N'
+        assert_eq!(bns.ambiguous_regions[1].len, 1);
+        assert_eq!(bns.ambiguous_regions[1].amb, 'N');
 
         // Verify PAC file content
         let pac_file_path = prefix.with_extension("pac");
@@ -152,9 +152,9 @@ AGCT
         let reader = Cursor::new(FASTA_CONTENT_EMPTY_COMMENT.as_bytes());
         let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
 
-        assert_eq!(bns.n_seqs, 1);
-        assert_eq!(bns.anns[0].name, "empty_comment");
-        assert_eq!(bns.anns[0].anno, ""); // Should be empty string
+        assert_eq!(bns.sequence_count, 1);
+        assert_eq!(bns.annotations[0].name, "empty_comment");
+        assert_eq!(bns.annotations[0].anno, ""); // Should be empty string
 
         cleanup_test_files(&test_dir);
         Ok(())
@@ -178,26 +178,62 @@ AGCT
         let restored_bns = BntSeq::bns_restore(&prefix)?;
 
         // Compare original and restored BntSeq
-        assert_eq!(original_bns.l_pac, restored_bns.l_pac);
-        assert_eq!(original_bns.n_seqs, restored_bns.n_seqs);
-        assert_eq!(original_bns.anns.len(), restored_bns.anns.len());
-        assert_eq!(original_bns.n_holes, restored_bns.n_holes);
-        assert_eq!(original_bns.ambs.len(), restored_bns.ambs.len());
+        assert_eq!(
+            original_bns.packed_sequence_length,
+            restored_bns.packed_sequence_length
+        );
+        assert_eq!(original_bns.sequence_count, restored_bns.sequence_count);
+        assert_eq!(
+            original_bns.annotations.len(),
+            restored_bns.annotations.len()
+        );
+        assert_eq!(
+            original_bns.ambiguous_region_count,
+            restored_bns.ambiguous_region_count
+        );
+        assert_eq!(
+            original_bns.ambiguous_regions.len(),
+            restored_bns.ambiguous_regions.len()
+        );
 
-        for i in 0..original_bns.anns.len() {
-            assert_eq!(original_bns.anns[i].offset, restored_bns.anns[i].offset);
-            assert_eq!(original_bns.anns[i].len, restored_bns.anns[i].len);
-            assert_eq!(original_bns.anns[i].n_ambs, restored_bns.anns[i].n_ambs);
-            assert_eq!(original_bns.anns[i].name, restored_bns.anns[i].name);
-            assert_eq!(original_bns.anns[i].anno, restored_bns.anns[i].anno);
+        for i in 0..original_bns.annotations.len() {
+            assert_eq!(
+                original_bns.annotations[i].offset,
+                restored_bns.annotations[i].offset
+            );
+            assert_eq!(
+                original_bns.annotations[i].len,
+                restored_bns.annotations[i].len
+            );
+            assert_eq!(
+                original_bns.annotations[i].n_ambs,
+                restored_bns.annotations[i].n_ambs
+            );
+            assert_eq!(
+                original_bns.annotations[i].name,
+                restored_bns.annotations[i].name
+            );
+            assert_eq!(
+                original_bns.annotations[i].anno,
+                restored_bns.annotations[i].anno
+            );
             // gi and is_alt are not fully preserved as per C version's dump/restore logic
             // gi is read, but is_alt is hardcoded to 0 in restore.
         }
 
-        for i in 0..original_bns.ambs.len() {
-            assert_eq!(original_bns.ambs[i].offset, restored_bns.ambs[i].offset);
-            assert_eq!(original_bns.ambs[i].len, restored_bns.ambs[i].len);
-            assert_eq!(original_bns.ambs[i].amb, restored_bns.ambs[i].amb);
+        for i in 0..original_bns.ambiguous_regions.len() {
+            assert_eq!(
+                original_bns.ambiguous_regions[i].offset,
+                restored_bns.ambiguous_regions[i].offset
+            );
+            assert_eq!(
+                original_bns.ambiguous_regions[i].len,
+                restored_bns.ambiguous_regions[i].len
+            );
+            assert_eq!(
+                original_bns.ambiguous_regions[i].amb,
+                restored_bns.ambiguous_regions[i].amb
+            );
         }
 
         cleanup_test_files(&test_dir);
@@ -225,14 +261,24 @@ AGCT
 
         // chrM is 16569 bases (including 1 'N' at position 3106)
         // Session 29 fix: ambiguous bases are included in l_pac
-        assert_eq!(bns.l_pac, 16569, "chrM should have 16569 bases");
-        assert_eq!(bns.n_seqs, 1, "chrM should be a single sequence");
-        assert_eq!(bns.n_holes, 1, "chrM has 1 ambiguous base");
-        assert_eq!(bns.ambs.len(), 1, "Should have 1 ambiguous base record");
+        assert_eq!(
+            bns.packed_sequence_length, 16569,
+            "chrM should have 16569 bases"
+        );
+        assert_eq!(bns.sequence_count, 1, "chrM should be a single sequence");
+        assert_eq!(bns.ambiguous_region_count, 1, "chrM has 1 ambiguous base");
+        assert_eq!(
+            bns.ambiguous_regions.len(),
+            1,
+            "Should have 1 ambiguous base record"
+        );
 
         // Verify the ambiguous base position (line 53, position 3106)
-        assert_eq!(bns.ambs[0].offset, 3106, "Ambiguous base at position 3106");
-        assert_eq!(bns.ambs[0].amb, 'N', "Ambiguous base is 'N'");
+        assert_eq!(
+            bns.ambiguous_regions[0].offset, 3106,
+            "Ambiguous base at position 3106"
+        );
+        assert_eq!(bns.ambiguous_regions[0].amb, 'N', "Ambiguous base is 'N'");
 
         // Test 1: Get first 10 bases of chrM
         // From FASTA: GATCACAGGT

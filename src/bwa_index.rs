@@ -36,10 +36,11 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     // Convert PAC to bases (0=A, 1=C, 2=G, 3=T), but use shifted values for SA construction
     // bio crate needs a lexicographically smallest sentinel at the end
     // So shift bases to 1,2,3,4 and use 0 as sentinel
-    let mut text_for_sais: Vec<u8> = Vec::with_capacity((2 * bns.l_pac + 1) as usize);
+    let mut text_for_sais: Vec<u8> =
+        Vec::with_capacity((2 * bns.packed_sequence_length + 1) as usize);
 
     // Add forward strand
-    for i in 0..bns.l_pac {
+    for i in 0..bns.packed_sequence_length {
         let byte_idx = (i / 4) as usize;
         // CRITICAL: Match C++ bwa-mem2 bit order (same as extraction in bntseq.rs)
         let bit_offset = ((!(i % 4)) & 3) * 2;
@@ -48,7 +49,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     }
 
     // Add reverse complement strand
-    for i in (0..bns.l_pac).rev() {
+    for i in (0..bns.packed_sequence_length).rev() {
         let byte_idx = (i / 4) as usize;
         let bit_offset = ((!(i % 4)) & 3) * 2;
         let base = (pac_data[byte_idx] >> bit_offset) & 0x03;
@@ -59,15 +60,15 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     text_for_sais.push(0); // Sentinel: lexicographically smallest
 
     eprintln!("\n=== RUST INDEX BUILD TRACE ===");
-    eprintln!("[RUST] l_pac = {}", bns.l_pac);
+    eprintln!("[RUST] l_pac = {}", bns.packed_sequence_length);
     eprintln!(
         "[RUST] Building SA for {} bases (with sentinel)",
         text_for_sais.len()
     );
     eprintln!(
         "[RUST] text_for_sais length: forward={}, RC={}, total_with_sentinel={}",
-        bns.l_pac,
-        bns.l_pac,
+        bns.packed_sequence_length,
+        bns.packed_sequence_length,
         text_for_sais.len()
     );
     eprintln!(
@@ -76,9 +77,10 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     );
     eprintln!(
         "[RUST] text_for_sais[{}..{}] (RC start) = {:?}",
-        bns.l_pac as usize,
-        (bns.l_pac as usize + 10).min(text_for_sais.len()),
-        &text_for_sais[bns.l_pac as usize..(bns.l_pac as usize + 10).min(text_for_sais.len())]
+        bns.packed_sequence_length as usize,
+        (bns.packed_sequence_length as usize + 10).min(text_for_sais.len()),
+        &text_for_sais[bns.packed_sequence_length as usize
+            ..(bns.packed_sequence_length as usize + 10).min(text_for_sais.len())]
     );
     eprintln!(
         "[RUST] text_for_sais[{}] (sentinel) = {:?}",
@@ -104,7 +106,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
             let sa_val = sa_full[i];
             let region = if sa_val == text_for_sais.len() as i32 - 1 {
                 "SENTINEL"
-            } else if sa_val >= bns.l_pac as i32 {
+            } else if sa_val >= bns.packed_sequence_length as i32 {
                 "RC"
             } else {
                 "FWD"
