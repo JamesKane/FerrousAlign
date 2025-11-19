@@ -38,11 +38,20 @@ pub struct BntAnn1 {
     pub anno: String,
 }
 
+/// Ambiguous base region
+/// Corresponds to C++ bntamb1_t (bntseq.h:50-54)
+///
+/// Represents a contiguous region of ambiguous bases (typically 'N') in the
+/// reference sequence. Multiple consecutive ambiguous bases are coalesced
+/// into a single region.
 #[derive(Debug)]
 pub struct BntAmb1 {
+    /// Offset of this ambiguous region in the packed sequence
     pub offset: u64,
-    pub len: i32,
-    pub amb: char,
+    /// Length of this ambiguous region (number of consecutive N bases)
+    pub region_length: i32,
+    /// The ambiguous base character (typically 'N')
+    pub ambiguous_base: char,
 }
 
 /// Reference sequence database (BNT format)
@@ -129,16 +138,16 @@ impl BntSeq {
                     // Ambiguous base - record it
                     if current_ambs.is_empty()
                         || current_ambs.last().unwrap().offset
-                            + current_ambs.last().unwrap().len as u64
+                            + current_ambs.last().unwrap().region_length as u64
                             != pac_len
                     {
                         current_ambs.push(BntAmb1 {
                             offset: pac_len,
-                            len: 1,
-                            amb: base as char,
+                            region_length: 1,
+                            ambiguous_base: base as char,
                         });
                     } else {
-                        current_ambs.last_mut().unwrap().len += 1;
+                        current_ambs.last_mut().unwrap().region_length += 1;
                     }
                     n_ambs_in_seq += 1;
 
@@ -230,7 +239,7 @@ impl BntSeq {
             self.packed_sequence_length, self.sequence_count, self.ambiguous_region_count
         )?;
         for p in &self.ambiguous_regions {
-            writeln!(amb_file, "{} {} {}", p.offset, p.len, p.amb)?;
+            writeln!(amb_file, "{} {} {}", p.offset, p.region_length, p.ambiguous_base)?;
         }
         amb_file.flush()?;
 
@@ -355,7 +364,7 @@ impl BntSeq {
                 io::Error::new(io::ErrorKind::InvalidData, "Missing amb char in .amb")
             })?;
 
-            bns.ambiguous_regions.push(BntAmb1 { offset, len, amb });
+            bns.ambiguous_regions.push(BntAmb1 { offset, region_length: len, ambiguous_base: amb });
         }
 
         bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));

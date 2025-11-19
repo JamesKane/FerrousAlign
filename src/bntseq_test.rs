@@ -118,12 +118,12 @@ AGCT
 
         // Verify ambs - offsets refer to positions in the FULL sequence (including replaced N's)
         assert_eq!(bns.ambiguous_regions[0].offset, 0); // First 'N'
-        assert_eq!(bns.ambiguous_regions[0].len, 1);
-        assert_eq!(bns.ambiguous_regions[0].amb, 'N');
+        assert_eq!(bns.ambiguous_regions[0].region_length, 1);
+        assert_eq!(bns.ambiguous_regions[0].ambiguous_base, 'N');
 
         assert_eq!(bns.ambiguous_regions[1].offset, 3); // Second 'N'
-        assert_eq!(bns.ambiguous_regions[1].len, 1);
-        assert_eq!(bns.ambiguous_regions[1].amb, 'N');
+        assert_eq!(bns.ambiguous_regions[1].region_length, 1);
+        assert_eq!(bns.ambiguous_regions[1].ambiguous_base, 'N');
 
         // Verify PAC file content
         let pac_file_path = prefix.with_extension("pac");
@@ -227,12 +227,12 @@ AGCT
                 restored_bns.ambiguous_regions[i].offset
             );
             assert_eq!(
-                original_bns.ambiguous_regions[i].len,
-                restored_bns.ambiguous_regions[i].len
+                original_bns.ambiguous_regions[i].region_length,
+                restored_bns.ambiguous_regions[i].region_length
             );
             assert_eq!(
-                original_bns.ambiguous_regions[i].amb,
-                restored_bns.ambiguous_regions[i].amb
+                original_bns.ambiguous_regions[i].ambiguous_base,
+                restored_bns.ambiguous_regions[i].ambiguous_base
             );
         }
 
@@ -278,7 +278,7 @@ AGCT
             bns.ambiguous_regions[0].offset, 3106,
             "Ambiguous base at position 3106"
         );
-        assert_eq!(bns.ambiguous_regions[0].amb, 'N', "Ambiguous base is 'N'");
+        assert_eq!(bns.ambiguous_regions[0].ambiguous_base, 'N', "Ambiguous base is 'N'");
 
         // Test 1: Get first 10 bases of chrM
         // From FASTA: GATCACAGGT
