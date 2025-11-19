@@ -1324,16 +1324,25 @@ pub(crate) fn execute_batched_alignments(
 
         // Prepare batch data for SIMD dispatch
         // CRITICAL: h0 must be seed_len, not 0 (C++ bwamem.cpp:2232)
-        let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
+        // CRITICAL: Include direction for LEFT/RIGHT extension (fixes insertion detection bug)
+        let batch_data: Vec<(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<crate::banded_swa::ExtensionDirection>)> = batch_jobs
             .iter()
             .map(|job| {
+                // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
+                let (query, target) = if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
+                    (job.query.iter().copied().rev().collect(), job.target.iter().copied().rev().collect())
+                } else {
+                    (job.query.clone(), job.target.clone())
+                };
+
                 (
-                    job.query.len() as i32,
-                    job.query.as_slice(),
-                    job.target.len() as i32,
-                    job.target.as_slice(),
+                    query.len() as i32,
+                    query,
+                    target.len() as i32,
+                    target,
                     job.band_width,
                     job.seed_len, // h0 = seed_len (initial score from existing seed)
+                    job.direction,
                 )
             })
             .collect();
@@ -1488,16 +1497,25 @@ fn execute_batched_alignments_with_size(
 
         // Prepare batch data
         // CRITICAL: h0 must be seed_len, not 0 (C++ bwamem.cpp:2232)
-        let batch_data: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_jobs
+        // CRITICAL: Include direction for LEFT/RIGHT extension (fixes insertion detection bug)
+        let batch_data: Vec<(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<crate::banded_swa::ExtensionDirection>)> = batch_jobs
             .iter()
             .map(|job| {
+                // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
+                let (query, target) = if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
+                    (job.query.iter().copied().rev().collect(), job.target.iter().copied().rev().collect())
+                } else {
+                    (job.query.clone(), job.target.clone())
+                };
+
                 (
-                    job.query.len() as i32,
-                    job.query.as_slice(),
-                    job.target.len() as i32,
-                    job.target.as_slice(),
+                    query.len() as i32,
+                    query,
+                    target.len() as i32,
+                    target,
                     job.band_width,
                     job.seed_len, // h0 = seed_len (initial score from existing seed)
+                    job.direction,
                 )
             })
             .collect();

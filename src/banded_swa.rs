@@ -1109,15 +1109,24 @@ impl BandedPairWiseSW {
     ///   (but adds significant complexity and risk)
     pub fn simd_banded_swa_batch16_with_cigar(
         &self,
-        batch: &[(i32, &[u8], i32, &[u8], i32, i32)], // (qlen, query, tlen, target, w, h0)
+        batch: &[(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<ExtensionDirection>)],
     ) -> Vec<AlignmentResult> {
         // Use proven scalar implementation for each alignment
         // This matches the production C++ bwa-mem2 design pattern
         batch
             .iter()
             .enumerate()
-            .map(|(idx, (qlen, query, tlen, target, w, h0))| {
-                let (score, cigar, ref_aligned, query_aligned) = self.scalar_banded_swa(*qlen, query, *tlen, target, *w, *h0);
+            .map(|(idx, (qlen, query, tlen, target, w, h0, direction))| {
+                // Sequences are already reversed for LEFT extensions in the caller
+                // We just need to align and reverse the CIGAR back
+                let (score, mut cigar, ref_aligned, query_aligned) =
+                    self.scalar_banded_swa(*qlen, &query, *tlen, &target, *w, *h0);
+
+                // For LEFT extension: reverse CIGAR back to forward orientation
+                // Sequences were reversed before alignment, so CIGAR is also reversed
+                if *direction == Some(ExtensionDirection::Left) {
+                    cigar = reverse_cigar(&cigar);
+                }
 
                 // Debug logging for problematic CIGARs
                 if idx < 3 || cigar.iter().any(|(op, _)| *op == b'I' && cigar.len() == 1) {
@@ -1256,7 +1265,7 @@ impl BandedPairWiseSW {
     /// The SIMD width only affects the batch scoring phase (if implemented).
     pub fn simd_banded_swa_dispatch_with_cigar(
         &self,
-        batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
+        batch: &[(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<ExtensionDirection>)],
     ) -> Vec<AlignmentResult> {
         use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 
@@ -1982,8 +1991,8 @@ mod tests {
         let target2 = vec![0u8, 1, 1, 3]; // ACCT (one mismatch)
 
         let batch = vec![
-            (4, query1.as_slice(), 4, target1.as_slice(), 100, 0),
-            (4, query2.as_slice(), 4, target2.as_slice(), 100, 0),
+            (4, query1.clone(), 4, target1.clone(), 100, 0, None),
+            (4, query2.clone(), 4, target2.clone(), 100, 0, None),
         ];
 
         // Run batched alignment with CIGAR
@@ -2066,7 +2075,7 @@ mod tests {
 
         // Build batch
         for i in 0..16 {
-            batch.push((4, queries[i].as_slice(), 4, targets[i].as_slice(), 100, 0));
+            batch.push((4, queries[i].clone(), 4, targets[i].clone(), 100, 0, None));
         }
 
         // Run batched alignment
