@@ -63,6 +63,70 @@ mod tests {
         assert_ne!(hash_64(key1), hash_64(key2));
     }
 
+    #[test]
+    fn test_hash_64_matches_cpp_implementation() {
+        // These test vectors are computed from C++ bwa-mem2's hash_64 function
+        // in src/utils.h to ensure we match the reference implementation exactly
+        //
+        // C++ implementation:
+        // key += ~(key << 32);
+        // key ^= (key >> 22);
+        // key += ~(key << 13);
+        // key ^= (key >> 8);
+        // key += (key << 3);
+        // key ^= (key >> 15);
+        // key += ~(key << 27);
+        // key ^= (key >> 31);
+
+        // Test vector 1: Small value
+        assert_eq!(hash_64(0), 7654268697807496793);
+        assert_eq!(hash_64(1), 2320827452992767577);
+        assert_eq!(hash_64(42), 13135115513944745397);
+
+        // Test vector 2: Typical genomic position hash input (position << 1 | strand)
+        assert_eq!(hash_64(1000), 7418194391579287136);
+        assert_eq!(hash_64(1000000), 3067516704660993436);
+
+        // Test vector 3: Large values
+        assert_eq!(hash_64(1234567890), 17337010322514605492);
+        assert_eq!(hash_64(u64::MAX), 11347797999152016406);
+
+        // Test vector 4: Powers of 2 (edge cases)
+        assert_eq!(hash_64(1 << 10), 8099353856718621187);
+        assert_eq!(hash_64(1 << 20), 518649583398939743);
+        assert_eq!(hash_64(1 << 30), 2687339549123861914);
+    }
+
+    #[test]
+    fn test_hash_64_zero_and_max() {
+        // Special edge cases
+        let hash_zero = hash_64(0);
+        let hash_max = hash_64(u64::MAX);
+
+        // These should be different
+        assert_ne!(hash_zero, hash_max);
+
+        // Hashing the hash should give a different value (avalanche property)
+        assert_ne!(hash_64(hash_zero), hash_zero);
+    }
+
+    #[test]
+    fn test_hash_64_avalanche() {
+        // Small changes in input should cause large changes in output (avalanche effect)
+        let h1 = hash_64(0x0000000000000000);
+        let h2 = hash_64(0x0000000000000001);
+
+        // Count bit differences
+        let diff = (h1 ^ h2).count_ones();
+
+        // Should have significant bit differences (typically > 20 for a good hash)
+        assert!(
+            diff > 15,
+            "Poor avalanche: only {} bits differ between hash_64(0) and hash_64(1)",
+            diff
+        );
+    }
+
     // --- realtime() Tests ---
 
     #[test]
@@ -156,6 +220,96 @@ mod tests {
         assert_eq!(content, "plain content");
 
         Ok(())
+    }
+
+    // --- Binary I/O Tests ---
+
+    #[test]
+    fn test_binary_write_u64_le() {
+        use crate::utils::BinaryWrite;
+        use std::io::Cursor;
+
+        let mut buffer = Cursor::new(Vec::new());
+        buffer.write_u64_le(0x0102030405060708u64).unwrap();
+
+        let bytes = buffer.into_inner();
+        // Little-endian: least significant byte first
+        assert_eq!(bytes, vec![0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
+    }
+
+    #[test]
+    fn test_binary_write_i64_le() {
+        use crate::utils::BinaryWrite;
+        use std::io::Cursor;
+
+        let mut buffer = Cursor::new(Vec::new());
+        buffer.write_i64_le(-1i64).unwrap();
+
+        let bytes = buffer.into_inner();
+        // -1 in two's complement is all 0xFF
+        assert_eq!(bytes, vec![0xFF; 8]);
+    }
+
+    #[test]
+    fn test_binary_write_u32_le() {
+        use crate::utils::BinaryWrite;
+        use std::io::Cursor;
+
+        let mut buffer = Cursor::new(Vec::new());
+        buffer.write_u32_le(0x12345678u32).unwrap();
+
+        let bytes = buffer.into_inner();
+        assert_eq!(bytes, vec![0x78, 0x56, 0x34, 0x12]);
+    }
+
+    #[test]
+    fn test_binary_write_u64_array_le() {
+        use crate::utils::BinaryWrite;
+        use std::io::Cursor;
+
+        let mut buffer = Cursor::new(Vec::new());
+        let values = vec![1u64, 2u64, 3u64];
+        buffer.write_u64_array_le(&values).unwrap();
+
+        let bytes = buffer.into_inner();
+        // Each u64 is 8 bytes, total 24 bytes
+        assert_eq!(bytes.len(), 24);
+
+        // First u64 (1): [1, 0, 0, 0, 0, 0, 0, 0]
+        assert_eq!(&bytes[0..8], &[1, 0, 0, 0, 0, 0, 0, 0]);
+        // Second u64 (2): [2, 0, 0, 0, 0, 0, 0, 0]
+        assert_eq!(&bytes[8..16], &[2, 0, 0, 0, 0, 0, 0, 0]);
+        // Third u64 (3): [3, 0, 0, 0, 0, 0, 0, 0]
+        assert_eq!(&bytes[16..24], &[3, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_binary_write_i64_array_le() {
+        use crate::utils::BinaryWrite;
+        use std::io::Cursor;
+
+        let mut buffer = Cursor::new(Vec::new());
+        let values = vec![100i64, -100i64];
+        buffer.write_i64_array_le(&values).unwrap();
+
+        let bytes = buffer.into_inner();
+        assert_eq!(bytes.len(), 16);
+    }
+
+    #[test]
+    fn test_binary_write_chaining() {
+        use crate::utils::BinaryWrite;
+        use std::io::Cursor;
+
+        let mut buffer = Cursor::new(Vec::new());
+
+        // Test chaining multiple writes
+        buffer.write_u32_le(0xDEADBEEF).unwrap();
+        buffer.write_u64_le(0x123456789ABCDEF0).unwrap();
+        buffer.write_u32_le(0xCAFEBABE).unwrap();
+
+        let bytes = buffer.into_inner();
+        assert_eq!(bytes.len(), 4 + 8 + 4); // 16 bytes total
     }
 
     // --- Sorting Tests ---

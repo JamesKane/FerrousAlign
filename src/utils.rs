@@ -15,6 +15,80 @@ pub struct Pair64 {
     pub y: u64,
 }
 
+/// Binary I/O trait for writing little-endian values
+/// Reduces boilerplate in serialization code (BWT, index files, etc.)
+///
+/// This trait provides convenience methods for writing binary data in
+/// little-endian format, which is used by bwa-mem2 index files.
+///
+/// # Example
+/// ```
+/// use ferrous_align::utils::BinaryWrite;
+/// use std::io::Cursor;
+///
+/// let mut buffer = Cursor::new(Vec::new());
+/// buffer.write_u64_le(0x123456789ABCDEF0).unwrap();
+/// buffer.write_u32_le(0xDEADBEEF).unwrap();
+/// ```
+pub trait BinaryWrite: Write {
+    /// Write a u64 in little-endian format
+    #[inline]
+    fn write_u64_le(&mut self, val: u64) -> io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    /// Write an i64 in little-endian format
+    #[inline]
+    fn write_i64_le(&mut self, val: i64) -> io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    /// Write a u32 in little-endian format
+    #[inline]
+    fn write_u32_le(&mut self, val: u32) -> io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    /// Write an i32 in little-endian format
+    #[inline]
+    fn write_i32_le(&mut self, val: i32) -> io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    /// Write an i8 (single byte)
+    #[inline]
+    fn write_i8_le(&mut self, val: i8) -> io::Result<()> {
+        self.write_all(&[val as u8])
+    }
+
+    /// Write a u8 (single byte)
+    #[inline]
+    fn write_u8_le(&mut self, val: u8) -> io::Result<()> {
+        self.write_all(&[val])
+    }
+
+    /// Write an array of u64 values in little-endian format
+    #[inline]
+    fn write_u64_array_le(&mut self, vals: &[u64]) -> io::Result<()> {
+        for &val in vals {
+            self.write_u64_le(val)?;
+        }
+        Ok(())
+    }
+
+    /// Write an array of i64 values in little-endian format
+    #[inline]
+    fn write_i64_array_le(&mut self, vals: &[i64]) -> io::Result<()> {
+        for &val in vals {
+            self.write_i64_le(val)?;
+        }
+        Ok(())
+    }
+}
+
+/// Blanket implementation for all types that implement Write
+impl<W: Write + ?Sized> BinaryWrite for W {}
+
 pub fn hash_64(key: u64) -> u64 {
     let mut key = key;
     key = key.wrapping_add(!key.wrapping_shl(32));

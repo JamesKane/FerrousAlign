@@ -1,7 +1,7 @@
 use crate::align::{CP_SHIFT, CpOcc};
+use crate::utils::BinaryWrite;
 use std::io::{self, Write};
 use std::path::Path;
-// Import CpOcc and CP_SHIFT
 
 pub type BwtInt = u64;
 
@@ -72,23 +72,21 @@ impl Bwt {
         let mut file = std::fs::File::create(&bwt_file_path)?;
 
         // Write seq_len, primary, l2, sa_intv, n_sa
-        file.write_all(&self.seq_len.to_le_bytes())?;
-        file.write_all(&self.primary.to_le_bytes())?;
-        for val in &self.l2 {
-            file.write_all(&val.to_le_bytes())?;
-        }
-        file.write_all(&(self.sa_intv as u32).to_le_bytes())?; // Convert i32 to u32 for writing
-        file.write_all(&self.n_sa.to_le_bytes())?;
+        file.write_u64_le(self.seq_len)?;
+        file.write_u64_le(self.primary)?;
+        file.write_u64_array_le(&self.l2)?;
+        file.write_u32_le(self.sa_intv as u32)?; // Convert i32 to u32 for writing
+        file.write_u64_le(self.n_sa)?;
 
         // Write bwt_data
         file.write_all(&self.bwt_data)?;
 
         // Write sa_ms_byte and sa_ls_word
         for val in &self.sa_ms_byte {
-            file.write_all(&val.to_le_bytes())?;
+            file.write_i8_le(*val)?;
         }
         for val in &self.sa_ls_word {
-            file.write_all(&val.to_le_bytes())?;
+            file.write_u32_le(*val)?;
         }
 
         Ok(())

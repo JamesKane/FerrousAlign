@@ -4,6 +4,7 @@
 use crate::banded_swa::BandedPairWiseSW;
 use crate::mem::BwaIndex;
 use crate::mem_opt::MemOpt;
+use crate::utils::hash_64;
 
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]
@@ -368,6 +369,51 @@ pub fn reverse_complement_code(code: u8) -> u8 {
     }
 }
 
+/// Encode a DNA sequence to numeric codes in bulk
+/// Converts ASCII bases (ACGTN) to numeric codes (01234)
+/// Case-insensitive: A/a -> 0, C/c -> 1, G/g -> 2, T/t -> 3, other -> 4
+///
+/// This is a convenience function that applies `base_to_code` to each base
+/// in the sequence. Use this to avoid repetitive iterator chains.
+///
+/// # Example
+/// ```
+/// use ferrous_align::align::encode_sequence;
+///
+/// let seq = b"ACGTN";
+/// let encoded = encode_sequence(seq);
+/// assert_eq!(encoded, vec![0, 1, 2, 3, 4]);
+/// ```
+#[inline]
+pub fn encode_sequence(seq: &[u8]) -> Vec<u8> {
+    seq.iter().map(|&b| base_to_code(b)).collect()
+}
+
+/// Compute reverse complement of an encoded sequence
+/// Takes numeric codes (01234) and returns reverse complement
+/// Handles N bases correctly (N -> N)
+///
+/// This function:
+/// 1. Reverses the sequence order
+/// 2. Complements each base: A↔T (0↔3), C↔G (1↔2), N→N (4→4)
+///
+/// # Example
+/// ```
+/// use ferrous_align::align::{encode_sequence, reverse_complement_sequence};
+///
+/// let seq = b"ACGT";
+/// let encoded = encode_sequence(seq);  // [0, 1, 2, 3]
+/// let rc = reverse_complement_sequence(&encoded);  // [3, 2, 1, 0] = TGCA
+/// assert_eq!(rc, vec![3, 2, 1, 0]);
+/// ```
+#[inline]
+pub fn reverse_complement_sequence(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|&code| reverse_complement_code(code))
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct Chain {
     pub score: i32,
@@ -379,6 +425,23 @@ pub struct Chain {
     pub is_rev: bool,
     pub weight: i32, // Chain weight (seed coverage), calculated by mem_chain_weight
     pub kept: i32,   // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
+}
+
+/// SAM flag bit masks (SAM specification v1.6)
+/// Used for setting and querying alignment flags in SAM/BAM format
+pub mod sam_flags {
+    pub const PAIRED: u16 = 0x1;          // Template having multiple segments in sequencing
+    pub const PROPER_PAIR: u16 = 0x2;     // Each segment properly aligned according to the aligner
+    pub const UNMAPPED: u16 = 0x4;        // Segment unmapped
+    pub const MATE_UNMAPPED: u16 = 0x8;   // Next segment in the template unmapped
+    pub const REVERSE: u16 = 0x10;        // SEQ being reverse complemented
+    pub const MATE_REVERSE: u16 = 0x20;   // SEQ of the next segment in the template being reverse complemented
+    pub const FIRST_IN_PAIR: u16 = 0x40;  // The first segment in the template
+    pub const SECOND_IN_PAIR: u16 = 0x80; // The last segment in the template
+    pub const SECONDARY: u16 = 0x100;     // Secondary alignment
+    pub const QCFAIL: u16 = 0x200;        // Not passing filters, such as platform/vendor quality controls
+    pub const DUPLICATE: u16 = 0x400;     // PCR or optical duplicate
+    pub const SUPPLEMENTARY: u16 = 0x800; // Supplementary alignment
 }
 
 #[derive(Debug)]
@@ -536,20 +599,202 @@ impl Alignment {
 
         format!("{},{}{},{},{}", self.ref_name, strand, pos, cigar, nm)
     }
-}
 
-/// Hash function for deterministic tie-breaking (matches C++ hash_64)
-/// Used in bwa-mem2 for stable sorting when scores are equal
-fn hash_64(key: u64) -> u64 {
-    let mut key = key;
-    key = (!key).wrapping_add(key << 21);
-    key = key ^ (key >> 24);
-    key = key.wrapping_add(key << 3).wrapping_add(key << 8);
-    key = key ^ (key >> 14);
-    key = key.wrapping_add(key << 2).wrapping_add(key << 4);
-    key = key ^ (key >> 28);
-    key = key.wrapping_add(key << 31);
-    key
+    /// Set paired-end SAM flags in a consistent manner
+    /// Reduces code duplication and prevents flag-setting errors
+    ///
+    /// # Arguments
+    /// * `is_first` - true if this is the first read in the pair (R1), false for second (R2)
+    /// * `is_proper_pair` - true if the pair is properly aligned according to insert size
+    /// * `mate_unmapped` - true if the mate is unmapped
+    /// * `mate_reverse` - true if the mate is reverse-complemented
+    ///
+    /// # SAM Flags Set
+    /// - Always sets PAIRED (0x1)
+    /// - Sets FIRST_IN_PAIR (0x40) or SECOND_IN_PAIR (0x80) based on `is_first`
+    /// - Conditionally sets PROPER_PAIR (0x2), MATE_UNMAPPED (0x8), MATE_REVERSE (0x20)
+    ///
+    /// # Example
+    /// ```
+    /// use ferrous_align::align::{Alignment, sam_flags};
+    ///
+    /// let mut alignment = /* ... */;
+    /// alignment.set_paired_flags(
+    ///     true,   // first in pair
+    ///     true,   // proper pair
+    ///     false,  // mate mapped
+    ///     false   // mate forward
+    /// );
+    /// assert_eq!(alignment.flag & sam_flags::PAIRED, sam_flags::PAIRED);
+    /// assert_eq!(alignment.flag & sam_flags::FIRST_IN_PAIR, sam_flags::FIRST_IN_PAIR);
+    /// assert_eq!(alignment.flag & sam_flags::PROPER_PAIR, sam_flags::PROPER_PAIR);
+    /// ```
+    #[inline]
+    pub fn set_paired_flags(
+        &mut self,
+        is_first: bool,
+        is_proper_pair: bool,
+        mate_unmapped: bool,
+        mate_reverse: bool,
+    ) {
+        use sam_flags::*;
+
+        self.flag |= PAIRED;
+        self.flag |= if is_first { FIRST_IN_PAIR } else { SECOND_IN_PAIR };
+
+        if is_proper_pair {
+            self.flag |= PROPER_PAIR;
+        }
+        if mate_unmapped {
+            self.flag |= MATE_UNMAPPED;
+        }
+        if mate_reverse {
+            self.flag |= MATE_REVERSE;
+        }
+    }
+
+    /// Calculate template length (TLEN) for paired-end reads
+    /// Returns signed TLEN according to SAM specification:
+    /// - Positive for leftmost read (smaller coordinate)
+    /// - Negative for rightmost read (larger coordinate)
+    /// - 0 for unmapped or different references
+    ///
+    /// # Arguments
+    /// * `mate_pos` - Mate's 0-based mapping position
+    /// * `mate_ref_len` - Mate's reference length from CIGAR (aligned bases)
+    ///
+    /// # Formula
+    /// - If this read is leftmost: `TLEN = (mate_pos - this_pos) + mate_ref_len`
+    /// - If this read is rightmost: `TLEN = -((this_pos - mate_pos) + this_ref_len)`
+    ///
+    /// # SAM Specification Notes
+    /// TLEN represents the signed observed template length. For reads on same reference:
+    /// - Leftmost segment has positive TLEN
+    /// - Rightmost segment has negative TLEN
+    /// - Both segments should have equal magnitude
+    /// - TLEN = rightmost_end - leftmost_start (outer coordinates)
+    ///
+    /// # Example
+    /// ```
+    /// use ferrous_align::align::Alignment;
+    ///
+    /// // Read1 at position 1000, 100bp aligned
+    /// // Read2 at position 1200, 100bp aligned
+    /// // Read1 TLEN = (1200 - 1000) + 100 = 300 (positive, leftmost)
+    /// // Read2 TLEN = -((1200 - 1000) + 100) = -300 (negative, rightmost)
+    /// ```
+    #[inline]
+    pub fn calculate_tlen(&self, mate_pos: u64, mate_ref_len: i32) -> i32 {
+        let this_pos = self.pos as i64;
+        let mate_pos = mate_pos as i64;
+
+        if this_pos <= mate_pos {
+            // This read is leftmost: positive TLEN
+            // TLEN = (mate_start - this_start) + mate_length
+            ((mate_pos - this_pos) + mate_ref_len as i64) as i32
+        } else {
+            // This read is rightmost: negative TLEN
+            // TLEN = -((this_start - mate_start) + this_length)
+            let this_ref_len = self.reference_length();
+            -(((this_pos - mate_pos) + this_ref_len as i64) as i32)
+        }
+    }
+
+    /// Create an unmapped alignment for paired-end reads
+    /// Reduces 40+ lines of duplicate struct initialization code
+    ///
+    /// # Arguments
+    /// * `query_name` - Read identifier
+    /// * `seq` - Read sequence (will be converted to String)
+    /// * `qual` - Quality scores string
+    /// * `is_first_in_pair` - true for R1, false for R2
+    /// * `mate_ref` - Mate reference name ("*" if mate also unmapped)
+    /// * `mate_pos` - Mate position (0-based, ignored if mate unmapped)
+    /// * `mate_is_reverse` - true if mate is reverse-complemented
+    ///
+    /// # SAM Flags Set
+    /// - PAIRED (0x1) - always set
+    /// - UNMAPPED (0x4) - always set
+    /// - FIRST_IN_PAIR (0x40) or SECOND_IN_PAIR (0x80) - based on is_first_in_pair
+    /// - MATE_REVERSE (0x20) - if mate_is_reverse is true
+    ///
+    /// # SAM Field Values
+    /// - POS: mate position (or 0 if mate unmapped)
+    /// - RNAME: mate reference (or "*" if mate unmapped)
+    /// - RNEXT: "=" if mate mapped, "*" if unmapped
+    /// - PNEXT: mate position + 1 (1-based) if mate mapped, 0 if unmapped
+    /// - MAPQ: 0 (unmapped)
+    /// - CIGAR: empty (unmapped)
+    /// - TLEN: 0 (no template length for unmapped)
+    ///
+    /// # Example
+    /// ```
+    /// use ferrous_align::align::Alignment;
+    ///
+    /// let unmapped = Alignment::create_unmapped(
+    ///     "read1".to_string(),
+    ///     b"ACGTACGT",
+    ///     "IIIIIIII".to_string(),
+    ///     true,  // first in pair
+    ///     "chr1", // mate reference
+    ///     1000,   // mate position
+    ///     false   // mate forward
+    /// );
+    /// assert_eq!(unmapped.mapq, 0);
+    /// assert_ne!(unmapped.flag & 0x4, 0); // UNMAPPED flag
+    /// ```
+    pub fn create_unmapped(
+        query_name: String,
+        seq: &[u8],
+        qual: String,
+        is_first_in_pair: bool,
+        mate_ref: &str,
+        mate_pos: u64,
+        mate_is_reverse: bool,
+    ) -> Self {
+        use sam_flags::*;
+
+        let mut flag = PAIRED | UNMAPPED;
+        flag |= if is_first_in_pair {
+            FIRST_IN_PAIR
+        } else {
+            SECOND_IN_PAIR
+        };
+
+        let (ref_name, pos, rnext, pnext) = if mate_ref != "*" {
+            // Mate is mapped: use mate's position and reference
+            (mate_ref.to_string(), mate_pos, "=".to_string(), mate_pos + 1)
+        } else {
+            // Mate is also unmapped
+            ("*".to_string(), 0, "*".to_string(), 0)
+        };
+
+        if mate_is_reverse {
+            flag |= MATE_REVERSE;
+        }
+
+        Self {
+            query_name,
+            flag,
+            ref_name,
+            ref_id: 0,
+            pos,
+            mapq: 0,
+            score: 0,
+            cigar: Vec::new(),
+            rnext,
+            pnext,
+            tlen: 0,
+            seq: String::from_utf8_lossy(seq).to_string(),
+            qual,
+            tags: Vec::new(),
+            // Internal fields - default for unmapped
+            query_start: 0,
+            query_end: seq.len() as i32,
+            seed_coverage: 0,
+            hash: 0,
+        }
+    }
 }
 
 /// Check if two alignments overlap significantly on the query sequence

@@ -4,6 +4,7 @@ use crate::bntseq::BntSeq;
 use crate::bwt::Bwt;
 use crate::fastq_reader::FastqReader;
 use crate::mem_opt::MemOpt;
+use crate::utils::hash_64;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rayon::prelude::*;
 use std::fs::File;
@@ -722,20 +723,8 @@ fn process_paired_end(
     };
 
     // Prepare sequences for mate rescue and output
-    let first_batch_seqs1: Vec<_> = first_batch1
-        .names
-        .iter()
-        .zip(&first_batch1.seqs)
-        .zip(&first_batch1.quals)
-        .map(|((n, s), q)| (n.as_str(), s.as_slice(), q.as_str()))
-        .collect();
-    let first_batch_seqs2: Vec<_> = first_batch2
-        .names
-        .iter()
-        .zip(&first_batch2.seqs)
-        .zip(&first_batch2.quals)
-        .map(|((n, s), q)| (n.as_str(), s.as_slice(), q.as_str()))
-        .collect();
+    let first_batch_seqs1 = first_batch1.as_tuple_refs();
+    let first_batch_seqs2 = first_batch2.as_tuple_refs();
 
     // Mate rescue on first batch
     let rescued_first = mate_rescue_batch(
@@ -855,20 +844,8 @@ fn process_paired_end(
             .collect();
 
         // Prepare sequences for mate rescue
-        let batch_seqs1: Vec<_> = batch1
-            .names
-            .iter()
-            .zip(&batch1.seqs)
-            .zip(&batch1.quals)
-            .map(|((n, s), q)| (n.as_str(), s.as_slice(), q.as_str()))
-            .collect();
-        let batch_seqs2: Vec<_> = batch2
-            .names
-            .iter()
-            .zip(&batch2.seqs)
-            .zip(&batch2.quals)
-            .map(|((n, s), q)| (n.as_str(), s.as_slice(), q.as_str()))
-            .collect();
+        let batch_seqs1 = batch1.as_tuple_refs();
+        let batch_seqs2 = batch2.as_tuple_refs();
 
         // Mate rescue on this batch
         let rescued = mate_rescue_batch(
@@ -1419,19 +1396,6 @@ fn mem_matesw(
     n_rescued
 }
 
-// Simple hash function (C++ hash_64 equivalent)
-fn hash_64(key: u64) -> u64 {
-    let mut key = key;
-    key = (!key).wrapping_add(key << 21);
-    key = key ^ (key >> 24);
-    key = key.wrapping_add(key << 3).wrapping_add(key << 8);
-    key = key ^ (key >> 14);
-    key = key.wrapping_add(key << 2).wrapping_add(key << 4);
-    key = key ^ (key >> 28);
-    key = key.wrapping_add(key << 31);
-    key
-}
-
 // Complementary error function (approximation)
 fn erfc(x: f64) -> f64 {
     // Use standard library if available, otherwise approximation
@@ -1720,18 +1684,7 @@ fn mate_rescue_batch(
     let mut rescued = 0;
 
     // Encode sequence helper
-    let encode_seq = |seq: &[u8]| -> Vec<u8> {
-        seq.iter()
-            .map(|&b| match b {
-                b'A' | b'a' => 0,
-                b'C' | b'c' => 1,
-                b'G' | b'g' => 2,
-                b'T' | b't' => 3,
-                _ => 4,
-            })
-            .collect()
-    };
-
+    // Use align::encode_sequence instead of lambda
     for (i, (alns1, alns2)) in batch_pairs.iter_mut().enumerate() {
         let (name1, seq1, qual1) = batch_seqs1[i];
         let (name2, seq2, qual2) = batch_seqs2[i];
@@ -1748,7 +1701,7 @@ fn mate_rescue_batch(
 
         // Try to rescue read2 if read1 has good alignments but read2 doesn't
         if !alns1.is_empty() && alns2.is_empty() && !pac.is_empty() {
-            let mate_seq = encode_seq(seq2);
+            let mate_seq = align::encode_sequence(seq2);
             let n = mem_matesw(
                 bwa_idx, pac, stats, &alns1[0], // Use best alignment as anchor
                 &mate_seq, qual2, name2, alns2,
@@ -1760,7 +1713,7 @@ fn mate_rescue_batch(
 
         // Try to rescue read1 if read2 has good alignments but read1 doesn't
         if !alns2.is_empty() && alns1.is_empty() && !pac.is_empty() {
-            let mate_seq = encode_seq(seq1);
+            let mate_seq = align::encode_sequence(seq1);
             let n = mem_matesw(
                 bwa_idx, pac, stats, &alns2[0], // Use best alignment as anchor
                 &mate_seq, qual1, name1, alns1,
@@ -1931,70 +1884,28 @@ fn output_batch_paired(
 
         // Handle unmapped reads - create dummy alignments
         if alignments1.is_empty() {
-            let mut unmapped = align::Alignment {
-                query_name: name1.clone(),
-                flag: 0x1 | 0x4 | 0x40,
-                ref_name: mate2_ref_initial.clone(),
-                ref_id: 0,
-                pos: mate2_pos_initial,
-                mapq: 0,
-                score: 0,
-                cigar: Vec::new(),
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                seq: String::from_utf8_lossy(seq1).to_string(),
-                qual: qual1.clone(),
-                tags: Vec::new(),
-                // Internal fields for alignment selection (unmapped = defaults)
-                query_start: 0,
-                query_end: seq1.len() as i32,
-                seed_coverage: 0,
-                hash: 0,
-            };
-
-            if mate2_ref_initial != "*" {
-                unmapped.rnext = "=".to_string();
-                unmapped.pnext = mate2_pos_initial + 1;
-                if mate2_flag_initial & 0x10 != 0 {
-                    unmapped.flag |= 0x20;
-                }
-            }
-
+            let unmapped = align::Alignment::create_unmapped(
+                name1.clone(),
+                seq1,
+                qual1.clone(),
+                true, // is_first_in_pair
+                &mate2_ref_initial,
+                mate2_pos_initial,
+                mate2_flag_initial & 0x10 != 0, // mate_is_reverse
+            );
             alignments1.push(unmapped);
         }
 
         if alignments2.is_empty() {
-            let mut unmapped = align::Alignment {
-                query_name: name2.clone(),
-                flag: 0x1 | 0x4 | 0x80,
-                ref_name: mate1_ref_initial.clone(),
-                ref_id: 0,
-                pos: mate1_pos_initial,
-                mapq: 0,
-                score: 0,
-                cigar: Vec::new(),
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                seq: String::from_utf8_lossy(seq2).to_string(),
-                qual: qual2.clone(),
-                tags: Vec::new(),
-                // Internal fields for alignment selection (unmapped = defaults)
-                query_start: 0,
-                query_end: seq2.len() as i32,
-                seed_coverage: 0,
-                hash: 0,
-            };
-
-            if mate1_ref_initial != "*" {
-                unmapped.rnext = "=".to_string();
-                unmapped.pnext = mate1_pos_initial + 1;
-                if mate1_flag_initial & 0x10 != 0 {
-                    unmapped.flag |= 0x20;
-                }
-            }
-
+            let unmapped = align::Alignment::create_unmapped(
+                name2.clone(),
+                seq2,
+                qual2.clone(),
+                false, // is_first_in_pair (this is read2)
+                &mate1_ref_initial,
+                mate1_pos_initial,
+                mate1_flag_initial & 0x10 != 0, // mate_is_reverse
+            );
             alignments2.push(unmapped);
         }
 
@@ -2046,25 +1957,11 @@ fn output_batch_paired(
                 }
 
                 if alignment.ref_name == mate2_ref {
-                    let pos1 = alignment.pos as i64;
-                    let pos2 = mate2_pos as i64;
-
-                    // Calculate TLEN: outer_end - outer_start
-                    // For FR orientation: leftmost_start to rightmost_end
-                    if pos1 <= pos2 {
-                        // R1 is leftmost: TLEN = (R2_start - R1_start) + R2_aligned_length
-                        let mate2_len = if !alignments2.is_empty() && best_idx2 < alignments2.len()
-                        {
-                            alignments2[best_idx2].reference_length()
-                        } else {
-                            0
-                        };
-                        alignment.tlen = ((pos2 - pos1) + mate2_len as i64) as i32;
-                    } else {
-                        // R1 is rightmost: TLEN = -((R1_start - R2_start) + R1_aligned_length)
-                        let r1_len = alignment.reference_length();
-                        alignment.tlen = -(((pos1 - pos2) + r1_len as i64) as i32);
-                    }
+                    let mate2_len = alignments2
+                        .get(best_idx2)
+                        .map(|a| a.reference_length())
+                        .unwrap_or(0);
+                    alignment.tlen = alignment.calculate_tlen(mate2_pos, mate2_len);
                 }
             }
         }
@@ -2103,25 +2000,11 @@ fn output_batch_paired(
                 }
 
                 if alignment.ref_name == mate1_ref {
-                    let pos1 = mate1_pos as i64;
-                    let pos2 = alignment.pos as i64;
-
-                    // Calculate TLEN: outer_end - outer_start
-                    // For FR orientation: leftmost_start to rightmost_end
-                    if pos2 <= pos1 {
-                        // R2 is leftmost: TLEN = (R1_start - R2_start) + R1_aligned_length
-                        let mate1_len = if !alignments1.is_empty() && best_idx1 < alignments1.len()
-                        {
-                            alignments1[best_idx1].reference_length()
-                        } else {
-                            0
-                        };
-                        alignment.tlen = ((pos1 - pos2) + mate1_len as i64) as i32;
-                    } else {
-                        // R2 is rightmost: TLEN = -((R2_start - R1_start) + R2_aligned_length)
-                        let r2_len = alignment.reference_length();
-                        alignment.tlen = -(((pos2 - pos1) + r2_len as i64) as i32);
-                    }
+                    let mate1_len = alignments1
+                        .get(best_idx1)
+                        .map(|a| a.reference_length())
+                        .unwrap_or(0);
+                    alignment.tlen = alignment.calculate_tlen(mate1_pos, mate1_len);
                 }
             }
         }

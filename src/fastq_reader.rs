@@ -13,7 +13,7 @@ use bio::io::fastq;
 use flate2::read::GzDecoder;
 use noodles_bgzf as bgzf;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read};
 
 /// Batch of FASTQ reads
 pub struct ReadBatch {
@@ -40,6 +40,32 @@ impl ReadBatch {
     /// Check if batch is empty
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
+    }
+
+    /// Convert batch to vector of tuples with references
+    /// Returns Vec<(&str, &[u8], &str)> for efficient passing to alignment functions
+    /// Eliminates duplicate zip chains in mem.rs
+    ///
+    /// # Example
+    /// ```
+    /// use ferrous_align::fastq_reader::ReadBatch;
+    ///
+    /// let batch = ReadBatch {
+    ///     names: vec!["read1".to_string()],
+    ///     seqs: vec![b"ACGT".to_vec()],
+    ///     quals: vec!["IIII".to_string()],
+    /// };
+    /// let tuples = batch.as_tuple_refs();
+    /// assert_eq!(tuples.len(), 1);
+    /// assert_eq!(tuples[0].0, "read1");
+    /// ```
+    pub fn as_tuple_refs(&self) -> Vec<(&str, &[u8], &str)> {
+        self.names
+            .iter()
+            .zip(&self.seqs)
+            .zip(&self.quals)
+            .map(|((n, s), q)| (n.as_str(), s.as_slice(), q.as_str()))
+            .collect()
     }
 }
 
