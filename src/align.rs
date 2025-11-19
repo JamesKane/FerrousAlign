@@ -399,10 +399,10 @@ pub struct Alignment {
     // Optional SAM tags
     pub tags: Vec<(String, String)>, // Vector of (tag_name, tag_value) pairs
     // Internal fields for alignment selection (not output to SAM)
-    pub(crate) query_start: i32, // Query start position (0-based)
-    pub(crate) query_end: i32,   // Query end position (exclusive)
+    pub(crate) query_start: i32,   // Query start position (0-based)
+    pub(crate) query_end: i32,     // Query end position (exclusive)
     pub(crate) seed_coverage: i32, // Length of region covered by seeds (for MAPQ)
-    pub(crate) hash: u64,        // Hash for deterministic tie-breaking
+    pub(crate) hash: u64,          // Hash for deterministic tie-breaking
 }
 
 impl Alignment {
@@ -424,11 +424,9 @@ impl Alignment {
     pub fn reference_length(&self) -> i32 {
         self.cigar
             .iter()
-            .filter_map(|&(op, len)| {
-                match op as char {
-                    'M' | 'D' | 'N' | '=' | 'X' => Some(len),
-                    _ => None,
-                }
+            .filter_map(|&(op, len)| match op as char {
+                'M' | 'D' | 'N' | '=' | 'X' => Some(len),
+                _ => None,
             })
             .sum()
     }
@@ -498,11 +496,9 @@ impl Alignment {
     pub fn query_length(&self) -> i32 {
         self.cigar
             .iter()
-            .filter_map(|&(op, len)| {
-                match op as char {
-                    'M' | 'I' | 'S' | '=' | 'X' => Some(len),
-                    _ => None,
-                }
+            .filter_map(|&(op, len)| match op as char {
+                'M' | 'I' | 'S' | '=' | 'X' => Some(len),
+                _ => None,
             })
             .sum()
     }
@@ -612,9 +608,10 @@ fn calculate_mapq(
 
     // Calculate sequence identity
     // identity = 1 - (l * a - score) / (a + b) / l
-    let identity = 1.0 - ((l * match_score - score) as f64)
-        / ((match_score + mismatch_penalty) as f64)
-        / (l as f64);
+    let identity = 1.0
+        - ((l * match_score - score) as f64)
+            / ((match_score + mismatch_penalty) as f64)
+            / (l as f64);
 
     if score == 0 {
         return 0;
@@ -622,10 +619,9 @@ fn calculate_mapq(
 
     // Traditional MAPQ formula (default when mapQ_coef_len = 0)
     // mapq = 30.0 * (1 - sub/score) * ln(seed_coverage)
-    let mut mapq = (MEM_MAPQ_COEF
-        * (1.0 - (sub as f64) / (score as f64))
-        * (seed_coverage as f64).ln()
-        + 0.499) as i32;
+    let mut mapq =
+        (MEM_MAPQ_COEF * (1.0 - (sub as f64) / (score as f64)) * (seed_coverage as f64).ln()
+            + 0.499) as i32;
 
     // Apply identity penalty if < 95%
     if identity < 0.95 {
@@ -825,7 +821,10 @@ fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<C
 /// 4. Format as XA:Z:chr1,+100,50M,2;chr2,-200,48M1D2M,3;
 ///
 /// Returns: HashMap<read_name, XA_tag_string>
-fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> std::collections::HashMap<String, String> {
+fn generate_xa_tags(
+    alignments: &[Alignment],
+    opt: &MemOpt,
+) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
 
     let mut xa_tags: HashMap<String, String> = HashMap::new();
@@ -837,7 +836,8 @@ fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> std::collections:
     // Group alignments by query name
     let mut by_read: HashMap<String, Vec<&Alignment>> = HashMap::new();
     for aln in alignments {
-        by_read.entry(aln.query_name.clone())
+        by_read
+            .entry(aln.query_name.clone())
             .or_insert_with(Vec::new)
             .push(aln);
     }
@@ -855,7 +855,8 @@ fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> std::collections:
         let xa_threshold = (primary_score as f32 * opt.xa_drop_ratio) as i32;
 
         // Collect secondary alignments that pass score threshold
-        let mut secondaries: Vec<&Alignment> = read_alns.iter()
+        let mut secondaries: Vec<&Alignment> = read_alns
+            .iter()
             .filter(|a| {
                 (a.flag & 0x100 != 0) && // Is secondary
                 (a.score >= xa_threshold) // Score passes threshold
@@ -878,9 +879,7 @@ fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> std::collections:
         }
 
         // Format as XA tag: XA:Z:chr1,+100,50M,2;chr2,-200,48M,3;
-        let xa_entries: Vec<String> = secondaries.iter()
-            .map(|aln| aln.to_xa_entry())
-            .collect();
+        let xa_entries: Vec<String> = secondaries.iter().map(|aln| aln.to_xa_entry()).collect();
 
         if !xa_entries.is_empty() {
             // Return just the value portion (without XA:Z: prefix)
@@ -1290,11 +1289,15 @@ fn execute_batched_alignments_with_size(
                 all_results[batch_start + i] = (result.score.score, result.cigar.clone());
 
                 // Detect pathological CIGARs in SIMD path
-                let total_insertions: i32 = result.cigar.iter()
+                let total_insertions: i32 = result
+                    .cigar
+                    .iter()
                     .filter(|(op, _)| *op == b'I')
                     .map(|(_, count)| count)
                     .sum();
-                let total_deletions: i32 = result.cigar.iter()
+                let total_deletions: i32 = result
+                    .cigar
+                    .iter()
                     .filter(|(op, _)| *op == b'D')
                     .map(|(_, count)| count)
                     .sum();
@@ -1583,8 +1586,23 @@ fn generate_smems_for_strand(
                     let new_len = new_smem.n - new_smem.m + 1;
                     log::debug!(
                         "{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
-                        query_name, x, j, i, smem.m, smem.n, old_len, smem.k, smem.l, smem.s,
-                        new_smem.m, new_smem.n, new_len, new_smem.k, new_smem.l, new_smem.s, min_intv
+                        query_name,
+                        x,
+                        j,
+                        i,
+                        smem.m,
+                        smem.n,
+                        old_len,
+                        smem.k,
+                        smem.l,
+                        smem.s,
+                        new_smem.m,
+                        new_smem.n,
+                        new_len,
+                        new_smem.k,
+                        new_smem.l,
+                        new_smem.s,
+                        min_intv
                     );
                 }
 
@@ -1594,7 +1612,16 @@ fn generate_smems_for_strand(
                         let s_matches = smem.s == s_from_lk;
                         log::debug!(
                             "{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
-                            query_name, smem.m, smem.n, smem.k, smem.l, smem.s, new_smem.s, min_intv, s_from_lk, s_matches
+                            query_name,
+                            smem.m,
+                            smem.n,
+                            smem.k,
+                            smem.l,
+                            smem.s,
+                            new_smem.s,
+                            min_intv,
+                            s_from_lk,
+                            s_matches
                         );
                     }
                     all_smems.push(*smem);
@@ -1607,7 +1634,9 @@ fn generate_smems_for_strand(
                     if !is_rev_comp {
                         log::debug!(
                             "{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
-                            query_name, new_smem.s, min_intv
+                            query_name,
+                            new_smem.s,
+                            min_intv
                         );
                     }
                     break;
@@ -1616,7 +1645,10 @@ fn generate_smems_for_strand(
                 if !is_rev_comp {
                     log::debug!(
                         "{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
-                        query_name, new_smem.s, min_intv, curr_s == Some(new_smem.s)
+                        query_name,
+                        new_smem.s,
+                        min_intv,
+                        curr_s == Some(new_smem.s)
                     );
                 }
             }
@@ -1629,8 +1661,17 @@ fn generate_smems_for_strand(
                     let new_len = new_smem.n - new_smem.m + 1;
                     log::debug!(
                         "{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
-                        query_name, x, j, i + 1, smem.m, smem.n, smem.s,
-                        new_smem.m, new_smem.n, new_len, new_smem.s,
+                        query_name,
+                        x,
+                        j,
+                        i + 1,
+                        smem.m,
+                        smem.n,
+                        smem.s,
+                        new_smem.m,
+                        new_smem.n,
+                        new_len,
+                        new_smem.s,
                         new_smem.s >= min_intv && curr_s != Some(new_smem.s)
                     );
                 }
@@ -1647,7 +1688,9 @@ fn generate_smems_for_strand(
             if !is_rev_comp {
                 log::debug!(
                     "{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
-                    query_name, j, prev_array_buf.len()
+                    query_name,
+                    j,
+                    prev_array_buf.len()
                 );
             }
 
@@ -1655,7 +1698,8 @@ fn generate_smems_for_strand(
                 if !is_rev_comp {
                     log::debug!(
                         "{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}",
-                        query_name, j
+                        query_name,
+                        j
                     );
                 }
                 break;
@@ -1671,27 +1715,41 @@ fn generate_smems_for_strand(
                     let s_matches = smem.s == s_from_lk;
                     log::debug!(
                         "{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
-                        query_name, smem.m, smem.n, smem.k, smem.l, smem.s, len, s_from_lk, s_matches, next_x
+                        query_name,
+                        smem.m,
+                        smem.n,
+                        smem.k,
+                        smem.l,
+                        smem.s,
+                        len,
+                        s_from_lk,
+                        s_matches,
+                        next_x
                     );
                 }
                 all_smems.push(smem);
             } else if !is_rev_comp {
                 log::debug!(
                     "{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
-                    query_name, smem.m, smem.n, len, min_seed_len, smem.s
+                    query_name,
+                    smem.m,
+                    smem.n,
+                    len,
+                    min_seed_len,
+                    smem.s
                 );
             }
         } else if !is_rev_comp {
             log::debug!(
                 "{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}",
-                query_name, x
+                query_name,
+                x
             );
         }
 
         x = next_x;
     }
 }
-
 
 // Internal implementation with option to use batched SIMD
 fn generate_seeds_with_mode(
@@ -2015,7 +2073,10 @@ fn generate_seeds_with_mode(
         // TRACE: Log each seed to track missing alignments
         log::trace!(
             "[SEED] {}: ref_pos={}, qpos={}, len={}, strand={}",
-            query_name, seed.ref_pos, seed.query_pos, seed.len,
+            query_name,
+            seed.ref_pos,
+            seed.query_pos,
+            seed.len,
             if seed.is_rev { "rev" } else { "fwd" }
         );
 
@@ -2111,7 +2172,10 @@ fn generate_seeds_with_mode(
         let ref_segment_len = (bounded_query_len as u64 + 2 * _opt.w as u64)
             .min(bwa_idx.bns.l_pac - ref_start_for_bounded);
 
-        match bwa_idx.bns.get_reference_segment(ref_start_for_bounded, ref_segment_len) {
+        match bwa_idx
+            .bns
+            .get_reference_segment(ref_start_for_bounded, ref_segment_len)
+        {
             Ok(target_segment) => {
                 let job_idx = alignment_jobs.len();
                 chain_to_job_map.push(Some(job_idx));
@@ -2125,7 +2189,12 @@ fn generate_seeds_with_mode(
                 });
             }
             Err(e) => {
-                log::error!("{}: Chain {}: Error getting reference segment: {}", query_name, chain_idx, e);
+                log::error!(
+                    "{}: Chain {}: Error getting reference segment: {}",
+                    query_name,
+                    chain_idx,
+                    e
+                );
                 chain_to_job_map.push(None);
             }
         }
@@ -2183,7 +2252,11 @@ fn generate_seeds_with_mode(
         let job_idx = match chain_to_job_map[chain_idx] {
             Some(idx) => idx,
             None => {
-                log::warn!("{}: Chain {} has no alignment job, skipping", query_name, chain_idx);
+                log::warn!(
+                    "{}: Chain {} has no alignment job, skipping",
+                    query_name,
+                    chain_idx
+                );
                 continue; // Skip chains without alignment jobs
             }
         };
@@ -2291,8 +2364,8 @@ fn generate_seeds_with_mode(
             ref_name,
             ref_id,
             pos: chr_pos,
-            mapq: 60,          // Will be calculated by mark_secondary_alignments
-            score,             // Use alignment score from chain-based DP
+            mapq: 60, // Will be calculated by mark_secondary_alignments
+            score,    // Use alignment score from chain-based DP
             cigar: cigar_for_alignment,
             rnext: "*".to_string(),
             pnext: 0,
@@ -2543,8 +2616,8 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
             ref_start,
             ref_end,
             is_rev,
-            weight: 0,  // Will be calculated by filter_chains()
-            kept: 0,    // Will be set by filter_chains()
+            weight: 0, // Will be calculated by filter_chains()
+            kept: 0,   // Will be set by filter_chains()
         });
 
         // Safety limit: stop after extracting a reasonable number of chains
@@ -3179,14 +3252,21 @@ mod tests {
 
         let alignments = super::generate_seeds(&bwa_idx, query_name, query_seq, query_qual, &opt);
 
-        assert!(!alignments.is_empty(), "Expected at least one alignment for a matching query");
+        assert!(
+            !alignments.is_empty(),
+            "Expected at least one alignment for a matching query"
+        );
 
         let primary_alignment = alignments.iter().find(|a| a.flag & 0x100 == 0);
         assert!(primary_alignment.is_some(), "Expected a primary alignment");
 
         let pa = primary_alignment.unwrap();
         assert_eq!(pa.ref_name, "test_sequence");
-        assert!(pa.score > 0, "Expected a positive score for a good match, got {}", pa.score);
+        assert!(
+            pa.score > 0,
+            "Expected a positive score for a good match, got {}",
+            pa.score
+        );
         assert!(pa.pos < 60, "Position should be within reference length");
         assert_eq!(pa.cigar_string(), "12M", "Expected a perfect match CIGAR");
     }

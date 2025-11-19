@@ -2255,14 +2255,35 @@ mod tests {
         );
 
         // Validate the CIGAR string
-        assert_eq!(cigar.len(), 1, "Perfect match should produce single CIGAR operation, got: {:?}", cigar);
-        assert_eq!(cigar[0].0, b'M', "Perfect match should be 'M' operation, got: {:?}", cigar);
-        assert_eq!(cigar[0].1, 12, "Perfect match should be 12M, got: {:?}", cigar);
+        assert_eq!(
+            cigar.len(),
+            1,
+            "Perfect match should produce single CIGAR operation, got: {:?}",
+            cigar
+        );
+        assert_eq!(
+            cigar[0].0, b'M',
+            "Perfect match should be 'M' operation, got: {:?}",
+            cigar
+        );
+        assert_eq!(
+            cigar[0].1, 12,
+            "Perfect match should be 12M, got: {:?}",
+            cigar
+        );
 
         // Validate alignment endpoints (qle/tle are end positions, may be 0-indexed or 1-indexed)
         // Check that we aligned the full length
-        assert!(result.qle >= 11, "Query should align to near end, got qle={}", result.qle);
-        assert!(result.tle >= 11, "Target should align to near end, got tle={}", result.tle);
+        assert!(
+            result.qle >= 11,
+            "Query should align to near end, got qle={}",
+            result.qle
+        );
+        assert!(
+            result.tle >= 11,
+            "Target should align to near end, got tle={}",
+            result.tle
+        );
         assert_eq!(result.score, 12, "Score should be 12 (12 matches)");
 
         println!("✅ Perfect match CIGAR test passed!");
@@ -2306,10 +2327,14 @@ mod tests {
         );
 
         println!("CIGAR for soft-clip test: {:?}", cigar);
-        println!("Score: {}, qle: {}, tle: {}", result.score, result.qle, result.tle);
+        println!(
+            "Score: {}, qle: {}, tle: {}",
+            result.score, result.qle, result.tle
+        );
 
         // Check that we don't have pathological insertions
-        let total_insertions: i32 = cigar.iter()
+        let total_insertions: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'I')
             .map(|(_, count)| count)
             .sum();
@@ -2322,7 +2347,8 @@ mod tests {
         );
 
         // Check that we have a reasonable number of matches
-        let total_matches: i32 = cigar.iter()
+        let total_matches: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'M')
             .map(|(_, count)| count)
             .sum();
@@ -2335,7 +2361,8 @@ mod tests {
         );
 
         // Should have soft-clipping at the end
-        let total_soft_clips: i32 = cigar.iter()
+        let total_soft_clips: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'S')
             .map(|(_, count)| count)
             .sum();
@@ -2400,9 +2427,16 @@ mod tests {
         );
 
         println!("\n=== Production Dimensions Test ===");
-        println!("Query length: {}, Target length: {}", query.len(), target.len());
+        println!(
+            "Query length: {}, Target length: {}",
+            query.len(),
+            target.len()
+        );
         println!("CIGAR: {:?}", cigar);
-        println!("Score: {}, qle: {}, tle: {}", result.score, result.qle, result.tle);
+        println!(
+            "Score: {}, qle: {}, tle: {}",
+            result.score, result.qle, result.tle
+        );
 
         // Decode CIGAR for readability
         let cigar_str: String = cigar
@@ -2413,32 +2447,37 @@ mod tests {
         println!("CIGAR string: {}", cigar_str);
 
         // Count operations
-        let total_insertions: i32 = cigar.iter()
+        let total_insertions: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'I')
             .map(|(_, count)| count)
             .sum();
-        let total_deletions: i32 = cigar.iter()
+        let total_deletions: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'D')
             .map(|(_, count)| count)
             .sum();
-        let total_matches: i32 = cigar.iter()
+        let total_matches: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'M')
             .map(|(_, count)| count)
             .sum();
-        let total_soft_clips: i32 = cigar.iter()
+        let total_soft_clips: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'S')
             .map(|(_, count)| count)
             .sum();
 
-        println!("Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
-            total_insertions, total_deletions, total_matches, total_soft_clips);
+        println!(
+            "Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
+            total_insertions, total_deletions, total_matches, total_soft_clips
+        );
 
         // Check for pathological CIGAR (production bug)
         if total_insertions > 10 {
             panic!(
                 "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {}\nCIGAR: {}\nThis matches the production pathological pattern.",
-                total_insertions,
-                cigar_str
+                total_insertions, cigar_str
             );
         }
 
@@ -2516,9 +2555,16 @@ mod tests {
         );
 
         println!("\n=== Mismatched Start Test ===");
-        println!("Query length: {}, Target length: {}", query.len(), target.len());
+        println!(
+            "Query length: {}, Target length: {}",
+            query.len(),
+            target.len()
+        );
         println!("CIGAR: {:?}", cigar);
-        println!("Score: {}, qle: {}, tle: {}", result.score, result.qle, result.tle);
+        println!(
+            "Score: {}, qle: {}, tle: {}",
+            result.score, result.qle, result.tle
+        );
 
         let cigar_str: String = cigar
             .iter()
@@ -2527,32 +2573,37 @@ mod tests {
             .join("");
         println!("CIGAR string: {}", cigar_str);
 
-        let total_insertions: i32 = cigar.iter()
+        let total_insertions: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'I')
             .map(|(_, count)| count)
             .sum();
-        let total_deletions: i32 = cigar.iter()
+        let total_deletions: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'D')
             .map(|(_, count)| count)
             .sum();
-        let total_matches: i32 = cigar.iter()
+        let total_matches: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'M')
             .map(|(_, count)| count)
             .sum();
-        let total_soft_clips: i32 = cigar.iter()
+        let total_soft_clips: i32 = cigar
+            .iter()
             .filter(|(op, _)| *op == b'S')
             .map(|(_, count)| count)
             .sum();
 
-        println!("Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
-            total_insertions, total_deletions, total_matches, total_soft_clips);
+        println!(
+            "Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
+            total_insertions, total_deletions, total_matches, total_soft_clips
+        );
 
         // Check for pathological CIGAR (production bug)
         if total_insertions > 10 {
             panic!(
                 "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {}\nCIGAR: {}\nThis matches the production pathological pattern.",
-                total_insertions,
-                cigar_str
+                total_insertions, cigar_str
             );
         }
 
