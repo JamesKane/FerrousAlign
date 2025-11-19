@@ -1,22 +1,36 @@
 // bwa-mem2-rust/src/banded_swa.rs
 
-// Rust equivalent of dnaSeqPair
+// Rust equivalent of dnaSeqPair (C++ bandedSWA.h:90-99)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeqPair {
-    pub idr: i32,
-    pub idq: i32,
-    pub id: i32,
-    pub len1: i32, // Length of reference sequence
-    pub len2: i32, // Length of query sequence
-    pub h0: i32,   // Initial score
-    pub seqid: i32,
-    pub regid: i32,
+    /// Offset into reference sequence buffer
+    pub reference_offset: i32,
+    /// Offset into query sequence buffer
+    pub query_offset: i32,
+    /// Sequence pair identifier
+    pub pair_id: i32,
+    /// Length of reference sequence
+    pub reference_length: i32,
+    /// Length of query sequence
+    pub query_length: i32,
+    /// Initial alignment score (from previous alignment)
+    pub initial_score: i32,
+    /// Sequence identifier (index into sequence array)
+    pub sequence_id: i32,
+    /// Region identifier (index into alignment region array)
+    pub region_id: i32,
+    /// Best alignment score
     pub score: i32,
-    pub tle: i32,  // Target end position
-    pub gtle: i32, // Global target end position
-    pub qle: i32,  // Query end position
-    pub gscore: i32,
-    pub max_off: i32,
+    /// Target (reference) end position
+    pub target_end_pos: i32,
+    /// Global target (reference) end position
+    pub global_target_end_pos: i32,
+    /// Query end position
+    pub query_end_pos: i32,
+    /// Global alignment score
+    pub global_score: i32,
+    /// Maximum offset in alignment
+    pub max_offset: i32,
 }
 
 // Rust equivalent of eh_t
@@ -101,11 +115,11 @@ impl BandedPairWiseSW {
             // This is a biologically invalid case, but we handle it gracefully
             let out_score = OutScore {
                 score: 0,
-                tle: 0,
-                qle: 0,
-                gtle: 0,
-                gscore: 0,
-                max_off: 0,
+                target_end_pos: 0,
+                query_end_pos: 0,
+                gtarget_end_pos: 0,
+                global_score: 0,
+                max_offset: 0,
             };
             return (out_score, Vec::new());
         }
@@ -119,11 +133,11 @@ impl BandedPairWiseSW {
         if qlen == 0 || tlen == 0 {
             let out_score = OutScore {
                 score: 0,
-                tle: 0,
-                qle: 0,
-                gtle: 0,
-                gscore: 0,
-                max_off: 0,
+                target_end_pos: 0,
+                query_end_pos: 0,
+                gtarget_end_pos: 0,
+                global_score: 0,
+                max_offset: 0,
             };
             return (out_score, Vec::new());
         }
@@ -448,11 +462,11 @@ impl BandedPairWiseSW {
 
         let out_score = OutScore {
             score: max_score,
-            tle: max_i + 1,
-            qle: max_j + 1,
-            gtle: current_gscore, // Corrected to current_gscore
-            gscore: current_gscore,
-            max_off: current_max_off,
+            target_end_pos: max_i + 1,
+            query_end_pos: max_j + 1,
+            gtarget_end_pos: current_gscore, // Corrected to current_gscore
+            global_score: current_gscore,
+            max_offset: current_max_off,
         };
 
         (out_score, final_cigar)
@@ -864,11 +878,11 @@ impl BandedPairWiseSW {
         for i in 0..batch_size {
             results.push(OutScore {
                 score: max_scores[i] as i32,
-                tle: max_i[i] as i32,
-                qle: max_j[i] as i32,
-                gtle: max_ie[i] as i32,
-                gscore: gscores[i] as i32,
-                max_off: 0,
+                target_end_pos: max_i[i] as i32,
+                query_end_pos: max_j[i] as i32,
+                gtarget_end_pos: max_ie[i] as i32,
+                global_score: gscores[i] as i32,
+                max_offset: 0,
             });
         }
 
@@ -933,11 +947,11 @@ impl BandedPairWiseSW {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutScore {
     pub score: i32,
-    pub tle: i32,
-    pub gtle: i32,
-    pub qle: i32,
-    pub gscore: i32,
-    pub max_off: i32,
+    pub target_end_pos: i32,
+    pub gtarget_end_pos: i32,
+    pub query_end_pos: i32,
+    pub global_score: i32,
+    pub max_offset: i32,
 }
 
 // Complete alignment result including CIGAR string
@@ -1095,8 +1109,8 @@ mod tests {
             out_score.score > 0,
             "Score should be positive for exact match"
         );
-        assert_eq!(out_score.qle, 4, "Query should align to end");
-        assert_eq!(out_score.tle, 4, "Target should align to end");
+        assert_eq!(out_score.query_end_pos, 4, "Query should align to end");
+        assert_eq!(out_score.target_end_pos, 4, "Target should align to end");
 
         // CIGAR should be 4M
         assert_eq!(cigar.len(), 1, "Should have one CIGAR operation");
@@ -1887,11 +1901,15 @@ mod tests {
             if idx == 0 {
                 println!(
                     "SSE result: score={}, qle={}, tle={}",
-                    sse_results[0].score, sse_results[0].qle, sse_results[0].tle
+                    sse_results[0].score,
+                    sse_results[0].query_end_pos,
+                    sse_results[0].target_end_pos
                 );
                 println!(
                     "AVX2 result: score={}, qle={}, tle={}",
-                    avx2_results[0].score, avx2_results[0].qle, avx2_results[0].tle
+                    avx2_results[0].score,
+                    avx2_results[0].query_end_pos,
+                    avx2_results[0].target_end_pos
                 );
                 println!("Scoring matrix check:");
                 println!("  A-A (mat[0]): {}", bsw.mat[0]);
@@ -1908,15 +1926,15 @@ mod tests {
             );
 
             assert_eq!(
-                sse_results[0].qle, avx2_results[0].qle,
+                sse_results[0].query_end_pos, avx2_results[0].query_end_pos,
                 "Test case {}: SSE query end {} != AVX2 query end {}",
-                idx, sse_results[0].qle, avx2_results[0].qle
+                idx, sse_results[0].query_end_pos, avx2_results[0].query_end_pos
             );
 
             assert_eq!(
-                sse_results[0].tle, avx2_results[0].tle,
+                sse_results[0].target_end_pos, avx2_results[0].target_end_pos,
                 "Test case {}: SSE target end {} != AVX2 target end {}",
-                idx, sse_results[0].tle, avx2_results[0].tle
+                idx, sse_results[0].target_end_pos, avx2_results[0].target_end_pos
             );
         }
 
@@ -1979,15 +1997,15 @@ mod tests {
             );
 
             assert_eq!(
-                sse_results[0].qle, avx512_results[0].qle,
+                sse_results[0].query_end_pos, avx512_results[0].query_end_pos,
                 "Test case {}: SSE query end {} != AVX-512 query end {}",
-                idx, sse_results[0].qle, avx512_results[0].qle
+                idx, sse_results[0].query_end_pos, avx512_results[0].query_end_pos
             );
 
             assert_eq!(
-                sse_results[0].tle, avx512_results[0].tle,
+                sse_results[0].target_end_pos, avx512_results[0].target_end_pos,
                 "Test case {}: SSE target end {} != AVX-512 target end {}",
-                idx, sse_results[0].tle, avx512_results[0].tle
+                idx, sse_results[0].target_end_pos, avx512_results[0].target_end_pos
             );
         }
 
@@ -2275,14 +2293,14 @@ mod tests {
         // Validate alignment endpoints (qle/tle are end positions, may be 0-indexed or 1-indexed)
         // Check that we aligned the full length
         assert!(
-            result.qle >= 11,
+            result.query_end_pos >= 11,
             "Query should align to near end, got qle={}",
-            result.qle
+            result.query_end_pos
         );
         assert!(
-            result.tle >= 11,
+            result.target_end_pos >= 11,
             "Target should align to near end, got tle={}",
-            result.tle
+            result.target_end_pos
         );
         assert_eq!(result.score, 12, "Score should be 12 (12 matches)");
 
@@ -2328,8 +2346,8 @@ mod tests {
 
         println!("CIGAR for soft-clip test: {:?}", cigar);
         println!(
-            "Score: {}, qle: {}, tle: {}",
-            result.score, result.qle, result.tle
+            "Score: {}, query_end_pos: {}, target_end_pos: {}",
+            result.score, result.query_end_pos, result.target_end_pos
         );
 
         // Check that we don't have pathological insertions
@@ -2434,8 +2452,8 @@ mod tests {
         );
         println!("CIGAR: {:?}", cigar);
         println!(
-            "Score: {}, qle: {}, tle: {}",
-            result.score, result.qle, result.tle
+            "Score: {}, query_end_pos: {}, target_end_pos: {}",
+            result.score, result.query_end_pos, result.target_end_pos
         );
 
         // Decode CIGAR for readability
@@ -2562,8 +2580,8 @@ mod tests {
         );
         println!("CIGAR: {:?}", cigar);
         println!(
-            "Score: {}, qle: {}, tle: {}",
-            result.score, result.qle, result.tle
+            "Score: {}, query_end_pos: {}, target_end_pos: {}",
+            result.score, result.query_end_pos, result.target_end_pos
         );
 
         let cigar_str: String = cigar

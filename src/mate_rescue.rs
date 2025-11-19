@@ -166,11 +166,11 @@ pub fn mem_matesw(
         }
 
         // Calculate alignment position on reference
-        let tb = (out_score.tle - ref_consumed).max(0);
+        let tb = (out_score.target_end_pos - ref_consumed).max(0);
 
         // Adjust for reverse complement and reference position
         let pos = if is_rev {
-            ((l_pac << 1) - (adj_rb + out_score.tle as i64)).max(0) as u64
+            ((l_pac << 1) - (adj_rb + out_score.target_end_pos as i64)).max(0) as u64
         } else {
             (adj_rb + tb as i64).max(0) as u64
         };
@@ -209,8 +209,8 @@ pub fn mem_matesw(
             qual: mate_qual.to_string(),
             tags: Vec::new(),
             // Internal fields for alignment selection
-            query_start: out_score.qle - out_score.qle, // Full query alignment
-            query_end: out_score.qle,
+            query_start: out_score.query_end_pos - out_score.query_end_pos, // Full query alignment
+            query_end: out_score.query_end_pos,
             seed_coverage: l_ms, // Mate sequence length as coverage
             hash: 0,             // Will be set later if needed
         };

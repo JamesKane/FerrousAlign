@@ -497,11 +497,11 @@ pub unsafe fn simd_banded_swa_batch32(
     for lane in 0..batch_size {
         results.push(OutScore {
             score: max_scores[lane] as i32,
-            tle: max_i[lane] as i32,
-            qle: max_j[lane] as i32,
-            gtle: max_i[lane] as i32,
-            gscore: max_scores[lane] as i32,
-            max_off: 0,
+            target_end_pos: max_i[lane] as i32,
+            query_end_pos: max_j[lane] as i32,
+            gtarget_end_pos: max_i[lane] as i32,
+            global_score: max_scores[lane] as i32,
+            max_offset: 0,
         });
     }
 
