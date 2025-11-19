@@ -47,6 +47,7 @@ This directory contains test files for validating alignment correctness against 
 1. **Exact matches** - Both produce identical alignments for unique sequences
 2. **Deletion detection** - Both detect deletions (though may differ on position due to homopolymer sliding)
 3. **Primary-only output** - Fixed in Session 36 to match bwa-mem2 default behavior
+4. **Score threshold filtering** - Fixed in Session 37: Reads with score < `-T` threshold now correctly output as unmapped (FLAG=4)
 
 ### ❌ Known Issues
 1. **Insertion detection failure** - We generate soft clips (`48S54M`) instead of insertion operators (`44M2I56M`)
@@ -54,9 +55,12 @@ This directory contains test files for validating alignment correctness against 
    - Impact: Insertion variants won't be detected correctly
    - Priority: HIGH - breaks variant calling pipelines
 
-2. **Repetitive sequence handling** - bwa-mem2 marks highly repetitive sequences as unmapped, we attempt to map them
-   - Impact: Different behavior on low-complexity sequences
-   - Priority: LOW - edge case
+2. **Repetitive sequence handling** - ✅ **FIXED** (Session 37 - Nov 2025)
+   - Issue: Reads with alignment score below `-T` threshold were output as mapped instead of unmapped
+   - Root cause: Missing score threshold check before outputting primary alignment
+   - Fix: Added logic in `src/single_end.rs` to check if best alignment score < `opt.t`, and output unmapped record if so (matching C++ bwa-mem2: bwamem.cpp:1561-1565)
+   - Test: `./target/release/ferrous-align mem -T 100 ref.fa low_score.fq` now correctly outputs unmapped reads
+   - Note: bwa-mem2 may also filter reads during SMEM generation (seeds with too many occurrences > max_occ), which is a separate filtering mechanism
 
 ## Usage
 
@@ -69,6 +73,10 @@ bwa-mem2 mem test_data/validation/unique_sequence_ref.fa test_data/validation/ex
 
 # Test insertion (reveals bug)
 bwa-mem2 mem test_data/validation/unique_sequence_ref.fa test_data/validation/insertion_2bp.fq
+
+# Test score threshold filtering (Session 37 fix)
+./target/release/ferrous-align mem -T 100 test_data/validation/unique_sequence_ref.fa test_data/validation/low_score_repetitive.fq
+# Should output unmapped read (FLAG=4) because alignment score < 100
 ```
 
 ## Future Work

@@ -133,6 +133,61 @@ pub fn process_single_end(
                     .map(|(idx, _)| idx)
                     .unwrap_or(0);
 
+                // CRITICAL FIX: Check if best alignment score is below threshold (matching bwa-mem2 behavior)
+                // If so, output an unmapped record instead of the low-scoring alignment
+                let best_alignment = &alignment_vec[best_idx];
+                let best_is_unmapped = best_alignment.flag & align::sam_flags::UNMAPPED != 0;
+                let all_below_threshold = !best_is_unmapped && best_alignment.score < opt.t;
+
+                if all_below_threshold {
+                    // All alignments are below score threshold - output unmapped record
+                    // (matching C++ bwa-mem2: bwamem.cpp:1561-1565)
+                    log::debug!(
+                        "{}: Best alignment score {} below threshold {}, outputting unmapped record",
+                        best_alignment.query_name,
+                        best_alignment.score,
+                        opt.t
+                    );
+
+                    // Create unmapped alignment for single-end read
+                    let unmapped = align::Alignment {
+                        query_name: best_alignment.query_name.clone(),
+                        flag: align::sam_flags::UNMAPPED, // 0x4
+                        ref_name: "*".to_string(),
+                        ref_id: 0,
+                        pos: 0,
+                        mapq: 0,
+                        score: 0,
+                        cigar: Vec::new(), // Empty CIGAR = "*" in SAM
+                        rnext: "*".to_string(),
+                        pnext: 0,
+                        tlen: 0,
+                        seq: best_alignment.seq.clone(),
+                        qual: best_alignment.qual.clone(),
+                        tags: vec![
+                            ("AS".to_string(), "i:0".to_string()),
+                            ("NM".to_string(), "i:0".to_string()),
+                        ],
+                        query_start: 0,
+                        query_end: 0,
+                        seed_coverage: 0,
+                        hash: 0,
+                    };
+
+                    // Add RG tag if read group is specified
+                    let mut output_alignment = unmapped;
+                    if let Some(ref rg) = rg_id {
+                        output_alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                    }
+
+                    let sam_record = output_alignment.to_sam_string();
+                    if let Err(e) = writeln!(writer, "{}", sam_record) {
+                        log::error!("Error writing SAM record: {}", e);
+                    }
+
+                    continue; // Skip to next read
+                }
+
                 for (idx, mut alignment) in alignment_vec.into_iter().enumerate() {
                     let is_unmapped = alignment.flag & align::sam_flags::UNMAPPED != 0;
                     let is_primary = idx == best_idx;
