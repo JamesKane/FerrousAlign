@@ -3,6 +3,7 @@
 use crate::bntseq::BntSeq;
 use crate::bwt::Bwt;
 use crate::fastq_reader::FastqReader;
+use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::utils::hash_64;
 use crossbeam_channel::{Receiver, Sender, bounded};
@@ -14,7 +15,6 @@ use std::sync::Arc;
 use std::thread;
 
 use crate::align;
-use crate::fm_index::{CP_SHIFT, CpOcc};
 
 // Batch processing constants (matching C++ bwa-mem2)
 // Chunk size in base pairs (from C++ bwamem.cpp mem_opt_init: o->chunk_size = 10000000)
@@ -56,169 +56,6 @@ pub struct InsertSizeStats {
     pub low: i32,     // Lower bound for proper pairs
     pub high: i32,    // Upper bound for proper pairs
     pub failed: bool, // Whether this orientation has enough data
-}
-
-pub struct BwaIndex {
-    pub bwt: Bwt,
-    pub bns: BntSeq,
-    pub cp_occ: Vec<CpOcc>,
-    pub sentinel_index: i64,
-    pub min_seed_len: i32, // Kept for backwards compatibility, but will use MemOpt
-}
-
-impl BwaIndex {
-    pub fn bwa_idx_load(prefix: &Path) -> io::Result<Self> {
-        let mut bwt = Bwt::new();
-        let bns = BntSeq::bns_restore(prefix)?;
-
-        let cp_file_name = PathBuf::from(prefix.to_string_lossy().to_string() + ".bwt.2bit.64");
-        let mut cp_file = BufReader::new(File::open(&cp_file_name)?);
-
-        let mut buf_i64 = [0u8; 8];
-        let mut buf_u64 = [0u8; 8];
-        let mut buf_u8 = [0u8; 1];
-        let mut buf_u32 = [0u8; 4];
-
-        // 1. Read seq_len
-        cp_file.read_exact(&mut buf_i64)?;
-        bwt.seq_len = i64::from_le_bytes(buf_i64) as u64;
-
-        // 2. Read count array (l2)
-        for i in 0..5 {
-            cp_file.read_exact(&mut buf_i64)?;
-            bwt.l2[i] = i64::from_le_bytes(buf_i64) as u64;
-        }
-
-        // CRITICAL: Match C++ bwa-mem2 behavior - add 1 to all count values
-        // See FMI_search.cpp:435 - this is required for correct SMEM generation
-        for i in 0..5 {
-            bwt.l2[i] += 1;
-        }
-
-        // 3. Read cp_occ array
-        let cp_occ_size = (bwt.seq_len >> CP_SHIFT) + 1;
-        let mut cp_occ: Vec<CpOcc> = Vec::with_capacity(cp_occ_size as usize);
-        for _ in 0..cp_occ_size {
-            let mut cp_count = [0i64; 4];
-            for i in 0..4 {
-                cp_file.read_exact(&mut buf_i64)?;
-                cp_count[i] = i64::from_le_bytes(buf_i64);
-            }
-            let mut one_hot_bwt_str = [0u64; 4];
-            for i in 0..4 {
-                cp_file.read_exact(&mut buf_u64)?;
-                one_hot_bwt_str[i] = u64::from_le_bytes(buf_u64);
-            }
-            cp_occ.push(CpOcc {
-                cp_count,
-                one_hot_bwt_str,
-            });
-        }
-
-        // In C++, SA_COMPX is 3 (defined in macro.h), so sa_intv is 8
-        let sa_compx = 3;
-        let sa_intv = 1 << sa_compx; // sa_intv = 8
-        // C++ uses: ((ref_seq_len >> SA_COMPX) + 1)
-        // which equals: (ref_seq_len / 8) + 1
-        let sa_len = (bwt.seq_len >> sa_compx) + 1;
-
-        // 4. Read sa_ms_byte array
-        bwt.sa_ms_byte.reserve_exact(sa_len as usize);
-        for _ in 0..sa_len {
-            cp_file.read_exact(&mut buf_u8)?;
-            let val = u8::from_le_bytes(buf_u8) as i8;
-            bwt.sa_ms_byte.push(val);
-        }
-
-        // 5. Read sa_ls_word array
-        bwt.sa_ls_word.reserve_exact(sa_len as usize);
-        for _ in 0..sa_len {
-            cp_file.read_exact(&mut buf_u32)?;
-            let val = u32::from_le_bytes(buf_u32);
-            bwt.sa_ls_word.push(val);
-        }
-
-        // 6. Read sentinel_index
-        cp_file.read_exact(&mut buf_i64)?;
-        let sentinel_index = i64::from_le_bytes(buf_i64);
-        bwt.primary = sentinel_index as u64;
-
-        // Set other bwt fields that were not in the file
-        bwt.sa_intv = 1 << sa_compx;
-        bwt.n_sa = sa_len;
-
-        // Debug: verify SA values look reasonable
-        if bwt.sa_ms_byte.len() > 10 {
-            log::debug!(
-                "Loaded SA samples: n_sa={}, sa_intv={}",
-                bwt.n_sa,
-                bwt.sa_intv
-            );
-            log::debug!("First 5 SA values:");
-            for i in 0..5.min(bwt.sa_ms_byte.len()) {
-                let sa_val = ((bwt.sa_ms_byte[i] as i64) << 32) | (bwt.sa_ls_word[i] as i64);
-                log::debug!("  SA[{}] = {}", i * bwt.sa_intv as usize, sa_val);
-            }
-        }
-
-        Ok(BwaIndex {
-            bwt,
-            bns,
-            cp_occ,
-            sentinel_index,
-            min_seed_len: 1, // Initialize with default value
-        })
-    }
-
-    pub fn dump(&self, prefix: &Path) -> io::Result<()> {
-        let bwt_file_path = prefix.with_extension("bwt.2bit.64");
-        let mut file = File::create(&bwt_file_path)?;
-
-        // Match C++ FMI_search::build_fm_index format
-        // 1. ref_seq_len (i64)
-        file.write_all(&(self.bwt.seq_len as i64).to_le_bytes())?;
-
-        // 2. count array (l2) (5 * i64)
-        for i in 0..5 {
-            file.write_all(&(self.bwt.l2[i] as i64).to_le_bytes())?;
-        }
-
-        // 3. cp_occ array
-        // eprintln!("Dumping cp_occ: cp_occ.len()={}", self.cp_occ.len());
-        for (_idx, cp_occ_entry) in self.cp_occ.iter().enumerate() {
-            // eprintln!("  cp_occ[{}]: cp_count=[{}, {}, {}, {}]", idx,
-            //          cp_occ_entry.cp_count[0], cp_occ_entry.cp_count[1],
-            //          cp_occ_entry.cp_count[2], cp_occ_entry.cp_count[3]);
-            // eprintln!("    one_hot_bwt_str=[{:#018x}, {:#018x}, {:#018x}, {:#018x}]",
-            //          cp_occ_entry.one_hot_bwt_str[0], cp_occ_entry.one_hot_bwt_str[1],
-            //          cp_occ_entry.one_hot_bwt_str[2], cp_occ_entry.one_hot_bwt_str[3]);
-            for i in 0..4 {
-                file.write_all(&cp_occ_entry.cp_count[i].to_le_bytes())?;
-            }
-            for i in 0..4 {
-                file.write_all(&cp_occ_entry.one_hot_bwt_str[i].to_le_bytes())?;
-            }
-        }
-
-        // 4. sa_ms_byte array
-        // eprintln!("Dumping SA: n_sa={}, sa_ms_byte.len()={}, sa_ls_word.len()={}",
-        //           self.bwt.n_sa, self.bwt.sa_ms_byte.len(), self.bwt.sa_ls_word.len());
-        for (_i, val) in self.bwt.sa_ms_byte.iter().enumerate() {
-            // eprintln!("  Write sa_ms_byte[{}] = {}", i, val);
-            file.write_all(&val.to_le_bytes())?;
-        }
-
-        // 5. sa_ls_word array
-        for (_i, val) in self.bwt.sa_ls_word.iter().enumerate() {
-            // eprintln!("  Write sa_ls_word[{}] = {}", i, val);
-            file.write_all(&val.to_le_bytes())?;
-        }
-
-        // 6. sentinel_index (i64)
-        file.write_all(&self.sentinel_index.to_le_bytes())?;
-
-        Ok(())
-    }
 }
 
 pub fn main_mem(

@@ -227,7 +227,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     let cp_occ = bwt.calculate_cp_occ(sentinel_index as u64);
 
     // Create BwaIndex and dump it
-    let bwa_index_to_dump = crate::mem::BwaIndex {
+    let bwa_index_to_dump = crate::index::BwaIndex {
         bwt,
         bns,
         cp_occ,

@@ -3,7 +3,7 @@
 // Import BwaIndex and MemOpt
 use crate::banded_swa::BandedPairWiseSW;
 use crate::fm_index::{CP_SHIFT, CpOcc, backward_ext, forward_ext, get_occ, get_occ_all_bases};
-use crate::mem::BwaIndex;
+use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::utils::hash_64;
 
@@ -2734,7 +2734,7 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 mod tests {
     use crate::align::SMEM;
     use crate::fm_index::{backward_ext, popcount64};
-    use crate::mem::BwaIndex;
+    use crate::index::BwaIndex;
     use std::path::Path;
 
     #[test]
