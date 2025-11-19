@@ -87,7 +87,11 @@ fn test_alignment_set_paired_flags_mate_unmapped() {
 
     assert_ne!(flag & PAIRED, 0, "Should be marked as paired");
     assert_ne!(flag & MATE_UNMAPPED, 0, "Mate should be unmapped");
-    assert_eq!(flag & PROPER_PAIR, 0, "Cannot be proper pair if mate unmapped");
+    assert_eq!(
+        flag & PROPER_PAIR,
+        0,
+        "Cannot be proper pair if mate unmapped"
+    );
 }
 
 #[test]
@@ -115,7 +119,10 @@ fn test_alignment_calculate_tlen_read1_rightmost() {
     // TLEN = -((this_pos - mate_pos) + this_ref_len)
     // For 100bp alignment: TLEN = -((1200 - 1000) + 100) = -300
     let expected_tlen = -(((aln.pos as i64 - mate_pos as i64) + this_ref_len as i64) as i32);
-    assert!(expected_tlen < 0, "TLEN should be negative for rightmost read");
+    assert!(
+        expected_tlen < 0,
+        "TLEN should be negative for rightmost read"
+    );
     assert_eq!(expected_tlen, -300);
 }
 
@@ -149,7 +156,10 @@ fn test_alignment_calculate_tlen_opposite_signs() {
 
     assert!(tlen1 > 0, "Read1 TLEN should be positive");
     assert!(tlen2 < 0, "Read2 TLEN should be negative");
-    assert_eq!(tlen1, -tlen2, "TLENs should have equal magnitude but opposite signs");
+    assert_eq!(
+        tlen1, -tlen2,
+        "TLENs should have equal magnitude but opposite signs"
+    );
 }
 
 #[test]
@@ -167,7 +177,7 @@ fn test_alignment_create_unmapped_first_in_pair() {
         query_name.clone(),
         seq,
         qual.clone(),
-        true,  // is_first_in_pair
+        true, // is_first_in_pair
         mate_ref,
         mate_pos,
         mate_is_reverse,
@@ -201,7 +211,7 @@ fn test_alignment_create_unmapped_second_in_pair() {
         query_name.clone(),
         seq,
         qual.clone(),
-        false,  // is_first_in_pair
+        false, // is_first_in_pair
         mate_ref,
         mate_pos,
         mate_is_reverse,
@@ -212,7 +222,11 @@ fn test_alignment_create_unmapped_second_in_pair() {
     assert_ne!(aln.flag & UNMAPPED, 0, "Should be marked as unmapped");
     assert_ne!(aln.flag & SECOND_IN_PAIR, 0, "Should be second in pair");
     assert_eq!(aln.flag & FIRST_IN_PAIR, 0, "Should NOT be first in pair");
-    assert_ne!(aln.flag & MATE_REVERSE, 0, "Mate should be marked as reverse");
+    assert_ne!(
+        aln.flag & MATE_REVERSE,
+        0,
+        "Mate should be marked as reverse"
+    );
 }
 
 #[test]
@@ -221,7 +235,7 @@ fn test_alignment_create_unmapped_both_unmapped() {
     let query_name = "read1".to_string();
     let seq = b"NNNNNNNNNNNN";
     let qual = "############".to_string();
-    let mate_ref = "*";  // Unmapped mate
+    let mate_ref = "*"; // Unmapped mate
     let mate_pos = 0u64;
     let mate_is_reverse = false;
 
@@ -236,9 +250,15 @@ fn test_alignment_create_unmapped_both_unmapped() {
     );
 
     // Verify fields for both unmapped
-    assert_eq!(aln.ref_name, "*", "Should have '*' for reference when mate unmapped");
+    assert_eq!(
+        aln.ref_name, "*",
+        "Should have '*' for reference when mate unmapped"
+    );
     assert_eq!(aln.rnext, "*", "Should have '*' for mate reference");
-    assert_eq!(aln.pnext, 0, "Should have 0 for mate position when unmapped");
+    assert_eq!(
+        aln.pnext, 0,
+        "Should have 0 for mate position when unmapped"
+    );
 }
 
 // ===== Helper Functions =====
@@ -253,10 +273,7 @@ fn create_test_alignment() -> TestAlignment {
 }
 
 fn create_test_alignment_at_pos(pos: u64) -> TestAlignment {
-    TestAlignment {
-        pos,
-        seq_len: 100,
-    }
+    TestAlignment { pos, seq_len: 100 }
 }
 
 // Simplified test struct to avoid private field issues

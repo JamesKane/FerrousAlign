@@ -8,6 +8,7 @@ pub mod bntseq;
 pub mod bwa_index;
 pub mod bwt;
 pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
+pub mod fm_index; // FM-Index operations (BWT search, occurrence counting)
 pub mod kseq; // Used for FASTA reference reading during index building
 pub mod mem;
 pub mod mem_opt;

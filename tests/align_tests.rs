@@ -92,7 +92,10 @@ fn test_encode_sequence_bulk() {
     let bulk = encode_sequence(seq);
 
     // Should produce identical results
-    assert_eq!(individual, bulk, "Bulk encoding should match individual encoding");
+    assert_eq!(
+        individual, bulk,
+        "Bulk encoding should match individual encoding"
+    );
     assert_eq!(bulk, vec![0, 1, 2, 3, 4, 0, 1, 2, 3]);
 }
 
@@ -123,7 +126,7 @@ fn test_reverse_complement_sequence_bulk() {
 
     // Test sequence "ACGT" -> reverse complement "ACGT" (palindrome)
     let seq = b"ACGT";
-    let encoded = encode_sequence(seq);  // [0, 1, 2, 3]
+    let encoded = encode_sequence(seq); // [0, 1, 2, 3]
     let rc = reverse_complement_sequence(&encoded);
 
     // ACGT reverse complement:

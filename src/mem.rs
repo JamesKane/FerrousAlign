@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::thread;
 
 use crate::align;
-use crate::align::{CP_SHIFT, CpOcc};
+use crate::fm_index::{CP_SHIFT, CpOcc};
 
 // Batch processing constants (matching C++ bwa-mem2)
 // Chunk size in base pairs (from C++ bwamem.cpp mem_opt_init: o->chunk_size = 10000000)
