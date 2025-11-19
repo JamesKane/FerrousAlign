@@ -303,13 +303,22 @@ AGCT
         let segment3 = bns.get_reference_segment(16564, 5)?;
         assert_eq!(segment3.len(), 5, "Should get last 5 bases");
 
-        // Test 4: Boundary test - requesting beyond l_pac should return empty
-        let result = bns.get_reference_segment(16569, 1);
-        assert!(result.is_ok());
+        // Test 4: Boundary test - position l_pac is valid (start of RC strand)
+        let result_at_lpac = bns.get_reference_segment(16569, 1);
+        assert!(result_at_lpac.is_ok());
         assert_eq!(
-            result.unwrap(),
+            result_at_lpac.unwrap().len(),
+            1,
+            "Position l_pac (start of RC strand) should be valid"
+        );
+
+        // Test 5: Truly beyond valid range (2*l_pac) should return empty
+        let result_beyond = bns.get_reference_segment(33138, 1);
+        assert!(result_beyond.is_ok());
+        assert_eq!(
+            result_beyond.unwrap(),
             Vec::<u8>::new(),
-            "Beyond l_pac should return empty"
+            "Position 2*l_pac (beyond valid range) should return empty"
         );
 
         cleanup_test_files(&test_dir);

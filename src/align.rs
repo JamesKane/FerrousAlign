@@ -1594,14 +1594,16 @@ pub(crate) fn execute_scalar_alignments(
                     ext_result.query_aligned,
                 )
             } else {
-                // Use standard SW for backward compatibility
+                // Use standard SW for backward compatibility (legacy tests)
+                // CRITICAL: Use h0=seed_len, not 0 (matching production code)
+                let h0 = job.seed_len;
                 let (score_out, cigar, ref_aligned, query_aligned) = sw_params.scalar_banded_swa(
                     qlen,
                     &job.query,
                     tlen,
                     &job.target,
                     job.band_width,
-                    0, // h0
+                    h0,
                 );
                 (score_out.score, cigar, ref_aligned, query_aligned)
             };
@@ -3972,7 +3974,7 @@ mod tests {
                 band_width: 10,
                 query_offset: 0, // Test: align from start
                 direction: None, // Legacy test mode
-                seed_len: 10, // Dummy value for test
+                seed_len: 4, // Actual sequence length (4bp queries)
             },
             super::AlignmentJob {
                 seed_idx: 1,
@@ -3981,7 +3983,7 @@ mod tests {
                 band_width: 10,
                 query_offset: 0, // Test: align from start
                 direction: None, // Legacy test mode
-                seed_len: 10, // Dummy value for test
+                seed_len: 4, // Actual sequence length (4bp queries)
             },
         ];
 

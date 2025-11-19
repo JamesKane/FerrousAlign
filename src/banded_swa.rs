@@ -1776,7 +1776,7 @@ mod tests {
         // Use lenient scoring: match=1, mismatch=-1 (instead of -4)
         // This allows alignment despite high mismatch rate
         let mat = bwa_fill_scmat(1, 1, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 200, mat, 1, 1); // Increased zdrop to 200
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 200, 5, 5, mat, 1, -1); // pen_clip5=5, pen_clip3=5
 
         // Target: 60bp (ACGT repeated)
         let pattern = vec![0u8, 1, 2, 3];
@@ -1824,7 +1824,7 @@ mod tests {
     fn test_simd_batch16_simple_alignments() {
         // Test batched SIMD alignment against scalar version
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, -4); // pen_clip5=5, pen_clip3=5, mismatch=-4
 
         // Create 4 different alignment scenarios to test in batch
         // Test 1: Perfect match
