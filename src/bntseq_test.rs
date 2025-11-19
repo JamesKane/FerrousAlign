@@ -2,10 +2,9 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::bntseq::{BntAmb1, BntAnn1, BntSeq, NST_NT4_TABLE};
+    use crate::bntseq::BntSeq;
     use std::fs;
-    use std::io::{self, BufRead, BufReader, Cursor, Read};
+    use std::io::{self, BufReader, Cursor, Read};
     use std::path::{Path, PathBuf};
 
     const TEST_PREFIX: &str = "test_bntseq";

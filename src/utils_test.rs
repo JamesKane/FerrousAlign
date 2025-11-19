@@ -2,12 +2,13 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::utils::*; // Import all from utils
-    use flate2::Compression;
+    use crate::utils::*;
     use flate2::write::GzEncoder;
+    // Import all from utils
+    use flate2::Compression;
     use std::fs;
-    use std::io::{self, Cursor, Write}; // Add Write trait
+    use std::io::{self, Write};
+    // Add Write trait
     use std::path::PathBuf;
 
     // Helper for creating temporary files

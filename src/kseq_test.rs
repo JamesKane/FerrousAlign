@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::kseq::{KSEQ_BUF_SIZE, KSeq, KStream};
     use std::io::{self, Cursor};
 

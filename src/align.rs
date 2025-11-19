@@ -2745,7 +2745,7 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     // The sentinel represents the end-of-string marker, which wraps to position 0
     // seq_len = (l_pac << 1) + 1 (forward + RC + sentinel)
     // So sentinel position is seq_len - 1 = (l_pac << 1)
-    let sentinel_pos = (bwa_idx.bns.l_pac << 1);
+    let sentinel_pos = bwa_idx.bns.l_pac << 1;
     let adjusted_sa_val = if sa_val >= sentinel_pos {
         // SA points to or past sentinel - wrap to beginning (position 0)
         log::debug!(
@@ -2777,14 +2777,9 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::align::{
-        CP_SHIFT, CpOcc, SMEM, Seed, backward_ext, base_to_code, chain_seeds, popcount64,
-        reverse_complement_code,
-    };
-    use crate::bntseq::{BntAnn1, BntSeq};
-    use crate::bwt::Bwt;
+    use crate::align::{SMEM, backward_ext, popcount64};
     use crate::mem::BwaIndex;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn test_popcount64_neon() {

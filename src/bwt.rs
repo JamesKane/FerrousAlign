@@ -1,6 +1,7 @@
 use crate::align::{CP_SHIFT, CpOcc};
 use std::io::{self, Write};
-use std::path::Path; // Import CpOcc and CP_SHIFT
+use std::path::Path;
+// Import CpOcc and CP_SHIFT
 
 pub type BwtInt = u64;
 

@@ -510,8 +510,6 @@ pub unsafe fn simd_banded_swa_batch64(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_simd_banded_swa_batch64_skeleton() {
         // Basic test to ensure the function compiles and runs

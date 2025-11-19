@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::bwt::Bwt;
     use std::fs;
     use std::io::{self, Read};
