@@ -38,3 +38,6 @@ HG03576.final.cram*
 /test_data/*.sh
 
 perf.data*
+
+# C++ reference implementation (keep locally but don't commit)
+bwa-mem2 (Copy)/
