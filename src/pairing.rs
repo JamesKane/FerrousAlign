@@ -32,9 +32,8 @@ pub fn mem_pair(
     stats: &[InsertSizeStats; 4],
     alns1: &[align::Alignment],
     alns2: &[align::Alignment],
-    l_pac: i64,
     match_score: i32, // opt->a (match score for log-likelihood calculation)
-    pair_id: u64,     // Read pair ID for hash
+    pair_id: u64,
 ) -> Option<(usize, usize, i32, i32)> {
     if alns1.is_empty() || alns2.is_empty() {
         return None;

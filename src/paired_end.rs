@@ -357,7 +357,6 @@ pub fn process_paired_end(
         &stats,
         writer,
         &opt,
-        bwa_idx.bns.packed_sequence_length as i64,
         0,
     )
     .unwrap_or_else(|e| {
@@ -478,7 +477,6 @@ pub fn process_paired_end(
             &stats,
             writer,
             &opt,
-            bwa_idx.bns.packed_sequence_length as i64,
             batch_num * reads_per_batch as u64,
         )
         .unwrap_or_else(|e| {
@@ -585,7 +583,6 @@ fn output_batch_paired(
     stats: &[InsertSizeStats; 4],
     writer: &mut Box<dyn Write>,
     opt: &MemOpt,
-    l_pac: i64,
     starting_pair_id: u64,
 ) -> std::io::Result<usize> {
     let mut records_written = 0;
@@ -675,7 +672,7 @@ fn output_batch_paired(
 
         // Use mem_pair to score paired alignments
         let pair_result = if !alignments1.is_empty() && !alignments2.is_empty() {
-            let result = mem_pair(stats, &alignments1, &alignments2, l_pac, 2, pair_id);
+            let result = mem_pair(stats, &alignments1, &alignments2, 2, pair_id);
 
             // DEBUG: Log mem_pair results
             if pair_id < 10 {
