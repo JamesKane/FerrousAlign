@@ -507,6 +507,25 @@ impl Alignment {
     }
 }
 
+// ============================================================================
+// ALIGNMENT SCORING AND QUALITY ASSESSMENT
+// ============================================================================
+//
+// This section contains functions for:
+// - Overlap detection between alignments
+// - Chain scoring and filtering
+// - MAPQ (mapping quality) calculation
+// - Secondary alignment marking
+// - Divergence estimation
+//
+// These functions implement the core scoring logic from C++ bwa-mem2
+// (bwamem.cpp, bwamem_pair.cpp)
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Overlap Detection
+// ----------------------------------------------------------------------------
+
 /// Check if two alignments overlap significantly on the query sequence
 /// Returns true if overlap >= mask_level * min_alignment_length
 /// Implements C++ mem_mark_primary_se_core logic (bwamem.cpp:1392-1418)
@@ -531,6 +550,10 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
     // Overlap is significant if >= mask_level * min_length
     overlap >= (min_len as f32 * mask_level) as i32
 }
+
+// ----------------------------------------------------------------------------
+// MAPQ (Mapping Quality) Calculation
+// ----------------------------------------------------------------------------
 
 /// Calculate MAPQ (mapping quality) for an alignment
 /// Implements C++ mem_approx_mapq_se (bwamem.cpp:1470-1494)
@@ -599,6 +622,10 @@ fn calculate_mapq(
 
     mapq as u8
 }
+
+// ----------------------------------------------------------------------------
+// Chain Scoring and Filtering
+// ----------------------------------------------------------------------------
 
 /// Calculate chain weight based on seed coverage
 /// Implements C++ mem_chain_weight (bwamem.cpp:429-448)
@@ -766,6 +793,10 @@ fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<C
     kept_chains
 }
 
+// ----------------------------------------------------------------------------
+// Secondary Alignment Marking and XA Tags
+// ----------------------------------------------------------------------------
+
 /// Generate XA tag for alternative alignments
 /// Implements C++ mem_gen_alt (bwamem_extra.cpp:130-183)
 ///
@@ -932,6 +963,18 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
         }
     }
 }
+
+// ============================================================================
+// SMITH-WATERMAN ALIGNMENT EXECUTION
+// ============================================================================
+//
+// This section contains structures and functions for executing Smith-Waterman
+// alignment with SIMD optimization and adaptive batch sizing
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Alignment Job Structure and Divergence Estimation
+// ----------------------------------------------------------------------------
 
 // Structure to hold alignment job for batching
 #[derive(Clone)]
@@ -1345,6 +1388,16 @@ pub(crate) fn execute_scalar_alignments(
         })
         .collect()
 }
+
+// ============================================================================
+// SEED GENERATION (SMEM EXTRACTION)
+// ============================================================================
+//
+// This section contains the main seed generation pipeline:
+// - SMEM (Supermaximal Exact Match) extraction using FM-Index
+// - Bidirectional search (forward and reverse complement)
+// - Seed extension and filtering
+// ============================================================================
 
 pub fn generate_seeds(
     bwa_idx: &BwaIndex,
@@ -2453,6 +2506,16 @@ fn generate_seeds_with_mode(
     alignments
 }
 
+// ============================================================================
+// SEED CHAINING
+// ============================================================================
+//
+// This section contains the seed chaining algorithm:
+// - Dynamic programming-based chaining
+// - Chain scoring and filtering
+// - Extension of chains into alignments
+// ============================================================================
+
 pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
     if seeds.is_empty() {
         return Vec::new();
@@ -2595,7 +2658,14 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
 
     chains
 }
-// bwa-mem2-rust/src/align_test.rs
+
+// ============================================================================
+// BWT AND SUFFIX ARRAY HELPER FUNCTIONS
+// ============================================================================
+//
+// This section contains low-level BWT and suffix array access functions
+// used during FM-Index search and seed extension
+// ============================================================================
 
 // Function to get BWT base from cp_occ format (for loaded indices)
 // Returns 0-3 for bases A/C/G/T, or 4 for sentinel
