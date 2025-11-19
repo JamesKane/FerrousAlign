@@ -12,12 +12,16 @@ use crate::index::BwaIndex;
 const CP_MASK: u64 = 63;
 pub const CP_SHIFT: u64 = 6; // Public for external use
 
-// CP_OCC struct from FMI_search.h
+/// Checkpoint occurrence structure for FM-Index
+/// Corresponds to C++ CP_OCC (FMI_search.h:54-58)
+/// Stores occurrence counts and encoded BWT at 64-base checkpoints
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CpOcc {
-    pub cp_count: [i64; 4],
-    pub one_hot_bwt_str: [u64; 4],
+    /// Occurrence counts for each base (A,C,G,T) at this checkpoint
+    pub checkpoint_counts: [i64; 4],
+    /// One-hot encoded BWT bits for fast popcount-based occurrence queries
+    pub bwt_encoding_bits: [u64; 4],
 }
 
 // Global one_hot_mask_array (initialized once)
@@ -88,8 +92,8 @@ pub fn get_occ(bwa_idx: &BwaIndex, k: i64, c: u8) -> i64 {
     let occ_id_k = k >> cp_shift;
     let y_k = k & cp_mask;
 
-    let occ_k = bwa_idx.cp_occ[occ_id_k as usize].cp_count[c as usize];
-    let one_hot_bwt_str_c_k = bwa_idx.cp_occ[occ_id_k as usize].one_hot_bwt_str[c as usize];
+    let occ_k = bwa_idx.cp_occ[occ_id_k as usize].checkpoint_counts[c as usize];
+    let one_hot_bwt_str_c_k = bwa_idx.cp_occ[occ_id_k as usize].bwt_encoding_bits[c as usize];
 
     let match_mask_k = one_hot_bwt_str_c_k & ONE_HOT_MASK_ARRAY[y_k as usize];
     occ_k + popcount64(match_mask_k)
@@ -116,8 +120,8 @@ pub fn get_occ_all_bases(bwa_idx: &BwaIndex, k: i64) -> [i64; 4] {
     // Process all 4 bases in parallel
     let mut result = [0i64; 4];
     for i in 0..4 {
-        let match_mask = cp_occ.one_hot_bwt_str[i] & mask;
-        result[i] = cp_occ.cp_count[i] + popcount64(match_mask);
+        let match_mask = cp_occ.bwt_encoding_bits[i] & mask;
+        result[i] = cp_occ.checkpoint_counts[i] + popcount64(match_mask);
     }
 
     result

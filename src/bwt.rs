@@ -143,8 +143,8 @@ impl Bwt {
 
         // Initialize the first CpOcc entry (for position 0)
         cp_occ.push(CpOcc {
-            cp_count: [0; 4],        // Counts before position 0 are all 0
-            one_hot_bwt_str: [0; 4], // Bitmask for the first block
+            checkpoint_counts: [0; 4], // Counts before position 0 are all 0
+            bwt_encoding_bits: [0; 4], // Bitmask for the first block
         });
 
         let mut checkpoint_index = 0; // Track which checkpoint we're in
@@ -172,12 +172,12 @@ impl Bwt {
 
                 if current_pos % (1 << CP_SHIFT) == 0 {
                     // Checkpoint reached: update the current checkpoint's bitmask, then create next checkpoint
-                    cp_occ[checkpoint_index].one_hot_bwt_str = block_one_hot_bwt_str;
+                    cp_occ[checkpoint_index].bwt_encoding_bits = block_one_hot_bwt_str;
 
                     // Create next checkpoint with current cumulative counts
                     cp_occ.push(CpOcc {
-                        cp_count: cumulative_counts, // Cumulative counts up to the end of this block
-                        one_hot_bwt_str: [0u64; 4],  // Will be filled as we process next block
+                        checkpoint_counts: cumulative_counts, // Cumulative counts up to the end of this block
+                        bwt_encoding_bits: [0u64; 4], // Will be filled as we process next block
                     });
 
                     checkpoint_index += 1;
@@ -188,7 +188,7 @@ impl Bwt {
 
         // For sequences that don't fill a complete checkpoint block, update the last checkpoint's bitmask
         if checkpoint_index < cp_occ.len() {
-            cp_occ[checkpoint_index].one_hot_bwt_str = block_one_hot_bwt_str;
+            cp_occ[checkpoint_index].bwt_encoding_bits = block_one_hot_bwt_str;
         }
 
         cp_occ

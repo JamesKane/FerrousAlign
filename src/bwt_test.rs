@@ -439,7 +439,7 @@ mod tests {
 
         // First checkpoint should have cp_count = [0, 0, 0, 0] (counts before position 0)
         assert_eq!(
-            cp_occ[0].cp_count,
+            cp_occ[0].checkpoint_counts,
             [0, 0, 0, 0],
             "First checkpoint should have zero counts"
         );
@@ -449,7 +449,7 @@ mod tests {
         // The checkpoint after position 7 should show counts
         if cp_occ.len() > 1 {
             // Total counts after processing all 8 positions
-            let total_counts: i64 = cp_occ[1].cp_count.iter().sum();
+            let total_counts: i64 = cp_occ[1].checkpoint_counts.iter().sum();
             assert_eq!(total_counts, 8, "Total counts should equal sequence length");
         }
     }
@@ -479,7 +479,7 @@ mod tests {
         // Position 1 should NOT have a bit set in any of the 4 base bitmasks
         let bit_pos = 63 - 1; // Position 1 in the block
         for base in 0..4 {
-            let bit_set = (cp_occ[0].one_hot_bwt_str[base] >> bit_pos) & 1;
+            let bit_set = (cp_occ[0].bwt_encoding_bits[base] >> bit_pos) & 1;
             assert_eq!(
                 bit_set, 0,
                 "Sentinel position should not set bit for base {} in cp_occ bitmask",
@@ -490,7 +490,7 @@ mod tests {
         // But other positions should have bits set
         // Position 0 has T(3), so one_hot_bwt_str[3] should have bit 63 set
         let bit_pos_0 = 63 - 0;
-        let t_bit = (cp_occ[0].one_hot_bwt_str[3] >> bit_pos_0) & 1;
+        let t_bit = (cp_occ[0].bwt_encoding_bits[3] >> bit_pos_0) & 1;
         assert_eq!(
             t_bit, 1,
             "Position 0 (T) should set bit in one_hot_bwt_str[3]"
@@ -540,7 +540,7 @@ mod tests {
 
         // Second checkpoint (after processing all 64 bases)
         assert_eq!(
-            cp_occ[1].cp_count,
+            cp_occ[1].checkpoint_counts,
             [16, 16, 16, 16],
             "After 64 bases (ACGT*16), each base should appear 16 times"
         );

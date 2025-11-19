@@ -2711,7 +2711,7 @@ pub fn get_bwt_base_from_cp_occ(cp_occ: &[CpOcc], pos: u64) -> u8 {
 
     // Check which of the 4 one-hot encoded arrays has a 1 at this position
     for base in 0..4 {
-        if (cp_occ[cp_block].one_hot_bwt_str[base] >> bit_position) & 1 == 1 {
+        if (cp_occ[cp_block].bwt_encoding_bits[base] >> bit_position) & 1 == 1 {
             return base as u8;
         }
     }

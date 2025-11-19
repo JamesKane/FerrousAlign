@@ -61,19 +61,19 @@ impl BwaIndex {
         let cp_occ_size = (bwt.seq_len >> CP_SHIFT) + 1;
         let mut cp_occ: Vec<CpOcc> = Vec::with_capacity(cp_occ_size as usize);
         for _ in 0..cp_occ_size {
-            let mut cp_count = [0i64; 4];
+            let mut checkpoint_counts = [0i64; 4];
             for i in 0..4 {
                 cp_file.read_exact(&mut buf_i64)?;
-                cp_count[i] = i64::from_le_bytes(buf_i64);
+                checkpoint_counts[i] = i64::from_le_bytes(buf_i64);
             }
-            let mut one_hot_bwt_str = [0u64; 4];
+            let mut bwt_encoding_bits = [0u64; 4];
             for i in 0..4 {
                 cp_file.read_exact(&mut buf_u64)?;
-                one_hot_bwt_str[i] = u64::from_le_bytes(buf_u64);
+                bwt_encoding_bits[i] = u64::from_le_bytes(buf_u64);
             }
             cp_occ.push(CpOcc {
-                cp_count,
-                one_hot_bwt_str,
+                checkpoint_counts,
+                bwt_encoding_bits,
             });
         }
 
@@ -151,10 +151,10 @@ impl BwaIndex {
         // 3. cp_occ array
         for cp_occ_entry in self.cp_occ.iter() {
             for i in 0..4 {
-                file.write_all(&cp_occ_entry.cp_count[i].to_le_bytes())?;
+                file.write_all(&cp_occ_entry.checkpoint_counts[i].to_le_bytes())?;
             }
             for i in 0..4 {
-                file.write_all(&cp_occ_entry.one_hot_bwt_str[i].to_le_bytes())?;
+                file.write_all(&cp_occ_entry.bwt_encoding_bits[i].to_le_bytes())?;
             }
         }
 
