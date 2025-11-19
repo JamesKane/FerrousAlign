@@ -229,8 +229,7 @@ pub fn calculate_insert_size_stats(
 
     // Mark orientations with too few pairs as failed
     for d in 0..4 {
-        if !stats[d].failed && insert_sizes[d].len() < (max_count as f64 * MIN_DIR_RATIO) as usize
-        {
+        if !stats[d].failed && insert_sizes[d].len() < (max_count as f64 * MIN_DIR_RATIO) as usize {
             stats[d].failed = true;
             log::debug!(
                 "Skipping orientation {} (insufficient ratio)",

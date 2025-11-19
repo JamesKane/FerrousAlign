@@ -10,13 +10,13 @@ pub mod bwt;
 pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
 pub mod fm_index; // FM-Index operations (BWT search, occurrence counting)
 pub mod index; // Index management (BwaIndex loading/dumping)
+pub mod insert_size; // Insert size statistics
 pub mod kseq; // Used for FASTA reference reading during index building
+pub mod mate_rescue; // Mate rescue using Smith-Waterman
 pub mod mem;
 pub mod mem_opt;
 pub mod paired_end; // Paired-end read processing
 pub mod pairing; // Paired-end alignment scoring
-pub mod mate_rescue; // Mate rescue using Smith-Waterman
-pub mod insert_size; // Insert size statistics
 pub mod simd_abstraction;
 pub mod single_end; // Single-end read processing
 pub mod utils;

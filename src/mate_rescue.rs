@@ -7,7 +7,7 @@
 
 use crate::align;
 use crate::index::BwaIndex;
-use crate::insert_size::{infer_orientation, InsertSizeStats};
+use crate::insert_size::{InsertSizeStats, infer_orientation};
 
 /// Mate rescue using Smith-Waterman alignment
 /// Equivalent to C++ mem_matesw

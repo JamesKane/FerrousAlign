@@ -10,11 +10,11 @@
 use crate::align;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
-use crate::insert_size::{bootstrap_insert_size_stats, InsertSizeStats};
+use crate::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
 use crate::mate_rescue::mem_matesw;
 use crate::mem_opt::MemOpt;
 use crate::pairing::mem_pair;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;

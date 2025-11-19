@@ -136,9 +136,9 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     if debug_enabled {
         log::trace!(
             "backward_ext: input smem(k={}, l={}, s={}), a={}",
-            smem.k,
-            smem.l,
-            smem.s,
+            smem.bwt_interval_start,
+            smem.bwt_interval_end,
+            smem.interval_size,
             a
         );
     }
@@ -149,8 +149,8 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
 
     // Compute k[] and s[] for all 4 bases (matching C++ lines 1030-1039)
     // OPTIMIZATION: Use vectorized get_occ_all_bases to process all 4 bases at once
-    let sp = smem.k as i64;
-    let ep = (smem.k + smem.s) as i64;
+    let sp = smem.bwt_interval_start as i64;
+    let ep = (smem.bwt_interval_start + smem.interval_size) as i64;
 
     let occ_sp = get_occ_all_bases(bwa_idx, sp);
     let occ_ep = get_occ_all_bases(bwa_idx, ep);
@@ -174,8 +174,8 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     }
 
     // Sentinel handling (matching C++ lines 1041-1042)
-    let sentinel_offset = if smem.k <= bwa_idx.sentinel_index as u64
-        && (smem.k + smem.s) > bwa_idx.sentinel_index as u64
+    let sentinel_offset = if smem.bwt_interval_start <= bwa_idx.sentinel_index as u64
+        && (smem.bwt_interval_start + smem.interval_size) > bwa_idx.sentinel_index as u64
     {
         1i64
     } else {
@@ -192,8 +192,8 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
 
     // CRITICAL: Cumulative sum computation for l[] (matching C++ lines 1043-1046)
     // This is NOT l[b] = k[b] + s[b]!
-    // Instead: l[3] = smem.l + offset, then l[2] = l[3] + s[3], etc.
-    l[3] = smem.l as i64 + sentinel_offset;
+    // Instead: l[3] = smem.bwt_interval_end + offset, then l[2] = l[3] + s[3], etc.
+    l[3] = smem.bwt_interval_end as i64 + sentinel_offset;
     l[2] = l[3] + s[3];
     l[1] = l[2] + s[2];
     l[0] = l[1] + s[1];
@@ -223,16 +223,16 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     }
 
     // Update SMEM with results for base 'a' (matching C++ lines 1048-1050)
-    smem.k = k[a as usize] as u64;
-    smem.l = l[a as usize] as u64;
-    smem.s = s[a as usize] as u64;
+    smem.bwt_interval_start = k[a as usize] as u64;
+    smem.bwt_interval_end = l[a as usize] as u64;
+    smem.interval_size = s[a as usize] as u64;
 
     if debug_enabled {
         log::trace!(
             "backward_ext: output smem(k={}, l={}, s={}) for base {}",
-            smem.k,
-            smem.l,
-            smem.s,
+            smem.bwt_interval_start,
+            smem.bwt_interval_end,
+            smem.interval_size,
             a
         );
     }
@@ -256,23 +256,23 @@ pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
     if debug_enabled {
         log::trace!(
             "forward_ext: input smem(k={}, l={}, s={}), a={}",
-            smem.k,
-            smem.l,
-            smem.s,
+            smem.bwt_interval_start,
+            smem.bwt_interval_end,
+            smem.interval_size,
             a
         );
     }
 
     // Step 1: Swap k and l (lines 547-548)
     let mut smem_swapped = smem;
-    smem_swapped.k = smem.l;
-    smem_swapped.l = smem.k;
+    smem_swapped.bwt_interval_start = smem.bwt_interval_end;
+    smem_swapped.bwt_interval_end = smem.bwt_interval_start;
 
     if debug_enabled {
         log::trace!(
             "forward_ext: after swap smem_swapped(k={}, l={})",
-            smem_swapped.k,
-            smem_swapped.l
+            smem_swapped.bwt_interval_start,
+            smem_swapped.bwt_interval_end
         );
     }
 
@@ -282,25 +282,25 @@ pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
     if debug_enabled {
         log::trace!(
             "forward_ext: after backward_ext result(k={}, l={}, s={})",
-            result.k,
-            result.l,
-            result.s
+            result.bwt_interval_start,
+            result.bwt_interval_end,
+            result.interval_size
         );
     }
 
     // Step 3: Swap k and l back (lines 552-553)
     // NOTE: We swap k and l but KEEP s unchanged (matches C++ behavior)
     // The s value is still valid because it represents interval size
-    let k_temp = result.k;
-    result.k = result.l;
-    result.l = k_temp;
+    let k_temp = result.bwt_interval_start;
+    result.bwt_interval_start = result.bwt_interval_end;
+    result.bwt_interval_end = k_temp;
 
     if debug_enabled {
         log::trace!(
             "forward_ext: after swap back result(k={}, l={}, s={})",
-            result.k,
-            result.l,
-            result.s
+            result.bwt_interval_start,
+            result.bwt_interval_end,
+            result.interval_size
         );
     }
 

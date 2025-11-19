@@ -17,15 +17,22 @@ pub struct Seed {
 }
 
 // Define a struct to represent a Super Maximal Exact Match (SMEM)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)] // Add PartialEq and Eq for deduplication
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SMEM {
-    pub rid: i32, // Read ID (not strictly needed here, but good for consistency with C++)
-    pub m: i32,   // Start position in query
-    pub n: i32,   // End position in query
-    pub k: u64,   // Start of BWT interval (SA coordinate)
-    pub l: u64,   // End of BWT interval (SA coordinate)
-    pub s: u64,   // Size of BWT interval (l - k)
-    pub is_rev_comp: bool, // Added to track if SMEM is from reverse complement
+    /// Read identifier (for batch processing)
+    pub read_id: i32,
+    /// Start position in query sequence (0-based, inclusive)
+    pub query_start: i32,
+    /// End position in query sequence (0-based, exclusive)
+    pub query_end: i32,
+    /// Start of BWT interval in suffix array
+    pub bwt_interval_start: u64,
+    /// End of BWT interval in suffix array
+    pub bwt_interval_end: u64,
+    /// Size of BWT interval (bwt_interval_end - bwt_interval_start)
+    pub interval_size: u64,
+    /// Whether this SMEM is from the reverse complement strand
+    pub is_reverse_complement: bool,
 }
 
 // Scoring matrix matching C++ defaults (Match=1, Mismatch=-4)
@@ -1409,7 +1416,7 @@ fn generate_smems_for_strand(
     query_name: &str,
     query_len: usize,
     encoded_query: &[u8],
-    is_rev_comp: bool,
+    is_reverse_complement: bool,
     min_seed_len: i32,
     min_intv: u64,
     all_smems: &mut Vec<SMEM>,
@@ -1431,24 +1438,24 @@ fn generate_smems_for_strand(
 
         // Initialize SMEM at position x
         let mut smem = SMEM {
-            rid: 0,
-            m: x as i32,
-            n: x as i32,
-            k: bwa_idx.bwt.l2[a as usize],
-            l: bwa_idx.bwt.l2[(3 - a) as usize],
-            s: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
-            is_rev_comp,
+            read_id: 0,
+            query_start: x as i32,
+            query_end: x as i32,
+            bwt_interval_start: bwa_idx.bwt.l2[a as usize],
+            bwt_interval_end: bwa_idx.bwt.l2[(3 - a) as usize],
+            interval_size: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
+            is_reverse_complement,
         };
 
-        if x == 0 && !is_rev_comp {
+        if x == 0 && !is_reverse_complement {
             log::debug!(
                 "{}: Initial SMEM at x={}: a={}, k={}, l={}, s={}, l2[{}]={}, l2[{}]={}",
                 query_name,
                 x,
                 a,
-                smem.k,
-                smem.l,
-                smem.s,
+                smem.bwt_interval_start,
+                smem.bwt_interval_end,
+                smem.interval_size,
                 a,
                 bwa_idx.bwt.l2[a as usize],
                 3 - a,
@@ -1465,7 +1472,7 @@ fn generate_smems_for_strand(
             next_x = j + 1;
 
             if a >= 4 {
-                if x == 0 && !is_rev_comp && log::log_enabled!(log::Level::Debug) {
+                if x == 0 && !is_reverse_complement && log::log_enabled!(log::Level::Debug) {
                     log::debug!(
                         "{}: x={}, forward extension stopped at j={} due to N base",
                         query_name,
@@ -1479,44 +1486,48 @@ fn generate_smems_for_strand(
 
             let new_smem = forward_ext(bwa_idx, smem, a);
 
-            if x == 0 && j <= 12 && !is_rev_comp {
+            if x == 0 && j <= 12 && !is_reverse_complement {
                 log::debug!(
-                    "{}: x={}, j={}, a={}, old_smem.s={}, new_smem(k={}, l={}, s={})",
+                    "{}: x={}, j={}, a={}, old_smem.interval_size={}, new_smem(k={}, l={}, s={})",
                     query_name,
                     x,
                     j,
                     a,
-                    smem.s,
-                    new_smem.k,
-                    new_smem.l,
-                    new_smem.s
+                    smem.interval_size,
+                    new_smem.bwt_interval_start,
+                    new_smem.bwt_interval_end,
+                    new_smem.interval_size
                 );
             }
 
-            if new_smem.s != smem.s {
-                if x < 3 && !is_rev_comp {
-                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
+            if new_smem.interval_size != smem.interval_size {
+                if x < 3 && !is_reverse_complement {
+                    let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
+                        smem.bwt_interval_end - smem.bwt_interval_start
+                    } else {
+                        0
+                    };
                     log::debug!(
                         "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
                         query_name,
                         x,
                         j,
-                        smem.s,
+                        smem.interval_size,
                         s_from_lk,
-                        smem.s == s_from_lk
+                        smem.interval_size == s_from_lk
                     );
                 }
                 prev_array_buf.push(smem);
             }
 
-            if new_smem.s < min_intv {
-                if x == 0 && !is_rev_comp && log::log_enabled!(log::Level::Debug) {
+            if new_smem.interval_size < min_intv {
+                if x == 0 && !is_reverse_complement && log::log_enabled!(log::Level::Debug) {
                     log::debug!(
-                        "{}: x={}, forward extension stopped at j={} because new_smem.s={} < min_intv={}",
+                        "{}: x={}, forward extension stopped at j={} because new_smem.interval_size={} < min_intv={}",
                         query_name,
                         x,
                         j,
-                        new_smem.s,
+                        new_smem.interval_size,
                         min_intv
                     );
                 }
@@ -1524,26 +1535,26 @@ fn generate_smems_for_strand(
             }
 
             smem = new_smem;
-            smem.n = j as i32;
+            smem.query_end = j as i32;
         }
 
-        if smem.s >= min_intv {
+        if smem.interval_size >= min_intv {
             prev_array_buf.push(smem);
         }
 
-        if x < 3 && !is_rev_comp {
+        if x < 3 && !is_reverse_complement {
             log::debug!(
-                "{}: Position x={}, prev_array_buf.len()={}, smem.s={}, min_intv={}",
+                "{}: Position x={}, prev_array_buf.len()={}, smem.interval_size={}, min_intv={}",
                 query_name,
                 x,
                 prev_array_buf.len(),
-                smem.s,
+                smem.interval_size,
                 min_intv
             );
         }
 
         // Phase 2: Backward search
-        if !is_rev_comp {
+        if !is_reverse_complement {
             log::debug!(
                 "{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
                 query_name,
@@ -1555,7 +1566,7 @@ fn generate_smems_for_strand(
         for j in (0..x).rev() {
             let a = encoded_query[j];
             if a >= 4 {
-                if !is_rev_comp {
+                if !is_reverse_complement {
                     log::debug!(
                         "{}: [RUST Phase 2] Hit 'N' base at j={}, stopping",
                         query_name,
@@ -1569,7 +1580,7 @@ fn generate_smems_for_strand(
             let curr_array = &mut curr_array_buf;
             let mut curr_s = None;
 
-            if !is_rev_comp {
+            if !is_reverse_complement {
                 log::debug!(
                     "{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
                     query_name,
@@ -1581,46 +1592,52 @@ fn generate_smems_for_strand(
 
             for (i, smem) in prev_array_buf.iter().rev().enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
-                new_smem.m = j as i32;
+                new_smem.query_start = j as i32;
 
-                if !is_rev_comp {
-                    let old_len = smem.n - smem.m + 1;
-                    let new_len = new_smem.n - new_smem.m + 1;
+                if !is_reverse_complement {
+                    let old_len = smem.query_end - smem.query_start + 1;
+                    let new_len = new_smem.query_end - new_smem.query_start + 1;
                     log::debug!(
                         "{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
                         query_name,
                         x,
                         j,
                         i,
-                        smem.m,
-                        smem.n,
+                        smem.query_start,
+                        smem.query_end,
                         old_len,
-                        smem.k,
-                        smem.l,
-                        smem.s,
-                        new_smem.m,
-                        new_smem.n,
+                        smem.bwt_interval_start,
+                        smem.bwt_interval_end,
+                        smem.interval_size,
+                        new_smem.query_start,
+                        new_smem.query_end,
                         new_len,
-                        new_smem.k,
-                        new_smem.l,
-                        new_smem.s,
+                        new_smem.bwt_interval_start,
+                        new_smem.bwt_interval_end,
+                        new_smem.interval_size,
                         min_intv
                     );
                 }
 
-                if new_smem.s < min_intv && (smem.n - smem.m + 1) >= min_seed_len {
-                    if !is_rev_comp {
-                        let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                        let s_matches = smem.s == s_from_lk;
+                if new_smem.interval_size < min_intv
+                    && (smem.query_end - smem.query_start + 1) >= min_seed_len
+                {
+                    if !is_reverse_complement {
+                        let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
+                            smem.bwt_interval_end - smem.bwt_interval_start
+                        } else {
+                            0
+                        };
+                        let s_matches = smem.interval_size == s_from_lk;
                         log::debug!(
                             "{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
                             query_name,
-                            smem.m,
-                            smem.n,
-                            smem.k,
-                            smem.l,
-                            smem.s,
-                            new_smem.s,
+                            smem.query_start,
+                            smem.query_end,
+                            smem.bwt_interval_start,
+                            smem.bwt_interval_end,
+                            smem.interval_size,
+                            new_smem.interval_size,
                             min_intv,
                             s_from_lk,
                             s_matches
@@ -1630,56 +1647,57 @@ fn generate_smems_for_strand(
                     break;
                 }
 
-                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
-                    curr_s = Some(new_smem.s);
+                if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
+                    curr_s = Some(new_smem.interval_size);
                     curr_array.push(new_smem);
-                    if !is_rev_comp {
+                    if !is_reverse_complement {
                         log::debug!(
                             "{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
                             query_name,
-                            new_smem.s,
+                            new_smem.interval_size,
                             min_intv
                         );
                     }
                     break;
                 }
 
-                if !is_rev_comp {
+                if !is_reverse_complement {
                     log::debug!(
                         "{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
                         query_name,
-                        new_smem.s,
+                        new_smem.interval_size,
                         min_intv,
-                        curr_s == Some(new_smem.s)
+                        curr_s == Some(new_smem.interval_size)
                     );
                 }
             }
 
             for (i, smem) in prev_array_buf.iter().rev().skip(1).enumerate() {
                 let mut new_smem = backward_ext(bwa_idx, *smem, a);
-                new_smem.m = j as i32;
+                new_smem.query_start = j as i32;
 
-                if !is_rev_comp {
-                    let new_len = new_smem.n - new_smem.m + 1;
+                if !is_reverse_complement {
+                    let new_len = new_smem.query_end - new_smem.query_start + 1;
                     log::debug!(
                         "{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
                         query_name,
                         x,
                         j,
                         i + 1,
-                        smem.m,
-                        smem.n,
-                        smem.s,
-                        new_smem.m,
-                        new_smem.n,
+                        smem.query_start,
+                        smem.query_end,
+                        smem.interval_size,
+                        new_smem.query_start,
+                        new_smem.query_end,
                         new_len,
-                        new_smem.s,
-                        new_smem.s >= min_intv && curr_s != Some(new_smem.s)
+                        new_smem.interval_size,
+                        new_smem.interval_size >= min_intv
+                            && curr_s != Some(new_smem.interval_size)
                     );
                 }
 
-                if new_smem.s >= min_intv && curr_s != Some(new_smem.s) {
-                    curr_s = Some(new_smem.s);
+                if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
+                    curr_s = Some(new_smem.interval_size);
                     curr_array.push(new_smem);
                 }
             }
@@ -1687,7 +1705,7 @@ fn generate_smems_for_strand(
             std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
             *max_smem_count = (*max_smem_count).max(prev_array_buf.len());
 
-            if !is_rev_comp {
+            if !is_reverse_complement {
                 log::debug!(
                     "{}: [RUST Phase 2] After j={}, prev_array_buf.len()={}",
                     query_name,
@@ -1697,7 +1715,7 @@ fn generate_smems_for_strand(
             }
 
             if prev_array_buf.is_empty() {
-                if !is_rev_comp {
+                if !is_reverse_complement {
                     log::debug!(
                         "{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}",
                         query_name,
@@ -1710,19 +1728,23 @@ fn generate_smems_for_strand(
 
         if !prev_array_buf.is_empty() {
             let smem = prev_array_buf[prev_array_buf.len() - 1];
-            let len = smem.n - smem.m + 1;
+            let len = smem.query_end - smem.query_start + 1;
             if len >= min_seed_len {
-                if !is_rev_comp {
-                    let s_from_lk = if smem.l > smem.k { smem.l - smem.k } else { 0 };
-                    let s_matches = smem.s == s_from_lk;
+                if !is_reverse_complement {
+                    let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
+                        smem.bwt_interval_end - smem.bwt_interval_start
+                    } else {
+                        0
+                    };
+                    let s_matches = smem.interval_size == s_from_lk;
                     log::debug!(
                         "{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
                         query_name,
-                        smem.m,
-                        smem.n,
-                        smem.k,
-                        smem.l,
-                        smem.s,
+                        smem.query_start,
+                        smem.query_end,
+                        smem.bwt_interval_start,
+                        smem.bwt_interval_end,
+                        smem.interval_size,
                         len,
                         s_from_lk,
                         s_matches,
@@ -1730,18 +1752,18 @@ fn generate_smems_for_strand(
                     );
                 }
                 all_smems.push(smem);
-            } else if !is_rev_comp {
+            } else if !is_reverse_complement {
                 log::debug!(
                     "{}: [RUST Phase 2] Rejecting final SMEM: m={}, n={}, len={} < min_seed_len={}, s={}",
                     query_name,
-                    smem.m,
-                    smem.n,
+                    smem.query_start,
+                    smem.query_end,
                     len,
                     min_seed_len,
-                    smem.s
+                    smem.interval_size
                 );
             }
-        } else if !is_rev_comp {
+        } else if !is_reverse_complement {
             log::debug!(
                 "{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}",
                 query_name,
@@ -1857,7 +1879,14 @@ fn generate_seeds_with_mode(
     // See C++ bwamem.cpp:639-695 for full implementation
 
     // 1. Sort SMEMs
-    all_smems.sort_by_key(|smem| (smem.m, smem.n, smem.k, smem.is_rev_comp)); // Include is_rev_comp in sort key
+    all_smems.sort_by_key(|smem| {
+        (
+            smem.query_start,
+            smem.query_end,
+            smem.bwt_interval_start,
+            smem.is_reverse_complement,
+        )
+    }); // Include is_rev_comp in sort key
 
     // 2. Remove duplicates and filter by minimum length and max occurrences
     let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
@@ -1866,10 +1895,10 @@ fn generate_seeds_with_mode(
     let mut duplicates = 0;
 
     if let Some(mut prev_smem) = all_smems.first().cloned() {
-        let seed_len = prev_smem.n - prev_smem.m + 1;
+        let seed_len = prev_smem.query_end - prev_smem.query_start + 1;
         // CRITICAL FIX: Use s field for occurrences, NOT l - k
         // The l field encodes reverse complement BWT info, not interval endpoint
-        let occurrences = prev_smem.s;
+        let occurrences = prev_smem.interval_size;
 
         // Filter by min_seed_len (-k) and max_occ (-c)
         if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
@@ -1887,9 +1916,9 @@ fn generate_seeds_with_mode(
             let current_smem = all_smems[i];
             if current_smem != prev_smem {
                 // Use PartialEq for comparison
-                let seed_len = current_smem.n - current_smem.m + 1;
+                let seed_len = current_smem.query_end - current_smem.query_start + 1;
                 // CRITICAL FIX: Use s field for occurrences, NOT l - k
-                let occurrences = current_smem.s;
+                let occurrences = current_smem.interval_size;
 
                 // Filter by min_seed_len (-k) and max_occ (-c)
                 if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
@@ -1922,18 +1951,18 @@ fn generate_seeds_with_mode(
 
         // Sample first few SMEMs to see actual values
         for (i, smem) in all_smems.iter().take(5).enumerate() {
-            let len = smem.n - smem.m + 1;
-            let occ = smem.l - smem.k;
+            let len = smem.query_end - smem.query_start + 1;
+            let occ = smem.bwt_interval_end - smem.bwt_interval_start;
             log::debug!(
                 "{}: Sample SMEM {}: len={}, occ={}, m={}, n={}, k={}, l={}",
                 query_name,
                 i,
                 len,
                 occ,
-                smem.m,
-                smem.n,
-                smem.k,
-                smem.l
+                smem.query_start,
+                smem.query_end,
+                smem.bwt_interval_start,
+                smem.bwt_interval_end
             );
         }
     }
@@ -1950,7 +1979,7 @@ fn generate_seeds_with_mode(
     // Convert SMEMs to Seed structs and perform seed extension
     // FIXED: Remove artificial SMEM limit - process ALL seeds like C++ bwa-mem2
     let mut sorted_smems = unique_filtered_smems;
-    sorted_smems.sort_by_key(|smem| -(smem.n - smem.m + 1)); // Sort by length, descending
+    sorted_smems.sort_by_key(|smem| -(smem.query_end - smem.query_start + 1)); // Sort by length, descending
 
     let useful_smems = sorted_smems;
 
@@ -1994,18 +2023,18 @@ fn generate_seeds_with_mode(
             "{}: SMEM {}: BWT interval [k={}, l={}, s={}], query range [m={}, n={}], is_rev_comp={}",
             query_name,
             idx,
-            smem.k,
-            smem.l,
-            smem.s,
-            smem.m,
-            smem.n,
-            smem.is_rev_comp
+            smem.bwt_interval_start,
+            smem.bwt_interval_end,
+            smem.interval_size,
+            smem.query_start,
+            smem.query_end,
+            smem.is_reverse_complement
         );
 
         // Try multiple positions in the BWT interval to find which one is correct
-        let ref_pos_at_k = get_sa_entry(bwa_idx, smem.k);
-        let ref_pos_at_l_minus_1 = if smem.l > 0 {
-            get_sa_entry(bwa_idx, smem.l - 1)
+        let ref_pos_at_k = get_sa_entry(bwa_idx, smem.bwt_interval_start);
+        let ref_pos_at_l_minus_1 = if smem.bwt_interval_end > 0 {
+            get_sa_entry(bwa_idx, smem.bwt_interval_end - 1)
         } else {
             ref_pos_at_k
         };
@@ -2013,32 +2042,32 @@ fn generate_seeds_with_mode(
             "{}: SMEM {}: SA at k={} -> ref_pos {}, SA at l-1={} -> ref_pos {}",
             query_name,
             idx,
-            smem.k,
+            smem.bwt_interval_start,
             ref_pos_at_k,
-            smem.l - 1,
+            smem.bwt_interval_end - 1,
             ref_pos_at_l_minus_1
         );
 
         let mut ref_pos = ref_pos_at_k;
 
-        let mut is_rev = smem.is_rev_comp;
+        let mut is_rev = smem.is_reverse_complement;
 
         // CRITICAL FIX: Use correct query orientation based on is_rev_comp flag
         // If SMEM is from RC search, use RC query bases for comparison
-        let query_for_smem = if smem.is_rev_comp {
+        let query_for_smem = if smem.is_reverse_complement {
             &query_segment_encoded_rc
         } else {
             &query_segment_encoded
         };
-        let smem_query_bases =
-            &query_for_smem[smem.m as usize..=(smem.n as usize).min(query_for_smem.len() - 1)];
-        let smem_len = smem.n - smem.m + 1;
+        let smem_query_bases = &query_for_smem
+            [smem.query_start as usize..=(smem.query_end as usize).min(query_for_smem.len() - 1)];
+        let smem_len = smem.query_end - smem.query_start + 1;
         log::debug!(
             "{}: SMEM {}: Query bases at [{}..{}] (len={}): {:?}",
             query_name,
             idx,
-            smem.m,
-            smem.n,
+            smem.query_start,
+            smem.query_end,
             smem_len,
             &smem_query_bases[..10.min(smem_query_bases.len())]
         );
@@ -2061,14 +2090,14 @@ fn generate_seeds_with_mode(
         // The SMEM validation loop with log::info/warn was being called millions of times
 
         // Use query position in the coordinate system of the query we're aligning
-        // For RC seeds, use smem.m directly (RC query coordinates)
-        // For forward seeds, use smem.m directly (forward query coordinates)
-        let query_pos = smem.m;
+        // For RC seeds, use smem.query_start directly (RC query coordinates)
+        // For forward seeds, use smem.query_start directly (forward query coordinates)
+        let query_pos = smem.query_start;
 
         let seed = Seed {
             query_pos,
             ref_pos,
-            len: smem.n - smem.m + 1,
+            len: smem.query_end - smem.query_start + 1,
             is_rev,
         };
 
@@ -2843,12 +2872,12 @@ mod tests {
         };
 
         let smem = SMEM {
-            k: 0,
-            s: bwa_idx.bwt.seq_len,
+            bwt_interval_start: 0,
+            interval_size: bwa_idx.bwt.seq_len,
             ..Default::default()
         };
         let new_smem = backward_ext(&bwa_idx, smem, 0); // 0 is 'A'
-        assert_ne!(new_smem.s, 0);
+        assert_ne!(new_smem.interval_size, 0);
     }
 
     #[test]
@@ -2871,8 +2900,8 @@ mod tests {
 
         // Start with full range
         let initial_smem = SMEM {
-            k: 0,
-            s: bwa_idx.bwt.seq_len,
+            bwt_interval_start: 0,
+            interval_size: bwa_idx.bwt.seq_len,
             ..Default::default()
         };
 
@@ -2882,16 +2911,16 @@ mod tests {
 
             // Extended range should be smaller or equal to initial range
             assert!(
-                extended.s <= initial_smem.s,
+                extended.interval_size <= initial_smem.interval_size,
                 "Extended range size {} should be <= initial size {} for base {}",
-                extended.s,
-                initial_smem.s,
+                extended.interval_size,
+                initial_smem.interval_size,
                 base
             );
 
             // k should be within bounds
             assert!(
-                extended.k < bwa_idx.bwt.seq_len,
+                extended.bwt_interval_start < bwa_idx.bwt.seq_len,
                 "Extended k should be within sequence length"
             );
         }
@@ -2917,14 +2946,14 @@ mod tests {
 
         // Start with full range
         let mut smem = SMEM {
-            k: 0,
-            s: bwa_idx.bwt.seq_len,
+            bwt_interval_start: 0,
+            interval_size: bwa_idx.bwt.seq_len,
             ..Default::default()
         };
 
         // Build a seed by extending with ACGT
         let bases = vec![0u8, 1, 2, 3]; // ACGT
-        let mut prev_s = smem.s;
+        let mut prev_s = smem.interval_size;
 
         for (i, &base) in bases.iter().enumerate() {
             smem = super::backward_ext(&bwa_idx, smem, base);
@@ -2932,17 +2961,17 @@ mod tests {
             // Range should generally get smaller (or stay same) with each extension
             // (though it could stay the same if the pattern is very common)
             assert!(
-                smem.s <= prev_s,
+                smem.interval_size <= prev_s,
                 "After extension {}, range size {} should be <= previous {}",
                 i,
-                smem.s,
+                smem.interval_size,
                 prev_s
             );
 
-            prev_s = smem.s;
+            prev_s = smem.interval_size;
 
             // If range becomes 0, we can't extend further
-            if smem.s == 0 {
+            if smem.interval_size == 0 {
                 break;
             }
         }
@@ -2967,39 +2996,42 @@ mod tests {
         };
 
         let smem = SMEM {
-            k: 0,
-            s: 0, // Zero range
+            bwt_interval_start: 0,
+            interval_size: 0, // Zero range
             ..Default::default()
         };
 
         let extended = super::backward_ext(&bwa_idx, smem, 0);
 
         // Extending a zero range should still give zero range
-        assert_eq!(extended.s, 0, "Extending zero range should give zero range");
+        assert_eq!(
+            extended.interval_size, 0,
+            "Extending zero range should give zero range"
+        );
     }
 
     #[test]
     fn test_smem_structure() {
         // Test SMEM structure creation and defaults
         let smem1 = SMEM {
-            rid: 0,
-            m: 10,
-            n: 20,
-            k: 5,
-            l: 15,
-            s: 10,
-            is_rev_comp: false,
+            read_id: 0,
+            query_start: 10,
+            query_end: 20,
+            bwt_interval_start: 5,
+            bwt_interval_end: 15,
+            interval_size: 10,
+            is_reverse_complement: false,
         };
 
-        assert_eq!(smem1.m, 10);
-        assert_eq!(smem1.n, 20);
-        assert_eq!(smem1.s, 10);
+        assert_eq!(smem1.query_start, 10);
+        assert_eq!(smem1.query_end, 20);
+        assert_eq!(smem1.interval_size, 10);
 
         // Test default
         let smem2 = SMEM::default();
-        assert_eq!(smem2.rid, 0);
-        assert_eq!(smem2.m, 0);
-        assert_eq!(smem2.n, 0);
+        assert_eq!(smem2.read_id, 0);
+        assert_eq!(smem2.query_start, 0);
+        assert_eq!(smem2.query_end, 0);
     }
 
     // NOTE: Base encoding tests moved to tests/session30_regression_tests.rs
