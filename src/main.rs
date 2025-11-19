@@ -301,7 +301,10 @@ fn main() {
             }
 
             if reads.len() > 2 {
-                log::error!("Maximum 2 read files allowed (paired-end)");
+                log::error!("Maximum 2 read files allowed (paired-end), got {} files:", reads.len());
+                for (i, r) in reads.iter().enumerate() {
+                    log::error!("  File {}: {}", i+1, r.display());
+                }
                 std::process::exit(1);
             }
 
@@ -512,13 +515,13 @@ fn main() {
             opt.smart_pairing = smart_pairing;
             opt.treat_alt_as_primary = treat_alt_as_primary;
             opt.smallest_coord_primary = smallest_coord_primary;
+            opt.output_all_alignments = output_all;
 
             // Store flags as options for later use (not yet implemented)
             // These will be used when we implement the corresponding features
             let _skip_mate_rescue = skip_mate_rescue;
             let _skip_pairing = skip_pairing;
             let _no_modify_mapq = no_modify_mapq;
-            let _output_all = output_all;
             let _append_comment = append_comment;
             let _output_ref_header = output_ref_header;
             let _soft_clip_supplementary = soft_clip_supplementary;

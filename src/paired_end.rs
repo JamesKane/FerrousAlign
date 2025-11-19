@@ -8,6 +8,7 @@
 // - SAM output with proper pair flags
 
 use crate::align;
+use crate::align::sam_flags;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
@@ -707,14 +708,20 @@ fn output_batch_paired(
             if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
                 // If mem_pair returned a valid pair, it's properly paired
                 // mem_pair already verified: same chromosome, insert size within bounds, valid orientation
+                log::trace!("{}/{}: mem_pair selected best_idx1={}, best_idx2={}, n_aln1={}, n_aln2={}",
+                    name1, name2, idx1, idx2, alignments1.len(), alignments2.len());
                 (idx1, idx2, true)
             } else if !alignments1.is_empty() && !alignments2.is_empty() {
                 // mem_pair returned None - no valid pair found
                 // Use first alignments but NOT properly paired
                 // (insert size out of bounds, or wrong orientation)
+                log::trace!("{}/{}: No valid pair found, using (0,0), n_aln1={}, n_aln2={}",
+                    name1, name2, alignments1.len(), alignments2.len());
                 (0, 0, false)
             } else {
                 // One or both reads unmapped
+                log::trace!("{}/{}: One or both unmapped, n_aln1={}, n_aln2={}",
+                    name1, name2, alignments1.len(), alignments2.len());
                 (0, 0, false)
             };
 
@@ -876,17 +883,28 @@ fn output_batch_paired(
 
         // Write alignments for read1
         for (idx, mut alignment) in alignments1.into_iter().enumerate() {
-            let is_unmapped = alignment.flag & 0x4 != 0;
-            // Output unmapped reads always, or reads meeting score threshold
-            let should_output = is_unmapped || alignment.score >= opt.t;
+            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
+            let is_primary = idx == best_idx1;
+
+            // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
+            // With -a flag, output all alignments meeting score threshold
+            let should_output = if opt.output_all_alignments {
+                is_unmapped || alignment.score >= opt.t
+            } else {
+                is_primary
+            };
 
             if !should_output {
-                continue; // Skip low-scoring alignments
+                continue; // Skip non-primary alignments (unless -a flag set)
             }
 
-            // Mark non-best alignments as secondary (0x100)
-            if idx != best_idx1 {
-                alignment.flag |= 0x100; // Secondary alignment flag
+            // Clear or set secondary flag based on pairing result
+            if is_primary {
+                // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
+                alignment.flag &= !sam_flags::SECONDARY;
+            } else if !is_unmapped {
+                // Non-best alignment - mark as secondary
+                alignment.flag |= sam_flags::SECONDARY;
             }
 
             if let Some(ref rg) = rg_id {
@@ -906,17 +924,28 @@ fn output_batch_paired(
 
         // Write alignments for read2
         for (idx, mut alignment) in alignments2.into_iter().enumerate() {
-            let is_unmapped = alignment.flag & 0x4 != 0;
-            // Output unmapped reads always, or reads meeting score threshold
-            let should_output = is_unmapped || alignment.score >= opt.t;
+            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
+            let is_primary = idx == best_idx2;
+
+            // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
+            // With -a flag, output all alignments meeting score threshold
+            let should_output = if opt.output_all_alignments {
+                is_unmapped || alignment.score >= opt.t
+            } else {
+                is_primary
+            };
 
             if !should_output {
-                continue; // Skip low-scoring alignments
+                continue; // Skip non-primary alignments (unless -a flag set)
             }
 
-            // Mark non-best alignments as secondary (0x100)
-            if idx != best_idx2 {
-                alignment.flag |= 0x100; // Secondary alignment flag
+            // Clear or set secondary flag based on pairing result
+            if is_primary {
+                // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
+                alignment.flag &= !sam_flags::SECONDARY;
+            } else if !is_unmapped {
+                // Non-best alignment - mark as secondary
+                alignment.flag |= sam_flags::SECONDARY;
             }
 
             if let Some(ref rg) = rg_id {

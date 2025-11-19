@@ -71,9 +71,10 @@ pub struct MemOpt {
     pub verbosity: i32, // Verbosity level (1=error, 2=warning, 3=message, 4+=debug)
 
     // Advanced flags
-    pub smart_pairing: bool,          // -p: Smart pairing (ignoring in2.fq)
-    pub treat_alt_as_primary: bool,   // -j: Treat ALT contigs as part of primary assembly
-    pub smallest_coord_primary: bool, // -5: For split alignment, take smallest coordinate as primary
+    pub smart_pairing: bool,           // -p: Smart pairing (ignoring in2.fq)
+    pub treat_alt_as_primary: bool,    // -j: Treat ALT contigs as part of primary assembly
+    pub smallest_coord_primary: bool,  // -5: For split alignment, take smallest coordinate as primary
+    pub output_all_alignments: bool,   // -a: Output all alignments for SE or unpaired PE
 }
 
 /// Manual insert size specification (overrides auto-inference)
@@ -158,6 +159,7 @@ impl Default for MemOpt {
             smart_pairing: false,
             treat_alt_as_primary: false,
             smallest_coord_primary: false,
+            output_all_alignments: false, // Default: only output primary alignments (matching bwa-mem2)
         };
 
         // Calculate mapq_coef_fac as log of mapq_coef_len (matching C++)

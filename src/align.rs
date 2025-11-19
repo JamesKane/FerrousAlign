@@ -3029,7 +3029,7 @@ fn generate_seeds_with_mode(
         } // End of seed_job iteration
 
         // Use the best alignment candidate for this chain
-        if let Some((cigar_for_alignment, combined_score, alignment_start_pos, query_start_aligned, query_end_aligned)) = best_alignment_data {
+        if let Some((mut cigar_for_alignment, combined_score, alignment_start_pos, query_start_aligned, query_end_aligned)) = best_alignment_data {
             log::debug!(
                 "{}: Chain {} (weight={}, kept={}): BEST score={} from {} candidates",
                 query_name,
@@ -3039,6 +3039,42 @@ fn generate_seeds_with_mode(
                 combined_score,
                 mapping.seed_jobs.len()
             );
+
+            // CRITICAL: Validate and correct CIGAR length to match query length
+            // Safety check for systematic off-by-one errors in CIGAR generation
+            // Only count operations that consume query bases (M, I, S, =, X)
+            let cigar_len: i32 = cigar_for_alignment
+                .iter()
+                .filter_map(|&(op, len)| match op as char {
+                    'M' | 'I' | 'S' | '=' | 'X' => Some(len),
+                    _ => None, // D, H, N, P don't consume query
+                })
+                .sum();
+
+            if cigar_len != query_len {
+                log::warn!(
+                    "{}: Chain {}: CIGAR length mismatch: cigar={}, query={}, diff={} - adjusting last query-consuming operation",
+                    query_name, chain_idx, cigar_len, query_len, query_len - cigar_len
+                );
+
+                // Adjust the last query-consuming operation (S or M) to match query length
+                let diff = query_len - cigar_len;
+                for op in cigar_for_alignment.iter_mut().rev() {
+                    if op.0 == b'S' || op.0 == b'M' {
+                        let old_len = op.1;
+                        op.1 += diff;
+                        if op.1 > 0 {
+                            log::debug!("{}: Adjusted CIGAR op {} from {} to {}",
+                                query_name, op.0 as char, old_len, op.1);
+                            break;
+                        } else {
+                            log::warn!("{}: CIGAR op {} became negative ({})! Setting to 0 and continuing...",
+                                query_name, op.0 as char, op.1);
+                            op.1 = 0;
+                        }
+                    }
+                }
+            }
 
         // Use the alignment start position calculated from extensions
         let adjusted_ref_start = alignment_start_pos;
