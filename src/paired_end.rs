@@ -246,6 +246,7 @@ pub fn process_paired_end(
     // Process first batch in parallel
     let num_pairs = first_batch1.names.len();
     let bwa_idx_clone = Arc::clone(&bwa_idx);
+    let pac_clone = &pac; // Borrow pac for this scope
     let opt_clone = Arc::clone(&opt);
 
     let mut first_batch_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = (0
@@ -254,6 +255,7 @@ pub fn process_paired_end(
         .map(|i| {
             let aln1 = align::generate_seeds(
                 &bwa_idx_clone,
+                pac_clone,
                 &first_batch1.names[i],
                 &first_batch1.seqs[i],
                 &first_batch1.quals[i],
@@ -261,6 +263,7 @@ pub fn process_paired_end(
             );
             let aln2 = align::generate_seeds(
                 &bwa_idx_clone,
+                pac_clone,
                 &first_batch2.names[i],
                 &first_batch2.seqs[i],
                 &first_batch2.quals[i],
@@ -414,6 +417,7 @@ pub fn process_paired_end(
         // Process batch in parallel
         let num_pairs = batch1.names.len();
         let bwa_idx_clone = Arc::clone(&bwa_idx);
+        let pac_clone = &pac; // Borrow pac for this scope
         let opt_clone = Arc::clone(&opt);
 
         let mut batch_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = (0
@@ -422,6 +426,7 @@ pub fn process_paired_end(
             .map(|i| {
                 let aln1 = align::generate_seeds(
                     &bwa_idx_clone,
+                    pac_clone,
                     &batch1.names[i],
                     &batch1.seqs[i],
                     &batch1.quals[i],
@@ -429,6 +434,7 @@ pub fn process_paired_end(
                 );
                 let aln2 = align::generate_seeds(
                     &bwa_idx_clone,
+                    pac_clone,
                     &batch2.names[i],
                     &batch2.seqs[i],
                     &batch2.quals[i],

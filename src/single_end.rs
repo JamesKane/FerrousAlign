@@ -33,6 +33,22 @@ pub fn process_single_end(
     let bwa_idx = Arc::new(bwa_idx);
     let opt = Arc::new(opt);
 
+    // Load PAC file ONCE for MD tag generation (eliminates per-read I/O)
+    let pac_data = if let Some(pac_path) = &bwa_idx.bns.pac_file_path {
+        std::fs::read(pac_path).unwrap_or_else(|e| {
+            log::warn!(
+                "Could not load PAC file for MD tag generation: {}. Using simplified MD tags.",
+                e
+            );
+            Vec::new()
+        })
+    } else {
+        log::warn!("PAC file path not set. Using simplified MD tags.");
+        Vec::new()
+    };
+    log::debug!("Loaded PAC file: {} bytes", pac_data.len());
+    let pac_data = Arc::new(pac_data);
+
     // Track overall statistics
     let start_time = Instant::now();
     let mut total_reads = 0usize;
@@ -88,6 +104,7 @@ pub fn process_single_end(
 
             // Stage 1: Process batch in parallel (matching C++ kt_pipeline step 1)
             let bwa_idx_clone = Arc::clone(&bwa_idx);
+            let pac_data_clone = Arc::clone(&pac_data);
             let opt_clone = Arc::clone(&opt);
             let alignments: Vec<Vec<align::Alignment>> = batch
                 .names
@@ -95,7 +112,7 @@ pub fn process_single_end(
                 .zip(batch.seqs.par_iter())
                 .zip(batch.quals.par_iter())
                 .map(|((name, seq), qual)| {
-                    align::generate_seeds(&bwa_idx_clone, name, seq, qual, &opt_clone)
+                    align::generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone)
                 })
                 .collect();
 

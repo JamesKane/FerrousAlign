@@ -1194,6 +1194,9 @@ pub(crate) struct AlignmentJob {
     /// Used for separate left/right extensions matching C++ bwa-mem2
     /// None = legacy single-pass mode (deprecated)
     pub direction: Option<crate::banded_swa::ExtensionDirection>,
+    /// Seed length for calculating h0 (initial score = seed_len * match_score)
+    /// C++ bwamem.cpp:2232 sets h0 = s->len * opt->a
+    pub seed_len: i32,
 }
 
 /// Estimate divergence likelihood based on sequence length mismatch
@@ -1556,6 +1559,12 @@ pub(crate) fn execute_scalar_alignments(
 
             // Use directional extension if specified, otherwise use standard SW
             let (score, cigar, ref_aligned, query_aligned) = if let Some(direction) = job.direction {
+                // CRITICAL: Calculate h0 from seed length (C++ bwamem.cpp:2232)
+                // h0 = seed_length * match_score gives SW algorithm the initial score
+                // Without this, SW starts from 0 and finds terrible local alignments
+                // For extensions, we need to know we're extending from a high-scoring seed
+                let h0 = job.seed_len; // match_score = 1, so h0 = seed_len * 1
+
                 // Use directional extension (LEFT or RIGHT)
                 let ext_result = sw_params.scalar_banded_swa_directional(
                     direction,
@@ -1564,7 +1573,7 @@ pub(crate) fn execute_scalar_alignments(
                     tlen,
                     &job.target,
                     job.band_width,
-                    0, // h0
+                    h0,
                 );
 
                 log::debug!(
@@ -1653,12 +1662,13 @@ pub(crate) fn execute_scalar_alignments(
 
 pub fn generate_seeds(
     bwa_idx: &BwaIndex,
+    pac_data: &[u8], // Pre-loaded PAC data for MD tag generation
     query_name: &str,
     query_seq: &[u8],
     query_qual: &str,
     opt: &MemOpt,
 ) -> Vec<Alignment> {
-    generate_seeds_with_mode(bwa_idx, query_name, query_seq, query_qual, true, opt)
+    generate_seeds_with_mode(bwa_idx, pac_data, query_name, query_seq, query_qual, true, opt)
 }
 
 /// Generate SMEMs for a single strand (forward or reverse complement)
@@ -2030,6 +2040,7 @@ fn generate_smems_for_strand(
 // Internal implementation with option to use batched SIMD
 fn generate_seeds_with_mode(
     bwa_idx: &BwaIndex,
+    pac_data: &[u8], // Pre-loaded PAC data (loaded once, not per-read!)
     query_name: &str,
     query_seq: &[u8],
     query_qual: &str,
@@ -2693,6 +2704,7 @@ fn generate_seeds_with_mode(
                         band_width: _opt.w,
                         query_offset: 0,
                         direction: Some(crate::banded_swa::ExtensionDirection::Left),
+                        seed_len: seed.len, // For h0 calculation
                     });
                 } else {
                     log::warn!(
@@ -2811,6 +2823,7 @@ fn generate_seeds_with_mode(
                         band_width: _opt.w,
                         query_offset: seed_query_end,
                         direction: Some(crate::banded_swa::ExtensionDirection::Right),
+                        seed_len: seed.len, // For h0 calculation
                     });
                 }
             }
@@ -3054,10 +3067,29 @@ fn generate_seeds_with_mode(
             // Generate hash for tie-breaking (based on position and strand)
             let hash = hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 }));
 
-            // Generate MD tag from CIGAR (simplified for multi-seed)
-            // TODO: Properly combine aligned sequences from best seed's LEFT+RIGHT extensions
-            let md_tag = {
-                // Fallback: generate simple MD tag from CIGAR
+            // Generate MD tag by comparing actual reference and query sequences
+            let md_tag = if !pac_data.is_empty() {
+                // Calculate reference length from CIGAR (M and D consume reference)
+                let ref_len: i32 = cigar_for_alignment
+                    .iter()
+                    .filter_map(|&(op, len)| match op as char {
+                        'M' | 'D' => Some(len),
+                        _ => None,
+                    })
+                    .sum();
+
+                // Extract reference sequence for aligned region
+                let ref_start = adjusted_ref_start as i64;
+                let ref_end = ref_start + ref_len as i64;
+                let ref_aligned = bwa_idx.bns.bns_get_seq(&pac_data, ref_start, ref_end);
+
+                // Extract query sequence for aligned region (already in 2-bit encoding)
+                let query_aligned = &full_query[query_start as usize..query_end as usize];
+
+                // Generate MD tag by comparing sequences
+                Alignment::generate_md_tag(&ref_aligned, query_aligned, &cigar_for_alignment)
+            } else {
+                // Fallback if PAC file not available: simple MD tag from CIGAR
                 let match_len: i32 = cigar_for_alignment
                     .iter()
                     .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
@@ -3937,6 +3969,8 @@ mod tests {
                 target: target1.clone(),
                 band_width: 10,
                 query_offset: 0, // Test: align from start
+                direction: None, // Legacy test mode
+                seed_len: 10, // Dummy value for test
             },
             super::AlignmentJob {
                 seed_idx: 1,
@@ -3944,6 +3978,8 @@ mod tests {
                 target: target2.clone(),
                 band_width: 10,
                 query_offset: 0, // Test: align from start
+                direction: None, // Legacy test mode
+                seed_len: 10, // Dummy value for test
             },
         ];
 
@@ -4016,7 +4052,9 @@ mod tests {
         let query_seq = b"ACGTACGTACGT"; // 12bp
         let query_qual = "IIIIIIIIIIII";
 
-        let alignments = super::generate_seeds(&bwa_idx, query_name, query_seq, query_qual, &opt);
+        // Test doesn't need real MD tags, use empty pac_data
+        let pac_data: &[u8] = &[];
+        let alignments = super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt);
 
         assert!(
             !alignments.is_empty(),
