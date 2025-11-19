@@ -40,6 +40,42 @@ pub struct EhT {
     pub e: i32, // E score (gap in target)
 }
 
+/// Extension direction for seed extension
+/// Matches C++ bwa-mem2 LEFT/RIGHT extension model (bwamem.cpp:2229-2418)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionDirection {
+    /// LEFT extension: seed start → query position 0 (5' direction)
+    /// Sequences are reversed before alignment, pen_clip5 applied
+    Left,
+    /// RIGHT extension: seed end → query end (3' direction)
+    /// Sequences aligned forward, pen_clip3 applied
+    Right,
+}
+
+/// Result from directional extension alignment
+/// Contains both local and global alignment scores for clipping penalty decision
+#[derive(Debug, Clone)]
+pub struct ExtensionResult {
+    /// Best local alignment score (may terminate early via Z-drop)
+    pub local_score: i32,
+    /// Global alignment score (score at boundary: qb=0 for left, qe=qlen for right)
+    pub global_score: i32,
+    /// Query bases extended in local alignment
+    pub query_ext_len: i32,
+    /// Target bases extended in local alignment
+    pub target_ext_len: i32,
+    /// Target bases extended in global alignment
+    pub global_target_len: i32,
+    /// Should soft-clip this extension? (based on clipping penalty decision)
+    pub should_clip: bool,
+    /// CIGAR operations for this extension (already reversed if LEFT)
+    pub cigar: Vec<(u8, i32)>,
+    /// Reference aligned sequence
+    pub ref_aligned: Vec<u8>,
+    /// Query aligned sequence
+    pub query_aligned: Vec<u8>,
+}
+
 // Constants
 const DEFAULT_AMBIG: i8 = -1;
 
@@ -545,6 +581,94 @@ impl BandedPairWiseSW {
         };
 
         (out_score, final_cigar, ref_aligned, query_aligned)
+    }
+
+    /// Directional Smith-Waterman alignment for left/right seed extensions
+    /// Matches C++ bwa-mem2 separate LEFT/RIGHT extension model (bwamem.cpp:2229-2418)
+    ///
+    /// # Arguments
+    /// * `direction` - LEFT (5' → seed, reversed) or RIGHT (seed → 3', forward)
+    /// * Other args same as scalar_banded_swa
+    ///
+    /// # Returns
+    /// ExtensionResult with both local and global scores for clipping penalty decision
+    pub fn scalar_banded_swa_directional(
+        &self,
+        direction: ExtensionDirection,
+        qlen: i32,
+        query: &[u8],
+        tlen: i32,
+        target: &[u8],
+        w: i32,
+        h0: i32,
+    ) -> ExtensionResult {
+        // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
+        let (query_to_align, target_to_align) = if direction == ExtensionDirection::Left {
+            (reverse_sequence(query), reverse_sequence(target))
+        } else {
+            (query.to_vec(), target.to_vec())
+        };
+
+        // Run standard Smith-Waterman on potentially reversed sequences
+        let (out_score, cigar, ref_aligned, query_aligned) =
+            self.scalar_banded_swa(qlen, &query_to_align, tlen, &target_to_align, w, h0);
+
+        // For LEFT extension: reverse CIGAR back to forward orientation
+        let final_cigar = if direction == ExtensionDirection::Left {
+            reverse_cigar(&cigar)
+        } else {
+            cigar
+        };
+
+        // Apply clipping penalty decision
+        let clipping_penalty = match direction {
+            ExtensionDirection::Left => self.pen_clip5,
+            ExtensionDirection::Right => self.pen_clip3,
+        };
+
+        // Calculate extension lengths from CIGAR
+        let query_ext_len: i32 = final_cigar
+            .iter()
+            .filter_map(|&(op, len)| match op as char {
+                'M' | 'I' | 'S' => Some(len),
+                _ => None,
+            })
+            .sum();
+
+        let target_ext_len: i32 = final_cigar
+            .iter()
+            .filter_map(|&(op, len)| match op as char {
+                'M' | 'D' => Some(len),
+                _ => None,
+            })
+            .sum();
+
+        // Determine if we should clip based on clipping penalty
+        // C++ logic (bwamem.cpp:2498, 2715): if (gscore <= 0 || gscore <= score - pen_clip)
+        let should_clip = out_score.global_score <= 0
+            || out_score.global_score <= (out_score.score - clipping_penalty);
+
+        log::debug!(
+            "{:?} extension: local_score={}, global_score={}, pen_clip={}, threshold={}, should_clip={}",
+            direction,
+            out_score.score,
+            out_score.global_score,
+            clipping_penalty,
+            out_score.score - clipping_penalty,
+            should_clip
+        );
+
+        ExtensionResult {
+            local_score: out_score.score,
+            global_score: out_score.global_score,
+            query_ext_len,
+            target_ext_len,
+            global_target_len: out_score.gtarget_end_pos,
+            should_clip,
+            cigar: final_cigar,
+            ref_aligned,
+            query_aligned,
+        }
     }
 
     /// Batched SIMD Smith-Waterman alignment for up to 16 alignments in parallel
@@ -1154,6 +1278,54 @@ impl BandedPairWiseSW {
             SimdEngineType::Engine128 => self.simd_banded_swa_batch16_with_cigar(batch),
         }
     }
+}
+
+// ============================================================================
+// Helper Functions for Separate Left/Right Extensions
+// ============================================================================
+
+/// Reverse a sequence for left extension alignment
+/// C++ reference: bwamem.cpp:2278 reverses query for left extension
+#[inline]
+fn reverse_sequence(seq: &[u8]) -> Vec<u8> {
+    seq.iter().copied().rev().collect()
+}
+
+/// Reverse a CIGAR string after left extension alignment
+/// When we align reversed sequences, the CIGAR is also reversed
+/// This function reverses it back to the forward orientation
+#[inline]
+fn reverse_cigar(cigar: &[(u8, i32)]) -> Vec<(u8, i32)> {
+    cigar.iter().copied().rev().collect()
+}
+
+/// Merge consecutive identical CIGAR operations
+/// E.g., [(M, 10), (M, 5)] → [(M, 15)]
+#[inline]
+fn merge_cigar_operations(cigar: Vec<(u8, i32)>) -> Vec<(u8, i32)> {
+    if cigar.is_empty() {
+        return cigar;
+    }
+
+    let mut merged = Vec::with_capacity(cigar.len());
+    let mut current_op = cigar[0].0;
+    let mut current_len = cigar[0].1;
+
+    for &(op, len) in &cigar[1..] {
+        if op == current_op {
+            // Same operation, merge
+            current_len += len;
+        } else {
+            // Different operation, push current and start new
+            merged.push((current_op, current_len));
+            current_op = op;
+            current_len = len;
+        }
+    }
+
+    // Push the last operation
+    merged.push((current_op, current_len));
+    merged
 }
 
 #[cfg(test)]
