@@ -8,8 +8,9 @@ fn test_soft_clipping_at_end() {
     // Regression test for Session 30 bug: missing soft clipping in CIGAR
     // Query: 10 bases, but only first 5 match the target
     // Expected CIGAR: Should include soft clipping at the end
+    // NOTE: Using pen_clip5=0, pen_clip3=0 to not penalize clipping (Session 16 added these)
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 0, 0, mat, 1, 4);
 
     let query = vec![0u8, 1, 2, 3, 0, 0, 0, 0, 0, 0]; // ACGTAAAAAA
     let target = vec![0u8, 1, 2, 3]; // ACGT (only matches first 4 bases)
@@ -44,7 +45,7 @@ fn test_soft_clipping_at_beginning() {
     // Query: 10 bases where only middle section aligns well
     // Local alignment may not extend to the very start, leaving unaligned bases
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
     // Query has mismatches at start, then matches
     let query = vec![3u8, 3, 3, 3, 3, 0, 1, 2, 3]; // TTTTTACGT
@@ -72,8 +73,9 @@ fn test_soft_clipping_at_beginning() {
 fn test_soft_clipping_both_ends() {
     // Query: 15 bases, but only middle 5 match the target
     // Expected CIGAR: Should include soft clipping on both ends
+    // NOTE: Using pen_clip5=0, pen_clip3=0 to not penalize clipping (Session 16 added these)
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 0, 0, mat, 1, 4);
 
     // Query: TTTTT ACGT AAAAA (mismatches on both ends)
     let query = vec![3u8, 3, 3, 3, 3, 0, 1, 2, 3, 0, 0, 0, 0, 0];
@@ -96,7 +98,7 @@ fn test_soft_clipping_both_ends() {
 fn test_no_soft_clipping_for_full_alignment() {
     // Query fully aligns to target - no soft clipping needed
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
     let query = vec![0u8, 1, 2, 3]; // ACGT
     let target = vec![0u8, 1, 2, 3]; // ACGT (perfect match)
