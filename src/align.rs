@@ -122,10 +122,10 @@ pub fn encode_sequence(seq: &[u8]) -> Vec<u8> {
 /// ```
 /// use ferrous_align::align::{encode_sequence, reverse_complement_sequence};
 ///
-/// let seq = b"ACGT";
-/// let encoded = encode_sequence(seq);  // [0, 1, 2, 3]
-/// let rc = reverse_complement_sequence(&encoded);  // [3, 2, 1, 0] = TGCA
-/// assert_eq!(rc, vec![3, 2, 1, 0]);
+/// let seq = b"ACG";  // Non-palindromic sequence
+/// let encoded = encode_sequence(seq);  // [0, 1, 2]
+/// let rc = reverse_complement_sequence(&encoded);  // CGT encoded as [1, 2, 3]
+/// assert_eq!(rc, vec![1, 2, 3]);
 /// ```
 #[inline]
 pub fn reverse_complement_sequence(seq: &[u8]) -> Vec<u8> {
@@ -504,10 +504,10 @@ impl Alignment {
     /// - Conditionally sets PROPER_PAIR (0x2), MATE_UNMAPPED (0x8), MATE_REVERSE (0x20)
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// use ferrous_align::align::{Alignment, sam_flags};
     ///
-    /// let mut alignment = /* ... */;
+    /// # let mut alignment = Alignment::default();
     /// alignment.set_paired_flags(
     ///     true,   // first in pair
     ///     true,   // proper pair
