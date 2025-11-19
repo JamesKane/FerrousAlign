@@ -296,6 +296,36 @@ impl Alignment {
             .sum()
     }
 
+    /// Calculate NM tag (edit distance) from alignment score
+    /// This is a better approximation than calculate_edit_distance() since it
+    /// estimates mismatches from the score, not just counting indels.
+    ///
+    /// Formula: NM = indels + estimated_mismatches
+    /// Where: estimated_mismatches ≈ (perfect_score - actual_score) / mismatch_penalty
+    ///        perfect_score = query_length * match_score (1)
+    ///        mismatch_penalty = match_score (1) + mismatch_cost (4) = 5
+    ///
+    /// This will be replaced with exact NM calculation once MD tag is implemented.
+    pub fn calculate_nm_from_score(&self) -> i32 {
+        // Count indels from CIGAR
+        let indels: i32 = self
+            .cigar
+            .iter()
+            .filter_map(|&(op, len)| match op as char {
+                'I' | 'D' => Some(len),
+                _ => None,
+            })
+            .sum();
+
+        // Estimate mismatches from score difference
+        let query_len = self.query_length();
+        let perfect_score = query_len * 1; // Match score = 1
+        let score_diff = (perfect_score - self.score).max(0); // Clamp to non-negative
+        let estimated_mismatches = (score_diff / 5).max(0); // Match(1) + Mismatch(4) = 5 penalty
+
+        indels + estimated_mismatches
+    }
+
     /// Generate XA tag entry for this alignment (alternative alignment format)
     /// Format: RNAME,STRAND+POS,CIGAR,NM
     /// Example: chr1,+1000,50M,2
@@ -504,7 +534,10 @@ impl Alignment {
             tlen: 0,
             seq: String::from_utf8_lossy(seq).to_string(),
             qual,
-            tags: Vec::new(),
+            tags: vec![
+                ("AS".to_string(), "i:0".to_string()),
+                ("NM".to_string(), "i:0".to_string()),
+            ],
             // Internal fields - default for unmapped
             query_start: 0,
             query_end: seq.len() as i32,
@@ -967,6 +1000,17 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
         } else {
             // Secondary alignment: MAPQ = 0
             alignments[i].mapq = 0;
+        }
+    }
+
+    // Add XS tags (suboptimal alignment score) to primary alignments
+    // XS should only be present if there's a secondary alignment
+    for i in 0..alignments.len() {
+        if alignments[i].flag & 0x100 == 0 && sub_scores[i] > 0 {
+            // Primary alignment with a suboptimal score
+            alignments[i]
+                .tags
+                .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
         }
     }
 }
@@ -2391,6 +2435,28 @@ fn generate_seeds_with_mode(
         // Generate hash for tie-breaking (based on position and strand)
         let hash = hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 }));
 
+        // Calculate NM tag (edit distance) from score and CIGAR
+        // Count indels from CIGAR
+        let indels: i32 = cigar_for_alignment
+            .iter()
+            .filter_map(|&(op, len)| match op as char {
+                'I' | 'D' => Some(len),
+                _ => None,
+            })
+            .sum();
+        // Estimate mismatches from score
+        let aligned_query_len: i32 = cigar_for_alignment
+            .iter()
+            .filter_map(|&(op, len)| match op as char {
+                'M' | 'I' | 'S' | '=' | 'X' => Some(len),
+                _ => None,
+            })
+            .sum();
+        let perfect_score = aligned_query_len;
+        let score_diff = (perfect_score - score).max(0);
+        let estimated_mismatches = (score_diff / 5).max(0);
+        let nm = indels + estimated_mismatches;
+
         alignments.push(Alignment {
             query_name: query_name.to_string(),
             flag: if chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
@@ -2405,7 +2471,10 @@ fn generate_seeds_with_mode(
             tlen: 0,
             seq: String::from_utf8_lossy(query_seq).to_string(),
             qual: query_qual.to_string(),
-            tags: Vec::new(),
+            tags: vec![
+                ("AS".to_string(), format!("i:{}", score)),
+                ("NM".to_string(), format!("i:{}", nm)),
+            ],
             // Internal fields for alignment selection
             query_start,
             query_end,
@@ -2519,7 +2588,10 @@ fn generate_seeds_with_mode(
             tlen: 0,
             seq: String::from_utf8_lossy(query_seq).to_string(),
             qual: query_qual.to_string(),
-            tags: Vec::new(),
+            tags: vec![
+                ("AS".to_string(), "i:0".to_string()),
+                ("NM".to_string(), "i:0".to_string()),
+            ],
             // Internal fields (not used for unmapped reads)
             query_start: 0,
             query_end: 0,
