@@ -36,7 +36,7 @@ For production workloads, please use the stable [bwa-mem2](https://github.com/bw
 
 - ⚠️ **Index Compatibility**: Can build indices but **NOT YET VALIDATED** for production use
 - ⚠️ **Algorithm Refinements**: Some advanced features partially implemented (re-seeding, chain dropping)
-- ⚠️ **Performance**: Currently 85-95% of C++ bwa-mem2 speed
+- ⚠️ **Performance**: Poor multi-threading performance compared to C++ bwa-mem2
 - ⚠️ **Validation**: Output not fully tested against real-world datasets
 - ⚠️ **GATK4 Compatibility**: SAM tags implemented (AS, XS, NM, MD, XA) but CIGAR differences remain
   - See [GATK4_COMPATIBILITY.md](GATK4_COMPATIBILITY.md) for details
@@ -307,7 +307,6 @@ For developers interested in contributing or understanding the internals:
 **v2.0.0+** (Long-term)
 - [ ] GPU acceleration (Metal/CUDA/ROCm)
 - [ ] Advanced alignment algorithms
-- [ ] Cloud-native optimizations
 
 ## License
 
