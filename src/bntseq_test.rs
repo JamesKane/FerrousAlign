@@ -70,8 +70,8 @@ AGCT
 
         // // Verify ann1
         // assert_eq!(bns.annotations[0].offset, 0);
-        // assert_eq!(bns.annotations[0].len, 4);
-        // assert_eq!(bns.annotations[0].n_ambs, 0);
+        // assert_eq!(bns.annotations[0].sequence_length, 4);
+        // assert_eq!(bns.annotations[0].ambiguous_base_count, 0);
         // assert_eq!(bns.annotations[0].name, "seq1");
         // assert_eq!(bns.annotations[0].anno, "desc1");
 
@@ -113,8 +113,8 @@ AGCT
 
         // Verify ann1
         assert_eq!(bns.annotations[0].offset, 0);
-        assert_eq!(bns.annotations[0].len, 5); // Original sequence length including ambiguous
-        assert_eq!(bns.annotations[0].n_ambs, 2); // N and N
+        assert_eq!(bns.annotations[0].sequence_length, 5); // Original sequence length including ambiguous
+        assert_eq!(bns.annotations[0].ambiguous_base_count, 2); // N and N
 
         // Verify ambs - offsets refer to positions in the FULL sequence (including replaced N's)
         assert_eq!(bns.ambiguous_regions[0].offset, 0); // First 'N'
@@ -202,12 +202,12 @@ AGCT
                 restored_bns.annotations[i].offset
             );
             assert_eq!(
-                original_bns.annotations[i].len,
-                restored_bns.annotations[i].len
+                original_bns.annotations[i].sequence_length,
+                restored_bns.annotations[i].sequence_length
             );
             assert_eq!(
-                original_bns.annotations[i].n_ambs,
-                restored_bns.annotations[i].n_ambs
+                original_bns.annotations[i].ambiguous_base_count,
+                restored_bns.annotations[i].ambiguous_base_count
             );
             assert_eq!(
                 original_bns.annotations[i].name,

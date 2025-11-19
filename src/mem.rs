@@ -52,7 +52,7 @@ pub fn main_mem(
 
     // Write @SQ lines for reference sequences
     for ann in &bwa_idx.bns.annotations {
-        if let Err(e) = writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.len) {
+        if let Err(e) = writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length) {
             log::error!("Error writing SAM header: {}", e);
             return;
         }

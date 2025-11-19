@@ -16,14 +16,25 @@ pub const NST_NT4_TABLE: [u8; 256] = [
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 ];
 
+/// Per-sequence annotation
+/// Corresponds to C++ bntann1_t (bntseq.h:41-48)
+///
+/// Stores metadata for a single reference sequence (e.g., chromosome).
 #[derive(Debug)]
 pub struct BntAnn1 {
+    /// Offset in the concatenated packed sequence
     pub offset: u64,
-    pub len: i32,
-    pub n_ambs: i32,
-    pub gi: u32,
-    pub is_alt: i32,
+    /// Length of this sequence
+    pub sequence_length: i32,
+    /// Number of ambiguous bases (N) in this sequence
+    pub ambiguous_base_count: i32,
+    /// GenInfo identifier (GI number from NCBI)
+    pub geninfo_identifier: u32,
+    /// Whether this is an alternate locus (0 = primary, non-zero = alternate)
+    pub is_alternate_locus: i32,
+    /// Sequence name (e.g., "chr1", "chrM")
     pub name: String,
+    /// Optional annotation/comment from FASTA header
     pub anno: String,
 }
 
@@ -100,10 +111,10 @@ impl BntSeq {
             let mut ann = BntAnn1 {
                 // Create a new BntAnn1 for each sequence
                 offset: packed_base_count,
-                len: kseq.seq.len() as i32,
-                n_ambs: 0, // Will be updated later
-                gi: 0,
-                is_alt: 0,
+                sequence_length: kseq.seq.len() as i32,
+                ambiguous_base_count: 0, // Will be updated later
+                geninfo_identifier: 0,
+                is_alternate_locus: 0,
                 name: kseq.name.clone(),
                 anno: kseq.comment.clone(),
             };
@@ -147,7 +158,7 @@ impl BntSeq {
                 packed_base_count += 1;
                 pac_len += 1;
             }
-            ann.n_ambs = n_ambs_in_seq; // Update n_ambs for the current annotation
+            ann.ambiguous_base_count = n_ambs_in_seq; // Update n_ambs for the current annotation
 
             bns.annotations.push(ann); // Push the completed annotation
             seq_id += 1;
@@ -198,11 +209,15 @@ impl BntSeq {
         )?;
         for p in &self.annotations {
             if p.anno.is_empty() || p.anno == "(null)" {
-                writeln!(ann_file, "{} {}", p.gi, p.name)?;
+                writeln!(ann_file, "{} {}", p.geninfo_identifier, p.name)?;
             } else {
-                writeln!(ann_file, "{} {} {}", p.gi, p.name, p.anno)?;
+                writeln!(ann_file, "{} {} {}", p.geninfo_identifier, p.name, p.anno)?;
             }
-            writeln!(ann_file, "{} {} {}", p.offset, p.len, p.n_ambs)?;
+            writeln!(
+                ann_file,
+                "{} {} {}",
+                p.offset, p.sequence_length, p.ambiguous_base_count
+            )?;
         }
         ann_file.flush()?;
 
@@ -282,19 +297,19 @@ impl BntSeq {
             let offset = offset_len_ambs_parts[0].parse().map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "Invalid offset in .ann")
             })?;
-            let len = offset_len_ambs_parts[1]
+            let sequence_length = offset_len_ambs_parts[1]
                 .parse()
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid len in .ann"))?;
-            let n_ambs = offset_len_ambs_parts[2].parse().map_err(|_| {
+            let ambiguous_base_count = offset_len_ambs_parts[2].parse().map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "Invalid n_ambs in .ann")
             })?;
 
             bns.annotations.push(BntAnn1 {
                 offset,
-                len,
-                n_ambs,
-                gi,
-                is_alt: 0, // This is not stored in .ann, default to 0
+                sequence_length,
+                ambiguous_base_count,
+                geninfo_identifier: gi,
+                is_alternate_locus: 0, // This is not stored in .ann, default to 0
                 name,
                 anno,
             });
@@ -557,7 +572,7 @@ impl BntSeq {
 
         // Get reference boundaries
         let mut far_beg = self.annotations[rid as usize].offset as i64;
-        let mut far_end = far_beg + self.annotations[rid as usize].len as i64;
+        let mut far_end = far_beg + self.annotations[rid as usize].sequence_length as i64;
 
         if is_rev {
             // Flip to reverse strand
