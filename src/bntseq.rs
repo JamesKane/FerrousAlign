@@ -400,7 +400,8 @@ impl BntSeq {
         if start >= self.packed_sequence_length {
             // Reverse complement strand: convert to forward coordinates
             // C++ formula: beg_f = (l_pac<<1) - 1 - end, end_f = (l_pac<<1) - 1 - beg
-            let beg_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(end - 1);
+            // CRITICAL: Must match C++ exactly - was using (end - 1) which added +1 error
+            let beg_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(end);
             let end_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(start);
 
             log::debug!(

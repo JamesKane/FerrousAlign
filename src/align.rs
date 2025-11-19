@@ -1,11 +1,24 @@
 // bwa-mem2-rust/src/align.rs
 
 // Import BwaIndex and MemOpt
-use crate::banded_swa::BandedPairWiseSW;
+use crate::banded_swa::{BandedPairWiseSW, merge_cigar_operations};
 use crate::fm_index::{CP_SHIFT, CpOcc, backward_ext, forward_ext, get_occ};
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::utils::hash_64;
+
+/// Calculate maximum gap size for a given query length
+/// Matches C++ bwamem.cpp:66 cal_max_gap()
+#[inline]
+fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
+    let l_del = ((qlen * opt.a as i32 - opt.o_del as i32) as f64 / opt.e_del as f64 + 1.0) as i32;
+    let l_ins = ((qlen * opt.a as i32 - opt.o_ins as i32) as f64 / opt.e_ins as f64 + 1.0) as i32;
+
+    let l = if l_del > l_ins { l_del } else { l_ins };
+    let l = if l > 1 { l } else { 1 };
+
+    if l < (opt.w << 1) { l } else { opt.w << 1 }
+}
 
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]
@@ -1177,6 +1190,10 @@ pub(crate) struct AlignmentJob {
     // C++ STRATEGY: Track query offset for seed-boundary-based alignment
     // Only align seed-covered region, soft-clip the rest like bwa-mem2
     pub query_offset: i32, // Offset of query in full read (for soft-clipping)
+    /// Extension direction: LEFT (seed → qb=0) or RIGHT (seed → qe=qlen)
+    /// Used for separate left/right extensions matching C++ bwa-mem2
+    /// None = legacy single-pass mode (deprecated)
+    pub direction: Option<crate::banded_swa::ExtensionDirection>,
 }
 
 /// Estimate divergence likelihood based on sequence length mismatch
@@ -1537,14 +1554,46 @@ pub(crate) fn execute_scalar_alignments(
                 idx, qlen, tlen, job.band_width, query_str
             );
 
-            let (score_out, cigar, ref_aligned, query_aligned) = sw_params.scalar_banded_swa(
-                qlen,
-                &job.query,
-                tlen,
-                &job.target,
-                job.band_width,
-                0, // h0
-            );
+            // Use directional extension if specified, otherwise use standard SW
+            let (score, cigar, ref_aligned, query_aligned) = if let Some(direction) = job.direction {
+                // Use directional extension (LEFT or RIGHT)
+                let ext_result = sw_params.scalar_banded_swa_directional(
+                    direction,
+                    qlen,
+                    &job.query,
+                    tlen,
+                    &job.target,
+                    job.band_width,
+                    0, // h0
+                );
+
+                log::debug!(
+                    "Directional alignment {}: direction={:?}, local_score={}, global_score={}, should_clip={}",
+                    idx,
+                    direction,
+                    ext_result.local_score,
+                    ext_result.global_score,
+                    ext_result.should_clip
+                );
+
+                (
+                    ext_result.local_score,
+                    ext_result.cigar,
+                    ext_result.ref_aligned,
+                    ext_result.query_aligned,
+                )
+            } else {
+                // Use standard SW for backward compatibility
+                let (score_out, cigar, ref_aligned, query_aligned) = sw_params.scalar_banded_swa(
+                    qlen,
+                    &job.query,
+                    tlen,
+                    &job.target,
+                    job.band_width,
+                    0, // h0
+                );
+                (score_out.score, cigar, ref_aligned, query_aligned)
+            };
 
             // Detect pathological CIGARs (excessive insertions/deletions)
             let total_insertions: i32 = cigar.iter()
@@ -1565,7 +1614,7 @@ pub(crate) fn execute_scalar_alignments(
                     qlen,
                     tlen,
                     job.band_width,
-                    score_out.score,
+                    score,
                     total_insertions,
                     total_deletions,
                     cigar,
@@ -1581,13 +1630,13 @@ pub(crate) fn execute_scalar_alignments(
                     idx,
                     qlen,
                     tlen,
-                    score_out.score,
+                    score,
                     cigar.len(),
                     cigar.first().map(|&(op, len)| (op as char, len))
                 );
             }
 
-            (score_out.score, cigar, ref_aligned, query_aligned)
+            (score, cigar, ref_aligned, query_aligned)
         })
         .collect()
 }
@@ -2277,19 +2326,20 @@ fn generate_seeds_with_mode(
             &smem_query_bases[..10.min(smem_query_bases.len())]
         );
 
-        // Convert positions in reverse complement region to forward strand
-        // BWT contains both forward [0, l_pac) and reverse [l_pac, 2*l_pac)
-        if ref_pos >= bwa_idx.bns.packed_sequence_length {
-            ref_pos = (bwa_idx.bns.packed_sequence_length << 1) - 1 - ref_pos;
-            is_rev = !is_rev; // Flip strand orientation
-            log::debug!(
-                "{}: SMEM {}: Was in RC region, converted ref_pos to {}, is_rev={}",
-                query_name,
-                idx,
-                ref_pos,
-                is_rev
-            );
-        }
+        // CRITICAL: Keep seed positions in BIDIRECTIONAL coordinates
+        // C++ keeps seeds in bidirectional coords [0, 2*l_pac) and only converts at SAM output
+        // - Forward strand: ref_pos in [0, l_pac)
+        // - Reverse strand: ref_pos in [l_pac, 2*l_pac)
+        // get_reference_segment() handles bidirectional coords automatically
+
+        log::debug!(
+            "{}: SMEM {}: Seed ref_pos={} (bidirectional), is_rev={}, l_pac={}",
+            query_name,
+            idx,
+            ref_pos,
+            is_rev,
+            bwa_idx.bns.packed_sequence_length
+        );
 
         // Diagnostic validation removed - was causing 79,000% performance regression
         // The SMEM validation loop with log::info/warn was being called millions of times
@@ -2301,19 +2351,23 @@ fn generate_seeds_with_mode(
 
         let seed = Seed {
             query_pos,
-            ref_pos,
-            len: smem.query_end - smem.query_start + 1,
+            ref_pos,  // Keep bidirectional coordinates!
+            // CRITICAL: smem.query_end is EXCLUSIVE (see line 187), so len = end - start, NOT +1
+            // C++ bwamem uses qend = qbeg + len (exclusive end), matching this calculation
+            len: smem.query_end - smem.query_start,
             is_rev,
         };
 
-        // TRACE: Log each seed to track missing alignments
-        log::trace!(
-            "[SEED] {}: ref_pos={}, qpos={}, len={}, strand={}",
+        // DEBUG: Log each seed creation with SMEM bounds
+        log::debug!(
+            "[SEED_CREATE] {}: ref_pos={}, qpos={}, len={}, strand={}, SMEM.query=[{}, {}) (query_end is exclusive)",
             query_name,
             seed.ref_pos,
             seed.query_pos,
             seed.len,
-            if seed.is_rev { "rev" } else { "fwd" }
+            if seed.is_rev { "rev" } else { "fwd" },
+            smem.query_start,
+            smem.query_end
         );
 
         // === CHAIN-BASED ALIGNMENT STRATEGY (C++ bwa-mem2) ===
@@ -2358,85 +2412,386 @@ fn generate_seeds_with_mode(
     );
 
     // === CREATE ALIGNMENT JOBS FROM FILTERED CHAINS (C++ Strategy) ===
-    // Now create alignment jobs using chain bounds instead of per-seed bounds
-    // This matches C++ bwa-mem2 mem_reg2aln() behavior exactly
-    let mut chain_to_job_map: Vec<Option<usize>> = Vec::new(); // Map chain_idx → job_idx
+    // Create separate LEFT and RIGHT extension jobs per chain
+    // This matches C++ bwa-mem2 separate extension model (bwamem.cpp:2229-2418)
+    // CRITICAL: Process ALL seeds per chain, not just one (C++ line 2206)
+
+    // Track left and right job indices for each seed in a chain
+    #[derive(Debug, Clone)]
+    struct SeedJobMapping {
+        seed_idx: usize,                    // Index into chain.seeds
+        left_job_idx: Option<usize>,        // LEFT extension job index
+        right_job_idx: Option<usize>,       // RIGHT extension job index
+    }
+
+    #[derive(Debug, Clone)]
+    struct ChainJobMapping {
+        seed_jobs: Vec<SeedJobMapping>,     // Multiple seeds per chain
+    }
+
+    let mut chain_to_job_map: Vec<ChainJobMapping> = Vec::new();
 
     for (chain_idx, chain) in filtered_chains.iter().enumerate() {
         if chain.seeds.is_empty() {
-            chain_to_job_map.push(None);
+            chain_to_job_map.push(ChainJobMapping {
+                seed_jobs: Vec::new(),
+            });
             continue;
         }
 
-        // Use chain bounds (covers all seeds in chain)
-        let qb = chain.query_start;
-        let qe = chain.query_end;
-        let bounded_query_len = (qe - qb) as usize;
-
-        log::debug!(
-            "{}: Chain {}: Creating alignment job for bounds=[{}, {}) len={}",
-            query_name,
-            chain_idx,
-            qb,
-            qe,
-            bounded_query_len
-        );
-
-        // Extract bounded query using chain bounds
+        // CRITICAL: Use correct query orientation based on chain strand
+        // For reverse-strand chains: use RC query (matches reference in RC region)
+        // For forward-strand chains: use forward query (matches reference in forward region)
+        // C++ bwamem.cpp:2116 uses seq_[l].seq, but this is context-dependent
         let full_query = if chain.is_rev {
             &query_segment_encoded_rc
         } else {
             &query_segment_encoded
         };
+        let query_len = full_query.len() as i32;
 
-        let bounded_query: Vec<u8> = full_query[qb as usize..qe as usize].to_vec();
+        log::debug!(
+            "{}: Chain {}: is_rev={}, query_len={}, full_query[0..10]={:?}",
+            query_name,
+            chain_idx,
+            chain.is_rev,
+            query_len,
+            full_query.iter().take(10).copied().collect::<Vec<u8>>()
+        );
 
-        // Calculate reference position for bounded query
-        // Use first seed's ref_pos and adjust for query offset
-        let first_seed_idx = chain.seeds[0];
-        let first_seed = &seeds[first_seed_idx];
+        // Calculate max possible reference span for this chain (C++ bwamem.cpp:2144-2166)
+        // This covers all seeds with margins for gaps
+        let l_pac = bwa_idx.bns.packed_sequence_length;
+        let mut rmax_0 = l_pac << 1; // Start with max possible
+        let mut rmax_1 = 0u64;       // Start with min possible
 
-        let ref_start_for_bounded = if first_seed.query_pos < qb {
-            first_seed.ref_pos
-        } else {
-            let offset = first_seed.query_pos - qb;
-            if offset as u64 > first_seed.ref_pos {
+        for &seed_idx in &chain.seeds {
+            let seed = &seeds[seed_idx];
+
+            // Calculate reference bounds with gap margins
+            // b = t->rbeg - (t->qbeg + cal_max_gap(opt, t->qbeg))
+            let left_margin = seed.query_pos + cal_max_gap(_opt, seed.query_pos);
+            let b = if left_margin as u64 > seed.ref_pos {
                 0
             } else {
-                first_seed.ref_pos - offset as u64
+                seed.ref_pos - left_margin as u64
+            };
+
+            // e = t->rbeg + t->len + (remaining_query + cal_max_gap(opt, remaining_query))
+            let remaining_query = query_len - seed.query_pos - seed.len;
+            let right_margin = remaining_query + cal_max_gap(_opt, remaining_query);
+            let e = seed.ref_pos + seed.len as u64 + right_margin as u64;
+
+            // Take min of all b values, max of all e values
+            rmax_0 = rmax_0.min(b);
+            rmax_1 = rmax_1.max(e);
+        }
+
+        // Clamp to valid range
+        rmax_0 = rmax_0.max(0);
+        rmax_1 = rmax_1.min(l_pac << 1);
+
+        // If span crosses l_pac boundary, clamp to one side (C++ lines 2162-2166)
+        if rmax_0 < l_pac && l_pac < rmax_1 {
+            let first_seed = &seeds[chain.seeds[0]];
+            if first_seed.ref_pos < l_pac {
+                rmax_1 = l_pac;
+            } else {
+                rmax_0 = l_pac;
             }
-        };
+        }
 
-        // Get reference segment
-        let ref_segment_len = (bounded_query_len as u64 + 2 * _opt.w as u64)
-            .min(bwa_idx.bns.packed_sequence_length - ref_start_for_bounded);
+        log::debug!(
+            "{}: Chain {}: rmax=[{}, {}) span={} (l_pac={})",
+            query_name,
+            chain_idx,
+            rmax_0,
+            rmax_1,
+            rmax_1 - rmax_0,
+            l_pac
+        );
 
-        match bwa_idx
-            .bns
-            .get_reference_segment(ref_start_for_bounded, ref_segment_len)
-        {
-            Ok(target_segment) => {
-                let job_idx = alignment_jobs.len();
-                chain_to_job_map.push(Some(job_idx));
-
-                alignment_jobs.push(AlignmentJob {
-                    seed_idx: chain_idx, // Repurpose as chain_idx
-                    query: bounded_query,
-                    target: target_segment,
-                    band_width: _opt.w,
-                    query_offset: qb, // Use chain qb as offset
-                });
-            }
+        // Fetch single large reference buffer covering entire chain
+        let rseq = match bwa_idx.bns.get_reference_segment(rmax_0, rmax_1 - rmax_0) {
+            Ok(seq) => seq,
             Err(e) => {
                 log::error!(
-                    "{}: Chain {}: Error getting reference segment: {}",
+                    "{}: Chain {}: Error fetching reference segment: {}",
                     query_name,
                     chain_idx,
                     e
                 );
-                chain_to_job_map.push(None);
+                chain_to_job_map.push(ChainJobMapping {
+                    seed_jobs: Vec::new(),
+                });
+                continue;
             }
-        }
+        };
+
+        // CRITICAL: Iterate through ALL seeds in REVERSE order (C++ bwamem.cpp:2206)
+        // C++: for (int k=c->n-1; k >= 0; k--) { s = &c->seeds[(uint32_t)srt[k]]; ... }
+        // Each seed gets its own LEFT/RIGHT extension pair
+        let mut seed_job_mappings = Vec::new();
+
+        log::debug!(
+            "{}: Chain {}: Processing {} seeds (rmax=[{}, {}) span={}, l_pac={})",
+            query_name,
+            chain_idx,
+            chain.seeds.len(),
+            rmax_0,
+            rmax_1,
+            rmax_1 - rmax_0,
+            bwa_idx.bns.packed_sequence_length
+        );
+
+        // Show first 10 bases of rseq buffer
+        let rseq_first_10: Vec<u8> = rseq.iter().take(10).copied().collect();
+        log::debug!(
+            "{}: Chain {}: rseq[0..10]={:?}",
+            query_name,
+            chain_idx,
+            rseq_first_10
+        );
+
+        // Iterate seeds in reverse order (matching C++)
+        for &seed_chain_idx in chain.seeds.iter().rev() {
+            let seed = &seeds[seed_chain_idx];
+
+            let seed_query_start = seed.query_pos;
+            let seed_query_end = seed.query_pos + seed.len;
+
+            log::debug!(
+                "{}: Chain {}: Processing seed {} - query_pos={}, len={}, ref_pos={} (bidirectional)",
+                query_name,
+                chain_idx,
+                seed_chain_idx,
+                seed_query_start,
+                seed.len,
+                seed.ref_pos
+            );
+
+            // Verify seed matches: check if query[seed_query_start..seed_query_end] matches rseq[seed_buffer_pos..seed_buffer_pos+seed.len]
+            let seed_buffer_pos = (seed.ref_pos - rmax_0) as usize;
+            let seed_query_slice: Vec<u8> = full_query[seed_query_start as usize..seed_query_end as usize].iter().take(10.min(seed.len as usize)).copied().collect();
+            let seed_ref_slice: Vec<u8> = if seed_buffer_pos < rseq.len() && seed_buffer_pos + seed.len as usize <= rseq.len() {
+                rseq[seed_buffer_pos..seed_buffer_pos + seed.len as usize].iter().take(10.min(seed.len as usize)).copied().collect()
+            } else {
+                vec![]
+            };
+            log::debug!(
+                "{}: Chain {}: Seed {}: SEED MATCH CHECK: buffer_pos={}, query_slice[0..10]={:?}, ref_slice[0..10]={:?}",
+                query_name,
+                chain_idx,
+                seed_chain_idx,
+                seed_buffer_pos,
+                seed_query_slice,
+                seed_ref_slice
+            );
+
+            // Show seed boundary: last few bases of seed and first few bases after seed
+            let seed_end_buffer_pos = seed_buffer_pos + seed.len as usize;
+            let boundary_start = seed_end_buffer_pos.saturating_sub(5);
+            let boundary_end = (seed_end_buffer_pos + 5).min(rseq.len());
+            if boundary_start < rseq.len() {
+                let boundary_ref: Vec<u8> = rseq[boundary_start..boundary_end].to_vec();
+                log::debug!(
+                    "{}: Chain {}: Seed {}: SEED BOUNDARY: rseq[{}..{}]={:?} (pos {} is last seed base, pos {} is first RIGHT base)",
+                    query_name,
+                    chain_idx,
+                    seed_chain_idx,
+                    boundary_start,
+                    boundary_end,
+                    boundary_ref,
+                    seed_end_buffer_pos - 1,
+                    seed_end_buffer_pos
+                );
+            }
+            let query_boundary_start = seed_query_end.saturating_sub(5) as usize;
+            let query_boundary_end = ((seed_query_end + 5).min(query_len)) as usize;
+            let boundary_query: Vec<u8> = full_query[query_boundary_start..query_boundary_end].to_vec();
+            log::debug!(
+                "{}: Chain {}: Seed {}: QUERY BOUNDARY: full_query[{}..{}]={:?} (pos {} is last seed base, pos {} is first RIGHT base)",
+                query_name,
+                chain_idx,
+                seed_chain_idx,
+                query_boundary_start,
+                query_boundary_end,
+                boundary_query,
+                seed_query_end - 1,
+                seed_query_end
+            );
+
+            let mut left_job_idx = None;
+            let mut right_job_idx = None;
+
+            // --- LEFT Extension: seed start → query position 0 ---
+            if seed_query_start > 0 {
+                let left_query_len = seed_query_start as usize;
+                let left_query: Vec<u8> = full_query[0..left_query_len].to_vec();
+
+                // Index into rseq buffer (C++ bwamem.cpp:2280, 2298)
+                // tmp = s->rbeg - rmax[0];
+                // for (int64_t i = 0; i < tmp; ++i) rs[i] = rseq[tmp - 1 - i];
+                let tmp = (seed.ref_pos - rmax_0) as usize;
+
+                if tmp > 0 && tmp <= rseq.len() {
+                    // Extract rseq[0..tmp] for LEFT extension
+                    // Note: scalar_banded_swa_directional will reverse this
+                    let left_target: Vec<u8> = rseq[0..tmp].to_vec();
+
+                    left_job_idx = Some(alignment_jobs.len());
+
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: LEFT extension qlen={} tlen={} tmp={}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        left_query_len,
+                        left_target.len(),
+                        tmp
+                    );
+
+                    alignment_jobs.push(AlignmentJob {
+                        seed_idx: chain_idx,
+                        query: left_query,
+                        target: left_target,
+                        band_width: _opt.w,
+                        query_offset: 0,
+                        direction: Some(crate::banded_swa::ExtensionDirection::Left),
+                    });
+                } else {
+                    log::warn!(
+                        "{}: Chain {}: Seed {}: Invalid LEFT tmp={} (seed.ref_pos={}, rmax_0={}, rseq.len={})",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        tmp,
+                        seed.ref_pos,
+                        rmax_0,
+                        rseq.len()
+                    );
+                }
+            }
+
+            // --- RIGHT Extension: seed end → query end ---
+            if seed_query_end < query_len {
+                let right_query_start = seed_query_end as usize;
+                let right_query_len = (query_len - seed_query_end) as usize;
+
+                log::debug!(
+                    "{}: Chain {}: Seed {}: RIGHT query extraction: seed_query_start={}, seed_query_end={}, right_query_start={}, full_query.len()={}",
+                    query_name,
+                    chain_idx,
+                    seed_chain_idx,
+                    seed_query_start,
+                    seed_query_end,
+                    right_query_start,
+                    full_query.len()
+                );
+                log::debug!(
+                    "{}: Chain {}: Seed {}: RIGHT query full_query[{}..{}]={:?}",
+                    query_name,
+                    chain_idx,
+                    seed_chain_idx,
+                    right_query_start,
+                    right_query_start + 10.min(full_query.len() - right_query_start),
+                    full_query[right_query_start..].iter().take(10).copied().collect::<Vec<u8>>()
+                );
+
+                let right_query: Vec<u8> = full_query[right_query_start..].to_vec();
+
+                // Index into rseq buffer (C++ bwamem.cpp:2327, 2354)
+                // re = s->rbeg + s->len - rmax[0];
+                // sp.len1 = rmax[1] - rmax[0] - re;
+                let re = ((seed.ref_pos + seed.len as u64) - rmax_0) as usize;
+
+                if re < rseq.len() {
+                    // Extract rseq[re..] for RIGHT extension (forward direction)
+                    let right_target: Vec<u8> = rseq[re..].to_vec();
+
+                    right_job_idx = Some(alignment_jobs.len());
+
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: RIGHT extension qlen={} tlen={} buffer_idx={}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        right_query_len,
+                        right_target.len(),
+                        re
+                    );
+
+                    // DETAILED INDEXING DEBUG
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: RIGHT indexing: seed.ref_pos={}, seed.len={}, rmax_0={}, re={} (calculation: {} + {} - {} = {})",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        seed.ref_pos,
+                        seed.len,
+                        rmax_0,
+                        re,
+                        seed.ref_pos,
+                        seed.len,
+                        rmax_0,
+                        seed.ref_pos + seed.len as u64 - rmax_0
+                    );
+
+                    // Show first 10 bases of rseq at re
+                    let rseq_at_re: Vec<u8> = rseq[re..].iter().take(10).copied().collect();
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: RIGHT buffer rseq[{}..{}]: {:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        re,
+                        re + 10.min(rseq.len() - re),
+                        rseq_at_re
+                    );
+
+                    // Show first 10 bases of right_target
+                    let right_target_first_10: Vec<u8> = right_target.iter().take(10).copied().collect();
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: RIGHT right_target[0..10]: {:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        right_target_first_10
+                    );
+
+                    // Show first 10 bases of right_query
+                    let right_query_first_10: Vec<u8> = right_query.iter().take(10).copied().collect();
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: RIGHT right_query[0..10]: {:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        right_query_first_10
+                    );
+
+                    alignment_jobs.push(AlignmentJob {
+                        seed_idx: chain_idx,
+                        query: right_query,
+                        target: right_target,
+                        band_width: _opt.w,
+                        query_offset: seed_query_end,
+                        direction: Some(crate::banded_swa::ExtensionDirection::Right),
+                    });
+                }
+            }
+
+            // Store this seed's job mapping
+            seed_job_mappings.push(SeedJobMapping {
+                seed_idx: seed_chain_idx,
+                left_job_idx,
+                right_job_idx,
+            });
+        } // End of seed iteration loop
+
+        // Store all seed job mappings for this chain
+        chain_to_job_map.push(ChainJobMapping {
+            seed_jobs: seed_job_mappings,
+        });
     }
 
     log::debug!(
@@ -2489,8 +2844,8 @@ fn generate_seeds_with_mode(
     );
 
     // === MULTI-ALIGNMENT GENERATION FROM FILTERED CHAINS ===
-    // Generate one alignment per filtered chain (matching C++ bwa-mem2 behavior)
-    // Each chain represents a distinct mapping location for the read
+    // Generate multiple alignment candidates per chain (one per seed)
+    // Match C++ bwa-mem2: each seed gets LEFT+SEED+RIGHT, then select best
     let mut alignments = Vec::new();
 
     for (chain_idx, chain) in filtered_chains.iter().enumerate() {
@@ -2498,88 +2853,143 @@ fn generate_seeds_with_mode(
             continue;
         }
 
-        // Get alignment result for this chain
-        let job_idx = match chain_to_job_map[chain_idx] {
-            Some(idx) => idx,
-            None => {
-                log::warn!(
-                    "{}: Chain {} has no alignment job, skipping",
-                    query_name,
-                    chain_idx
-                );
-                continue; // Skip chains without alignment jobs
-            }
-        };
+        // Get all seed job mappings for this chain
+        let mapping = &chain_to_job_map[chain_idx];
 
-        let mut cigar_for_alignment = alignment_cigars[job_idx].clone();
-        let score = alignment_scores[job_idx];
-        let query_offset = query_offsets[job_idx]; // Same as chain.query_start
-
-        // Use first seed for reference position calculation
-        let first_seed_idx = chain.seeds[0];
-        let first_seed = &seeds[first_seed_idx];
-
-        log::debug!(
-            "{}: Chain {} (weight={}, kept={}): score={} bounds=[{}, {})",
-            query_name,
-            chain_idx,
-            chain.weight,
-            chain.kept,
-            score,
-            chain.query_start,
-            chain.query_end
-        );
-
-        // === C++ STRATEGY: Add soft-clipping like mem_reg2aln (bwamem.cpp:1783-1796) ===
-        // CIGAR from DP only covers bounded region [query_offset, query_offset + bounded_len)
-        // Add soft-clips for [0, query_offset) and [query_offset + bounded_len, query_len)
-
-        // Calculate bounded query length from CIGAR (sum of M, I, S operations)
-        let bounded_query_len: i32 = cigar_for_alignment
-            .iter()
-            .filter_map(|&(op, len)| match op as char {
-                'M' | 'I' | 'S' => Some(len),
-                _ => None,
-            })
-            .sum();
-
-        let clip5 = query_offset; // Bases before aligned region
-        let clip3 = query_len as i32 - query_offset - bounded_query_len; // Bases after aligned region
-
-        log::debug!(
-            "{}: Chain {}: Adding soft-clipping: clip5={}, clip3={} (query_offset={}, bounded_len={}, full_len={})",
-            query_name,
-            chain_idx,
-            clip5,
-            clip3,
-            query_offset,
-            bounded_query_len,
-            query_len
-        );
-
-        // Add 5' soft-clipping (like C++ bwamem.cpp:1789-1791)
-        if clip5 > 0 {
-            cigar_for_alignment.insert(0, (b'S', clip5));
-        }
-
-        // Add 3' soft-clipping (like C++ bwamem.cpp:1793-1795)
-        if clip3 > 0 {
-            cigar_for_alignment.push((b'S', clip3));
-        }
-
-        // Calculate the adjusted reference start position for bounded query alignment
-        // Need to adjust based on query_offset since we're aligning a bounded region
-        let adjusted_ref_start = if first_seed.query_pos < query_offset {
-            // Seed is before our bounded region (shouldn't happen, but handle gracefully)
-            first_seed.ref_pos
+        // Select appropriate query based on strand
+        let full_query = if chain.is_rev {
+            &query_segment_encoded_rc
         } else {
-            let offset_within_bounded = first_seed.query_pos - query_offset;
-            if offset_within_bounded as u64 > first_seed.ref_pos {
-                0
-            } else {
-                first_seed.ref_pos - offset_within_bounded as u64
-            }
+            &query_segment_encoded
         };
+        let query_len = full_query.len() as i32;
+
+        // Process ALL seeds for this chain, creating alignment candidates
+        let mut best_score = 0;
+        let mut best_alignment_data: Option<(Vec<(u8, i32)>, i32, u64, i32, i32)> = None;
+
+        log::debug!(
+            "{}: Chain {}: Processing {} seed alignments",
+            query_name,
+            chain_idx,
+            mapping.seed_jobs.len()
+        );
+
+        for seed_job in &mapping.seed_jobs {
+            let seed = &seeds[seed_job.seed_idx];
+
+            // === COMBINE LEFT + SEED + RIGHT EXTENSIONS FOR THIS SEED ===
+            let mut combined_cigar = Vec::new();
+            let mut combined_score = 0;
+            let mut alignment_start_pos = seed.ref_pos;
+            let mut query_start_aligned = 0;
+            let mut query_end_aligned = query_len;
+
+            // LEFT extension
+            if let Some(left_idx) = seed_job.left_job_idx {
+                let left_cigar = &alignment_cigars[left_idx];
+                let left_score = alignment_scores[left_idx];
+
+                log::debug!(
+                    "{}: Chain {}: Seed {}: LEFT extension score={}, CIGAR={:?}",
+                    query_name,
+                    chain_idx,
+                    seed_job.seed_idx,
+                    left_score,
+                    left_cigar
+                );
+
+                // Add left CIGAR operations
+                combined_cigar.extend(left_cigar.iter().cloned());
+                combined_score += left_score;
+
+                // Update alignment start position (move back by left extension)
+                let left_ref_len: i32 = left_cigar
+                    .iter()
+                    .filter_map(|&(op, len)| match op as char {
+                        'M' | 'D' => Some(len),
+                        _ => None,
+                    })
+                    .sum();
+                if left_ref_len as u64 <= alignment_start_pos {
+                    alignment_start_pos -= left_ref_len as u64;
+                } else {
+                    alignment_start_pos = 0;
+                }
+            } else if seed.query_pos > 0 {
+                // No left extension job, soft-clip 5' end
+                combined_cigar.push((b'S', seed.query_pos));
+                query_start_aligned = seed.query_pos;
+            }
+
+            // SEED match (perfect match for seed length)
+            combined_cigar.push((b'M', seed.len));
+            combined_score += seed.len; // Add seed score
+
+            // RIGHT extension
+            let seed_end = seed.query_pos + seed.len;
+            if let Some(right_idx) = seed_job.right_job_idx {
+                let right_cigar = &alignment_cigars[right_idx];
+                let right_score = alignment_scores[right_idx];
+
+                log::debug!(
+                    "{}: Chain {}: Seed {}: RIGHT extension score={}, CIGAR={:?}",
+                    query_name,
+                    chain_idx,
+                    seed_job.seed_idx,
+                    right_score,
+                    right_cigar
+                );
+
+                // Add right CIGAR operations
+                combined_cigar.extend(right_cigar.iter().cloned());
+                combined_score += right_score;
+            } else if seed_end < query_len {
+                // No right extension job, soft-clip 3' end
+                combined_cigar.push((b'S', query_len - seed_end));
+                query_end_aligned = seed_end;
+            }
+
+            // Merge consecutive CIGAR operations (e.g., M+M → M)
+            let cigar_for_candidate = merge_cigar_operations(combined_cigar);
+
+            log::debug!(
+                "{}: Chain {}: Seed {}: combined_score={} bounds=[{}, {})",
+                query_name,
+                chain_idx,
+                seed_job.seed_idx,
+                combined_score,
+                query_start_aligned,
+                query_end_aligned
+            );
+
+            // Store as candidate if better than current best
+            if combined_score > best_score {
+                best_score = combined_score;
+                best_alignment_data = Some((
+                    cigar_for_candidate,
+                    combined_score,
+                    alignment_start_pos,
+                    query_start_aligned,
+                    query_end_aligned,
+                ));
+            }
+        } // End of seed_job iteration
+
+        // Use the best alignment candidate for this chain
+        if let Some((cigar_for_alignment, combined_score, alignment_start_pos, query_start_aligned, query_end_aligned)) = best_alignment_data {
+            log::debug!(
+                "{}: Chain {} (weight={}, kept={}): BEST score={} from {} candidates",
+                query_name,
+                chain_idx,
+                chain.weight,
+                chain.kept,
+                combined_score,
+                mapping.seed_jobs.len()
+            );
+
+        // Use the alignment start position calculated from extensions
+        let adjusted_ref_start = alignment_start_pos;
 
         // Convert global position to chromosome-specific position
         let global_pos = adjusted_ref_start as i64;
@@ -2598,53 +3008,65 @@ fn generate_seeds_with_mode(
                     rid,
                     global_pos
                 );
-                ("unknown_ref".to_string(), 0, first_seed.ref_pos)
+                ("unknown_ref".to_string(), 0, 0)
             };
 
-        // Calculate query bounds from chain (more accurate than single seed)
-        let query_start = chain.query_start;
-        let query_end = chain.query_end;
-        let seed_coverage = chain.weight; // Use chain weight as seed coverage for MAPQ
+            // Calculate query bounds from aligned region
+            let query_start = query_start_aligned;
+            let query_end = query_end_aligned;
+            let seed_coverage = chain.weight; // Use chain weight as seed coverage for MAPQ
 
-        // Generate hash for tie-breaking (based on position and strand)
-        let hash = hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 }));
+            // Generate hash for tie-breaking (based on position and strand)
+            let hash = hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 }));
 
-        // Generate MD tag from aligned sequences
-        let md_tag = Alignment::generate_md_tag(
-            &ref_aligned_seqs[job_idx],
-            &query_aligned_seqs[job_idx],
-            &cigar_for_alignment,
-        );
+            // Generate MD tag from CIGAR (simplified for multi-seed)
+            // TODO: Properly combine aligned sequences from best seed's LEFT+RIGHT extensions
+            let md_tag = {
+                // Fallback: generate simple MD tag from CIGAR
+                let match_len: i32 = cigar_for_alignment
+                    .iter()
+                    .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
+                    .sum();
+                format!("{}", match_len)
+            };
 
-        // Calculate exact NM (edit distance) from MD tag and CIGAR
-        let nm = Alignment::calculate_exact_nm(&md_tag, &cigar_for_alignment);
+            // Calculate exact NM (edit distance) from MD tag and CIGAR
+            let nm = Alignment::calculate_exact_nm(&md_tag, &cigar_for_alignment);
 
-        alignments.push(Alignment {
-            query_name: query_name.to_string(),
-            flag: if chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
-            ref_name,
-            ref_id,
-            pos: chr_pos,
-            mapq: 60, // Will be calculated by mark_secondary_alignments
-            score,    // Use alignment score from chain-based DP
-            cigar: cigar_for_alignment,
-            rnext: "*".to_string(),
-            pnext: 0,
-            tlen: 0,
-            seq: String::from_utf8_lossy(query_seq).to_string(),
-            qual: query_qual.to_string(),
-            tags: vec![
-                ("AS".to_string(), format!("i:{}", score)),
-                ("NM".to_string(), format!("i:{}", nm)),
-                ("MD".to_string(), format!("Z:{}", md_tag)),
-            ],
-            // Internal fields for alignment selection
-            query_start,
-            query_end,
-            seed_coverage,
-            hash,
-        });
-    }
+            alignments.push(Alignment {
+                query_name: query_name.to_string(),
+                flag: if chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
+                ref_name,
+                ref_id,
+                pos: chr_pos,
+                mapq: 60, // Will be calculated by mark_secondary_alignments
+                score: combined_score, // Use combined score from left + seed + right
+                cigar: cigar_for_alignment,
+                rnext: "*".to_string(),
+                pnext: 0,
+                tlen: 0,
+                seq: String::from_utf8_lossy(query_seq).to_string(),
+                qual: query_qual.to_string(),
+                tags: vec![
+                    ("AS".to_string(), format!("i:{}", combined_score)),
+                    ("NM".to_string(), format!("i:{}", nm)),
+                    ("MD".to_string(), format!("Z:{}", md_tag)),
+                ],
+                // Internal fields for alignment selection
+                query_start,
+                query_end,
+                seed_coverage,
+                hash,
+            });
+        } else {
+            log::warn!(
+                "{}: Chain {} has no valid alignment candidates from {} seeds",
+                query_name,
+                chain_idx,
+                mapping.seed_jobs.len()
+            );
+        }
+    } // End of chain iteration
 
     // Log buffer capacity validation
     if max_smem_count > query_len {

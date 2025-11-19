@@ -1302,7 +1302,7 @@ fn reverse_cigar(cigar: &[(u8, i32)]) -> Vec<(u8, i32)> {
 /// Merge consecutive identical CIGAR operations
 /// E.g., [(M, 10), (M, 5)] → [(M, 15)]
 #[inline]
-fn merge_cigar_operations(cigar: Vec<(u8, i32)>) -> Vec<(u8, i32)> {
+pub fn merge_cigar_operations(cigar: Vec<(u8, i32)>) -> Vec<(u8, i32)> {
     if cigar.is_empty() {
         return cigar;
     }
