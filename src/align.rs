@@ -2651,6 +2651,41 @@ fn generate_seeds_with_mode(
                         tmp
                     );
 
+                    // DETAILED LEFT DEBUG
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: LEFT query extraction: seed_query_start={}, left_query_len={}, full_query[0..10]={:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        seed_query_start,
+                        left_query_len,
+                        full_query.iter().take(10.min(left_query_len)).copied().collect::<Vec<u8>>()
+                    );
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: LEFT target extraction: tmp={}, rseq[0..10]={:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        tmp,
+                        rseq.iter().take(10.min(tmp)).copied().collect::<Vec<u8>>()
+                    );
+                    let left_query_first_10: Vec<u8> = left_query.iter().take(10).copied().collect();
+                    let left_target_first_10: Vec<u8> = left_target.iter().take(10).copied().collect();
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: LEFT left_query[0..10]={:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        left_query_first_10
+                    );
+                    log::debug!(
+                        "{}: Chain {}: Seed {}: LEFT left_target[0..10]={:?}",
+                        query_name,
+                        chain_idx,
+                        seed_chain_idx,
+                        left_target_first_10
+                    );
+
                     alignment_jobs.push(AlignmentJob {
                         seed_idx: chain_idx,
                         query: left_query,
