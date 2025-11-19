@@ -29,10 +29,11 @@ mod tests {
         }
 
         let mut bwt = Bwt::new_from_bwt_data(packed_bwt_data, l2, seq_len, primary);
-        bwt.sa_intv = 32;
-        bwt.n_sa = (seq_len + bwt.sa_intv as u64) / bwt.sa_intv as u64;
-        bwt.sa_ms_byte = vec![0, 0, 0, 0]; // Dummy values
-        bwt.sa_ls_word = vec![1, 2, 3, 4]; // Dummy values
+        bwt.sa_sample_interval = 32;
+        bwt.sa_sample_count =
+            (seq_len + bwt.sa_sample_interval as u64) / bwt.sa_sample_interval as u64;
+        bwt.sa_high_bytes = vec![0, 0, 0, 0]; // Dummy values
+        bwt.sa_low_words = vec![1, 2, 3, 4]; // Dummy values
         bwt
     }
 
@@ -42,11 +43,11 @@ mod tests {
         assert_eq!(bwt.primary, 0);
         assert_eq!(bwt.seq_len, 0);
         assert_eq!(bwt.bwt_size, 0);
-        assert_eq!(bwt.sa_intv, 0);
-        assert_eq!(bwt.n_sa, 0);
+        assert_eq!(bwt.sa_sample_interval, 0);
+        assert_eq!(bwt.sa_sample_count, 0);
         assert!(bwt.bwt_data.is_empty());
-        assert!(bwt.sa_ms_byte.is_empty());
-        assert!(bwt.sa_ls_word.is_empty());
+        assert!(bwt.sa_high_bytes.is_empty());
+        assert!(bwt.sa_low_words.is_empty());
     }
 
     #[test]
@@ -79,7 +80,7 @@ mod tests {
         assert_eq!(bwt.bwt_size, packed_bwt_data.len() as u64);
         assert_eq!(bwt.bwt_data, packed_bwt_data);
 
-        assert_eq!(bwt.l2, l2); // Compare with the calculated l2
+        assert_eq!(bwt.cumulative_count, l2); // Compare with the calculated l2
     }
 
     #[test]
@@ -115,20 +116,20 @@ mod tests {
         for i in 0..5 {
             assert_eq!(
                 u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()),
-                bwt.l2[i]
+                bwt.cumulative_count[i]
             );
             offset += 8;
         }
         // sa_intv
         assert_eq!(
             i32::from_le_bytes(buffer[offset..offset + 4].try_into().unwrap()),
-            bwt.sa_intv
+            bwt.sa_sample_interval
         );
         offset += 4;
         // n_sa
         assert_eq!(
             u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()),
-            bwt.n_sa
+            bwt.sa_sample_count
         );
         offset += 8;
         // bwt_data
@@ -138,7 +139,7 @@ mod tests {
         );
         offset += bwt.bwt_data.len();
         // sa_ms_byte
-        for val in &bwt.sa_ms_byte {
+        for val in &bwt.sa_high_bytes {
             assert_eq!(
                 i8::from_le_bytes(buffer[offset..offset + 1].try_into().unwrap()),
                 *val
@@ -146,7 +147,7 @@ mod tests {
             offset += 1;
         }
         // sa_ls_word
-        for val in &bwt.sa_ls_word {
+        for val in &bwt.sa_low_words {
             assert_eq!(
                 u32::from_le_bytes(buffer[offset..offset + 4].try_into().unwrap()),
                 *val
@@ -167,20 +168,20 @@ mod tests {
 
         bwt.bwt_cal_sa(sa_intv, &sa_temp);
 
-        assert_eq!(bwt.sa_intv, sa_intv);
+        assert_eq!(bwt.sa_sample_interval, sa_intv);
         assert_eq!(
-            bwt.n_sa,
+            bwt.sa_sample_count,
             (bwt.seq_len + sa_intv as u64 - 1) / sa_intv as u64
         );
-        assert_eq!(bwt.sa_ms_byte.len(), bwt.n_sa as usize);
-        assert_eq!(bwt.sa_ls_word.len(), bwt.n_sa as usize);
+        assert_eq!(bwt.sa_high_bytes.len(), bwt.sa_sample_count as usize);
+        assert_eq!(bwt.sa_low_words.len(), bwt.sa_sample_count as usize);
 
         // Verify some values
-        assert_eq!(bwt.sa_ms_byte[0], 0);
-        assert_eq!(bwt.sa_ls_word[0], 0); // sa_temp[0] = 0
+        assert_eq!(bwt.sa_high_bytes[0], 0);
+        assert_eq!(bwt.sa_low_words[0], 0); // sa_temp[0] = 0
 
-        assert_eq!(bwt.sa_ms_byte[1], 0);
-        assert_eq!(bwt.sa_ls_word[1], 10); // sa_temp[10] = 10
+        assert_eq!(bwt.sa_high_bytes[1], 0);
+        assert_eq!(bwt.sa_low_words[1], 10); // sa_temp[10] = 10
     }
 
     // ========================================================================
@@ -352,7 +353,7 @@ mod tests {
 
         // Verify we sample at intervals
         assert_eq!(
-            bwt.n_sa, 13,
+            bwt.sa_sample_count, 13,
             "100 bases with interval 8 should give 13 samples"
         );
 
@@ -360,9 +361,9 @@ mod tests {
         // Sample 0: sa_temp[0] = 0
         // Sample 1: sa_temp[8] = 8
         // Sample 2: sa_temp[16] = 16
-        let sa_0 = ((bwt.sa_ms_byte[0] as i64) << 32) | (bwt.sa_ls_word[0] as i64);
-        let sa_1 = ((bwt.sa_ms_byte[1] as i64) << 32) | (bwt.sa_ls_word[1] as i64);
-        let sa_2 = ((bwt.sa_ms_byte[2] as i64) << 32) | (bwt.sa_ls_word[2] as i64);
+        let sa_0 = ((bwt.sa_high_bytes[0] as i64) << 32) | (bwt.sa_low_words[0] as i64);
+        let sa_1 = ((bwt.sa_high_bytes[1] as i64) << 32) | (bwt.sa_low_words[1] as i64);
+        let sa_2 = ((bwt.sa_high_bytes[2] as i64) << 32) | (bwt.sa_low_words[2] as i64);
 
         assert_eq!(sa_0, 0, "First SA sample should be 0");
         assert_eq!(sa_1, 8, "Second SA sample should be 8");

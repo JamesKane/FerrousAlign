@@ -48,13 +48,13 @@ impl BwaIndex {
         // 2. Read count array (l2)
         for i in 0..5 {
             cp_file.read_exact(&mut buf_i64)?;
-            bwt.l2[i] = i64::from_le_bytes(buf_i64) as u64;
+            bwt.cumulative_count[i] = i64::from_le_bytes(buf_i64) as u64;
         }
 
         // CRITICAL: Match C++ bwa-mem2 behavior - add 1 to all count values
         // See FMI_search.cpp:435 - this is required for correct SMEM generation
         for i in 0..5 {
-            bwt.l2[i] += 1;
+            bwt.cumulative_count[i] += 1;
         }
 
         // 3. Read cp_occ array
@@ -85,19 +85,19 @@ impl BwaIndex {
         let sa_len = (bwt.seq_len >> sa_compx) + 1;
 
         // 4. Read sa_ms_byte array
-        bwt.sa_ms_byte.reserve_exact(sa_len as usize);
+        bwt.sa_high_bytes.reserve_exact(sa_len as usize);
         for _ in 0..sa_len {
             cp_file.read_exact(&mut buf_u8)?;
             let val = u8::from_le_bytes(buf_u8) as i8;
-            bwt.sa_ms_byte.push(val);
+            bwt.sa_high_bytes.push(val);
         }
 
         // 5. Read sa_ls_word array
-        bwt.sa_ls_word.reserve_exact(sa_len as usize);
+        bwt.sa_low_words.reserve_exact(sa_len as usize);
         for _ in 0..sa_len {
             cp_file.read_exact(&mut buf_u32)?;
             let val = u32::from_le_bytes(buf_u32);
-            bwt.sa_ls_word.push(val);
+            bwt.sa_low_words.push(val);
         }
 
         // 6. Read sentinel_index
@@ -106,20 +106,20 @@ impl BwaIndex {
         bwt.primary = sentinel_index as u64;
 
         // Set other bwt fields that were not in the file
-        bwt.sa_intv = 1 << sa_compx;
-        bwt.n_sa = sa_len;
+        bwt.sa_sample_interval = 1 << sa_compx;
+        bwt.sa_sample_count = sa_len;
 
         // Debug: verify SA values look reasonable
-        if bwt.sa_ms_byte.len() > 10 {
+        if bwt.sa_high_bytes.len() > 10 {
             log::debug!(
                 "Loaded SA samples: n_sa={}, sa_intv={}",
-                bwt.n_sa,
-                bwt.sa_intv
+                bwt.sa_sample_count,
+                bwt.sa_sample_interval
             );
             log::debug!("First 5 SA values:");
-            for i in 0..5.min(bwt.sa_ms_byte.len()) {
-                let sa_val = ((bwt.sa_ms_byte[i] as i64) << 32) | (bwt.sa_ls_word[i] as i64);
-                log::debug!("  SA[{}] = {}", i * bwt.sa_intv as usize, sa_val);
+            for i in 0..5.min(bwt.sa_high_bytes.len()) {
+                let sa_val = ((bwt.sa_high_bytes[i] as i64) << 32) | (bwt.sa_low_words[i] as i64);
+                log::debug!("  SA[{}] = {}", i * bwt.sa_sample_interval as usize, sa_val);
             }
         }
 
@@ -145,7 +145,7 @@ impl BwaIndex {
 
         // 2. count array (l2) (5 * i64)
         for i in 0..5 {
-            file.write_all(&(self.bwt.l2[i] as i64).to_le_bytes())?;
+            file.write_all(&(self.bwt.cumulative_count[i] as i64).to_le_bytes())?;
         }
 
         // 3. cp_occ array
@@ -159,12 +159,12 @@ impl BwaIndex {
         }
 
         // 4. sa_ms_byte array
-        for val in self.bwt.sa_ms_byte.iter() {
+        for val in self.bwt.sa_high_bytes.iter() {
             file.write_all(&val.to_le_bytes())?;
         }
 
         // 5. sa_ls_word array
-        for val in self.bwt.sa_ls_word.iter() {
+        for val in self.bwt.sa_low_words.iter() {
             file.write_all(&val.to_le_bytes())?;
         }
 

@@ -156,7 +156,7 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
     let occ_ep = get_occ_all_bases(bwa_idx, ep);
 
     for b in 0..4usize {
-        k[b] = bwa_idx.bwt.l2[b] as i64 + occ_sp[b];
+        k[b] = bwa_idx.bwt.cumulative_count[b] as i64 + occ_sp[b];
         s[b] = occ_ep[b] - occ_sp[b];
 
         if debug_enabled && b == a as usize {

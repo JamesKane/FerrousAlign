@@ -1441,9 +1441,10 @@ fn generate_smems_for_strand(
             read_id: 0,
             query_start: x as i32,
             query_end: x as i32,
-            bwt_interval_start: bwa_idx.bwt.l2[a as usize],
-            bwt_interval_end: bwa_idx.bwt.l2[(3 - a) as usize],
-            interval_size: bwa_idx.bwt.l2[(a + 1) as usize] - bwa_idx.bwt.l2[a as usize],
+            bwt_interval_start: bwa_idx.bwt.cumulative_count[a as usize],
+            bwt_interval_end: bwa_idx.bwt.cumulative_count[(3 - a) as usize],
+            interval_size: bwa_idx.bwt.cumulative_count[(a + 1) as usize]
+                - bwa_idx.bwt.cumulative_count[a as usize],
             is_reverse_complement,
         };
 
@@ -1457,9 +1458,9 @@ fn generate_smems_for_strand(
                 smem.bwt_interval_end,
                 smem.interval_size,
                 a,
-                bwa_idx.bwt.l2[a as usize],
+                bwa_idx.bwt.cumulative_count[a as usize],
                 3 - a,
-                bwa_idx.bwt.l2[(3 - a) as usize]
+                bwa_idx.bwt.cumulative_count[(3 - a) as usize]
             );
         }
 
@@ -2733,7 +2734,7 @@ pub fn get_bwt(bwa_idx: &BwaIndex, pos: u64) -> Option<u64> {
         return None;
     }
 
-    Some(bwa_idx.bwt.l2[base as usize] + get_occ(bwa_idx, pos as i64, base) as u64)
+    Some(bwa_idx.bwt.cumulative_count[base as usize] + get_occ(bwa_idx, pos as i64, base) as u64)
 }
 
 pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
@@ -2742,9 +2743,9 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     const MAX_ITERATIONS: u64 = 10000; // Safety limit to prevent infinite loops
 
     // eprintln!("get_sa_entry: starting with pos={}, sa_intv={}, seq_len={}, cp_occ.len()={}",
-    //           original_pos, bwa_idx.bwt.sa_intv, bwa_idx.bwt.seq_len, bwa_idx.cp_occ.len());
+    //           original_pos, bwa_idx.bwt.sa_sample_interval, bwa_idx.bwt.seq_len, bwa_idx.cp_occ.len());
 
-    while pos % bwa_idx.bwt.sa_intv as u64 != 0 {
+    while pos % bwa_idx.bwt.sa_sample_interval as u64 != 0 {
         // Safety check: prevent infinite loops
         if count >= MAX_ITERATIONS {
             log::error!(
@@ -2759,7 +2760,7 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
             );
             log::error!(
                 "  sa_intv={}, seq_len={}",
-                bwa_idx.bwt.sa_intv,
+                bwa_idx.bwt.sa_sample_interval,
                 bwa_idx.bwt.seq_len
             );
             return count; // Return what we have so far
@@ -2784,9 +2785,9 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
         }
     }
 
-    let sa_index = (pos / bwa_idx.bwt.sa_intv as u64) as usize;
-    let sa_ms_byte = bwa_idx.bwt.sa_ms_byte[sa_index] as u64;
-    let sa_ls_word = bwa_idx.bwt.sa_ls_word[sa_index] as u64;
+    let sa_index = (pos / bwa_idx.bwt.sa_sample_interval as u64) as usize;
+    let sa_ms_byte = bwa_idx.bwt.sa_high_bytes[sa_index] as u64;
+    let sa_ls_word = bwa_idx.bwt.sa_low_words[sa_index] as u64;
     let sa_val = (sa_ms_byte << 32) | sa_ls_word;
 
     // Handle sentinel: SA values can point to the sentinel position (seq_len)
@@ -3088,7 +3089,7 @@ mod tests {
         };
 
         // Test at a sampled position (should directly lookup in SA array)
-        let sampled_pos = bwa_idx.bwt.sa_intv as u64;
+        let sampled_pos = bwa_idx.bwt.sa_sample_interval as u64;
         let sa_entry = super::get_sa_entry(&bwa_idx, sampled_pos);
 
         assert!(
