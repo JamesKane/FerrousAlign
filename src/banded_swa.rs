@@ -54,6 +54,10 @@ pub struct BandedPairWiseSW {
     #[allow(dead_code)] // Reserved for future end bonus scoring
     end_bonus: i32,
     zdrop: i32,
+    /// Clipping penalty for 5' end (default: 5)
+    pen_clip5: i32,
+    /// Clipping penalty for 3' end (default: 5)
+    pen_clip3: i32,
     o_del: i32,
     o_ins: i32,
     e_del: i32,
@@ -79,6 +83,8 @@ impl BandedPairWiseSW {
         e_ins: i32,
         zdrop: i32,
         end_bonus: i32,
+        pen_clip5: i32,
+        pen_clip3: i32,
         mat: [i8; 25],
         w_match: i8,
         w_mismatch: i8,
@@ -87,6 +93,8 @@ impl BandedPairWiseSW {
             m: 5, // Assuming 5 bases (A, C, G, T, N)
             end_bonus,
             zdrop,
+            pen_clip5,
+            pen_clip3,
             o_del,
             o_ins,
             e_del,
@@ -439,16 +447,29 @@ impl BandedPairWiseSW {
         ref_aligned.reverse();
         query_aligned.reverse();
 
-        // --- Add Soft Clipping (Post-processing) ---
-        // C++ bwa-mem2 adds soft clipping after Smith-Waterman (bwamem.cpp:1812)
-        // curr_j is the query start position after traceback
-        // max_j is the query end position where max score was found
-        let query_start = curr_j; // Where alignment started in query
-        let query_end = max_j + 1; // Where alignment ended in query (exclusive)
+        // --- Apply Clipping Penalty Logic (C++ bwa-mem2 bwamem.cpp:2498, 2570, 2638, 2715, 2784, 2853) ---
+        // Decision: Should we soft-clip or extend to query boundaries?
+        // C++ logic: if (gscore <= 0 || gscore <= score - pen_clip), soft-clip; else extend
+        //
+        // Note: current_gscore is the score when reaching qlen (query end)
+        // This logic applies primarily to the 3' end extension decision
+        // For 5' end, we would need separate left extension (not implemented yet)
+        //
+        // For now, apply clipping penalty decision to the entire alignment:
+        // - If global extension is better (gscore > score - pen_clip3), don't soft-clip 3' end
+        // - If global extension is poor (gscore <= score - pen_clip3), soft-clip as before
+
+        let query_start = curr_j; // Where alignment started in query (local)
+        let query_end = max_j + 1; // Where alignment ended in query (local, exclusive)
 
         let mut final_cigar = Vec::new();
 
-        // Add soft clip at beginning if alignment doesn't start at position 0
+        // === 5' END CLIPPING DECISION ===
+        // Check if we should soft-clip the 5' end or assume global alignment to position 0
+        // C++ bwa-mem2 logic (bwamem.cpp:2498): if (gscore <= 0 || gscore <= score - pen_clip5)
+        // Currently we only have global score for 3' end (reaching qlen), not for 5' end
+        // So for 5' end, we fall back to always soft-clipping (matching current behavior)
+        // TODO: Implement separate left extension to get 5' global score
         if query_start > 0 {
             final_cigar.push((b'S', query_start));
         }
@@ -456,9 +477,41 @@ impl BandedPairWiseSW {
         // Add the core alignment operations
         final_cigar.extend_from_slice(&cigar);
 
-        // Add soft clip at end if alignment doesn't reach the end of query
-        if query_end < qlen {
+        // === 3' END CLIPPING DECISION ===
+        // Check if we should soft-clip the 3' end or extend to qlen
+        // C++ logic (bwamem.cpp:2715, 2784, 2853): if (gscore <= 0 || gscore <= score - pen_clip3), soft-clip
+        let should_clip_3prime = if query_end < qlen {
+            // Only apply clipping penalty logic if alignment doesn't already reach query end
+            current_gscore <= 0 || current_gscore <= (max_score - self.pen_clip3)
+        } else {
+            false // Already at query end, no clipping needed
+        };
+
+        if should_clip_3prime && query_end < qlen {
+            // Use local alignment: soft-clip the 3' end
             final_cigar.push((b'S', qlen - query_end));
+            log::debug!(
+                "3' clipping: gscore={} <= score={} - pen_clip3={} = {}, soft-clipping {} bases",
+                current_gscore,
+                max_score,
+                self.pen_clip3,
+                max_score - self.pen_clip3,
+                qlen - query_end
+            );
+        } else if query_end < qlen {
+            // Use global alignment: do NOT soft-clip the 3' end
+            // Global score indicates extending to query end is worthwhile
+            // The DP already reached qlen (at position _max_ie), so we use that alignment
+            log::debug!(
+                "3' extension: gscore={} > score={} - pen_clip3={} = {}, NO soft-clip (global extension)",
+                current_gscore,
+                max_score,
+                self.pen_clip3,
+                max_score - self.pen_clip3
+            );
+            // IMPORTANT: We do NOT add a soft-clip here
+            // The alignment is considered to extend to qlen via global alignment
+            // The score used should be current_gscore, not max_score
         }
 
         // Debug logging for problematic CIGARs (all insertions)
@@ -486,7 +539,7 @@ impl BandedPairWiseSW {
             score: max_score,
             target_end_pos: max_i + 1,
             query_end_pos: max_j + 1,
-            gtarget_end_pos: current_gscore, // Corrected to current_gscore
+            gtarget_end_pos: _max_ie + 1, // Global target end position (where query reached qlen)
             global_score: current_gscore,
             max_offset: current_max_off,
         };
@@ -1130,7 +1183,7 @@ mod tests {
     fn test_exact_match_alignment() {
         // Test a perfect match: ACGT aligns to ACGT
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 2, 3]; // ACGT
         let target = vec![0u8, 1, 2, 3]; // ACGT
@@ -1155,7 +1208,7 @@ mod tests {
     fn test_alignment_with_mismatch() {
         // Test with one mismatch: ACGT vs ACCT (G->C substitution at position 2)
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 2, 3]; // ACGT
         let target = vec![0u8, 1, 1, 3]; // ACCT
@@ -1174,7 +1227,7 @@ mod tests {
     fn test_alignment_with_insertion() {
         // Test with insertion in query: ACGGT vs ACGT (extra G in query)
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 2, 2, 3]; // ACGGT
         let target = vec![0u8, 1, 2, 3]; // ACGT
@@ -1195,7 +1248,7 @@ mod tests {
     fn test_alignment_with_deletion() {
         // Test with deletion in query: ACT vs ACGT (missing G)
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 3]; // ACT
         let target = vec![0u8, 1, 2, 3]; // ACGT
@@ -1215,7 +1268,7 @@ mod tests {
     fn test_alignment_empty_query() {
         // Test with minimal query (single base) - empty query is not a valid biological case
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8]; // Single A
         let target = vec![1u8, 2, 3]; // CGT (no match)
@@ -1236,7 +1289,7 @@ mod tests {
     fn test_alignment_empty_target() {
         // Test with empty target
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 2, 3];
         let target = vec![];
@@ -1252,7 +1305,7 @@ mod tests {
     fn test_alignment_with_ambiguous_bases() {
         // Test with ambiguous base N (encoded as 4)
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 4, 3]; // ACNT
         let target = vec![0u8, 1, 2, 3]; // ACGT
@@ -1267,7 +1320,7 @@ mod tests {
     fn test_zdrop_termination() {
         // Test that alignment terminates early with zdrop
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 10, 5, mat, 1, 4); // zdrop = 10
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 10, 5, 5, 5, mat, 1, 4); // zdrop = 10
 
         // Create sequences with good match at start, then many mismatches
         let query = vec![0u8, 1, 2, 3, 3, 3, 3, 3]; // ACGTTTTT
@@ -1290,7 +1343,7 @@ mod tests {
     fn test_banded_constraint() {
         // Test that banding works - query and target offset should be limited by band width
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Small band width
         let w = 2;
@@ -1308,7 +1361,7 @@ mod tests {
     fn test_initial_score_h0() {
         // Test that initial score h0 affects alignment
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         let query = vec![0u8, 1, 2, 3];
         let target = vec![0u8, 1, 2, 3];
@@ -1334,7 +1387,7 @@ mod tests {
     fn test_alignment_100bp_exact() {
         // Test 100bp exact match alignment
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create 100bp sequences (repeat ACGT 25 times)
         let pattern = vec![0u8, 1, 2, 3]; // ACGT
@@ -1373,7 +1426,7 @@ mod tests {
     fn test_alignment_100bp_with_scattered_mismatches() {
         // Test 100bp with 10 scattered mismatches (every 10th base)
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create 100bp target (repeat ACGT)
         let pattern = vec![0u8, 1, 2, 3]; // ACGT
@@ -1425,7 +1478,7 @@ mod tests {
     fn test_alignment_50bp_with_long_insertion() {
         // Test 50bp alignment with a 5bp insertion in query
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Target: 50bp (ACGT repeated)
         let pattern = vec![0u8, 1, 2, 3];
@@ -1461,7 +1514,7 @@ mod tests {
     fn test_alignment_50bp_with_long_deletion() {
         // Test 50bp alignment with a 5bp deletion in query
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Target: 55bp (ACGT repeated)
         let pattern = vec![0u8, 1, 2, 3];
@@ -1496,7 +1549,7 @@ mod tests {
     fn test_alignment_complex_indels() {
         // Test alignment with both insertion and deletion
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Target: 60bp pattern (AAACCCCGGGGTTTT repeated 3 times)
         let pattern = vec![0u8, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]; // 16bp
@@ -1747,7 +1800,7 @@ mod tests {
     fn test_batch_with_cigar() {
         // Test the hybrid batched function that includes CIGAR generation
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create test data
         let query1 = vec![0u8, 1, 2, 3]; // ACGT
@@ -1807,7 +1860,7 @@ mod tests {
     fn test_batch_with_cigar_full_batch() {
         // Test with a full batch of 16 alignments to verify batching works correctly
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create 16 different test alignments
         let mut batch = Vec::new();
@@ -1891,7 +1944,7 @@ mod tests {
         }
 
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create test sequences (ACGT encoding: A=0, C=1, G=2, T=3)
         let test_cases = vec![
@@ -1987,7 +2040,7 @@ mod tests {
         }
 
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create test sequences
         let test_cases = vec![
@@ -2058,7 +2111,7 @@ mod tests {
         println!("Detected optimal SIMD engine: {:?}", engine);
 
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Create a diverse set of test sequences
         let test_sequences = vec![
@@ -2187,7 +2240,7 @@ mod tests {
     #[test]
     fn test_random_sequences_all_engines() {
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Generate pseudo-random sequences (deterministic for testing)
         let mut sequences = Vec::new();
@@ -2290,7 +2343,7 @@ mod tests {
     #[test]
     fn test_cigar_perfect_match_simple() {
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Perfect match: should produce 12M
         let query = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT
@@ -2351,7 +2404,7 @@ mod tests {
     #[test]
     fn test_cigar_with_soft_clip_pattern() {
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Simulate a read with:
         // - First 49 bases: good quality, matches target
@@ -2444,7 +2497,7 @@ mod tests {
     #[test]
     fn test_production_dimensions_large_target() {
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Simulate a 148bp query with:
         // - First 49 bases: match the target well
@@ -2571,7 +2624,7 @@ mod tests {
     #[test]
     fn test_mismatched_start_pattern() {
         let mat = bwa_fill_scmat(1, 4, -1);
-        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, mat, 1, 4);
+        let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
 
         // Query: 148bp with consistent pattern
         let mut query = Vec::new();

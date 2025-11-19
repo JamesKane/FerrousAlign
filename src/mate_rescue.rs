@@ -60,6 +60,8 @@ pub fn mem_matesw(
         2,   // e_ins
         100, // zdrop
         0,   // end_bonus
+        5,   // pen_clip5 (5' clipping penalty, default=5)
+        5,   // pen_clip3 (3' clipping penalty, default=5)
         align::DEFAULT_SCORING_MATRIX,
         2,  // w_match
         -4, // w_mismatch

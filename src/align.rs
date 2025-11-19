@@ -2003,15 +2003,17 @@ fn generate_seeds_with_mode(
 
     // Instantiate BandedPairWiseSW with parameters from MemOpt
     let sw_params = BandedPairWiseSW::new(
-        _opt.o_del,      // Gap open deletion penalty
-        _opt.e_del,      // Gap extension deletion penalty
-        _opt.o_ins,      // Gap open insertion penalty
-        _opt.e_ins,      // Gap extension insertion penalty
-        _opt.zdrop,      // Z-dropoff
-        5,               // end_bonus (pen_clip5/pen_clip3 in C++ bwa-mem2, default=5)
-        _opt.mat,        // Scoring matrix (generated from -A/-B)
-        _opt.a as i8,    // Match score
-        -(_opt.b as i8), // Mismatch penalty (negative)
+        _opt.o_del,       // Gap open deletion penalty
+        _opt.e_del,       // Gap extension deletion penalty
+        _opt.o_ins,       // Gap open insertion penalty
+        _opt.e_ins,       // Gap extension insertion penalty
+        _opt.zdrop,       // Z-dropoff
+        5,                // end_bonus (reserved for future use)
+        _opt.pen_clip5,   // 5' clipping penalty (default=5)
+        _opt.pen_clip3,   // 3' clipping penalty (default=5)
+        _opt.mat,         // Scoring matrix (generated from -A/-B)
+        _opt.a as i8,     // Match score
+        -(_opt.b as i8),  // Mismatch penalty (negative)
     );
 
     let mut encoded_query = Vec::with_capacity(query_len);
@@ -3462,7 +3464,7 @@ mod tests {
         use crate::banded_swa::BandedPairWiseSW;
 
         let sw_params =
-            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, super::DEFAULT_SCORING_MATRIX, 2, -4);
+            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, 5, 5, super::DEFAULT_SCORING_MATRIX, 2, -4);
 
         // Create test alignment jobs
         let query1 = vec![0u8, 1, 2, 3]; // ACGT
