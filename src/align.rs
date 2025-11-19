@@ -192,13 +192,28 @@ pub struct Alignment {
 impl Alignment {
     /// Get CIGAR string as a formatted string (e.g., "50M2I48M")
     /// Returns "*" for empty CIGAR (unmapped reads per SAM spec)
+    ///
+    /// Per bwa-mem2 behavior (bwamem.cpp:1585-1586):
+    /// - Soft clips (S) are converted to hard clips (H) for supplementary alignments
+    /// - Primary and secondary alignments keep soft clips
     pub fn cigar_string(&self) -> String {
         if self.cigar.is_empty() {
             "*".to_string()
         } else {
+            let is_supplementary = (self.flag & sam_flags::SUPPLEMENTARY) != 0;
+
             self.cigar
                 .iter()
-                .map(|&(op, len)| format!("{}{}", len, op as char))
+                .map(|&(op, len)| {
+                    // Convert soft clip (S) to hard clip (H) for supplementary alignments
+                    // Matches C++ bwa-mem2: c = which? 4 : 3 (where 3=S, 4=H)
+                    let op_char = if is_supplementary && op == b'S' {
+                        'H'
+                    } else {
+                        op as char
+                    };
+                    format!("{}{}", len, op_char)
+                })
                 .collect()
         }
     }
@@ -3616,6 +3631,8 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::sam_flags;
+    use super::Alignment;
     use crate::align::SMEM;
     use crate::fm_index::{backward_ext, popcount64};
     use crate::index::BwaIndex;
@@ -4113,5 +4130,101 @@ mod tests {
         );
         assert!(pa.pos < 60, "Position should be within reference length");
         assert_eq!(pa.cigar_string(), "12M", "Expected a perfect match CIGAR");
+    }
+
+    #[test]
+    fn test_hard_clipping_for_supplementary() {
+        // Test that soft clips (S) are converted to hard clips (H) for supplementary alignments
+        // Per bwa-mem2 behavior (bwamem.cpp:1585-1586)
+
+        // Create a primary alignment with soft clips
+        let primary = Alignment {
+            query_name: "read1".to_string(),
+            flag: 0, // Primary alignment
+            ref_name: "chr1".to_string(),
+            ref_id: 0,
+            pos: 100,
+            mapq: 60,
+            score: 100,
+            cigar: vec![(b'S', 5), (b'M', 50), (b'S', 10)],
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat(65),
+            qual: "I".repeat(65),
+            tags: vec![],
+            query_start: 0,
+            query_end: 65,
+            seed_coverage: 50,
+            hash: 0,
+        };
+
+        // Create a supplementary alignment with soft clips
+        let supplementary = Alignment {
+            query_name: "read1".to_string(),
+            flag: sam_flags::SUPPLEMENTARY, // 0x800
+            ref_name: "chr2".to_string(),
+            ref_id: 1,
+            pos: 200,
+            mapq: 30,
+            score: 80,
+            cigar: vec![(b'S', 5), (b'M', 50), (b'S', 10)],
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat(65),
+            qual: "I".repeat(65),
+            tags: vec![],
+            query_start: 0,
+            query_end: 65,
+            seed_coverage: 50,
+            hash: 0,
+        };
+
+        // Create a secondary alignment with soft clips
+        let secondary = Alignment {
+            query_name: "read1".to_string(),
+            flag: sam_flags::SECONDARY, // 0x100
+            ref_name: "chr3".to_string(),
+            ref_id: 2,
+            pos: 300,
+            mapq: 0,
+            score: 70,
+            cigar: vec![(b'S', 5), (b'M', 50), (b'S', 10)],
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat(65),
+            qual: "I".repeat(65),
+            tags: vec![],
+            query_start: 0,
+            query_end: 65,
+            seed_coverage: 50,
+            hash: 0,
+        };
+
+        // Verify CIGAR strings
+        assert_eq!(
+            primary.cigar_string(),
+            "5S50M10S",
+            "Primary alignment should keep soft clips (S)"
+        );
+
+        assert_eq!(
+            supplementary.cigar_string(),
+            "5H50M10H",
+            "Supplementary alignment should convert S to H"
+        );
+
+        assert_eq!(
+            secondary.cigar_string(),
+            "5S50M10S",
+            "Secondary alignment should keep soft clips (S)"
+        );
+
+        println!("✅ Hard clipping test passed!");
+        println!("   Primary:       {}", primary.cigar_string());
+        println!("   Supplementary: {}", supplementary.cigar_string());
+        println!("   Secondary:     {}", secondary.cigar_string());
     }
 }
