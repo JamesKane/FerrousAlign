@@ -1030,21 +1030,15 @@ fn estimate_divergence_score(query_len: usize, target_len: usize) -> f64 {
 /// This reduces batch synchronization penalty for divergent sequences while
 /// maximizing SIMD utilization for similar sequences.
 fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
-    use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
+    use crate::simd_abstraction::{detect_optimal_simd_engine, get_simd_batch_sizes};
 
     if jobs.is_empty() {
         return 16; // Default
     }
 
-    // Detect SIMD engine and determine native batch size
+    // Detect SIMD engine and get optimal batch sizes
     let engine = detect_optimal_simd_engine();
-    let (max_batch, standard_batch) = match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => (64, 32), // AVX-512: 64-way max, 32-way standard
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => (32, 16), // AVX2: 32-way max, 16-way standard
-        SimdEngineType::Engine128 => (16, 16), // SSE2/NEON: 16-way
-    };
+    let (max_batch, standard_batch) = get_simd_batch_sizes(engine);
 
     // Calculate average divergence score for this batch of jobs
     let total_divergence: f64 = jobs

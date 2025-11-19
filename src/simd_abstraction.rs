@@ -3,10 +3,28 @@
 //! This module provides a portable interface to SIMD operations,
 //! abstracting over the differences between x86-64 (SSE, AVX, AVX2, AVX-512) and aarch64 (NEON).
 //!
+//! ## SIMD Architecture
+//!
 //! The `SimdEngine` trait provides a unified interface for different SIMD widths:
 //! - `SimdEngine128`: 128-bit vectors (SSE on x86_64, NEON on aarch64) - 16 lanes (8-bit)
 //! - `SimdEngine256`: 256-bit vectors (AVX2 on x86_64) - 32 lanes (8-bit)
 //! - `SimdEngine512`: 512-bit vectors (AVX-512 on x86_64) - 64 lanes (8-bit)
+//!
+//! ## Runtime SIMD Dispatch Pattern
+//!
+//! The codebase uses a **runtime dispatch** pattern for SIMD optimization:
+//!
+//! 1. **Detection** (once per run): `detect_optimal_simd_engine()` detects CPU features
+//! 2. **Batch Sizing**: `get_simd_batch_sizes(engine)` returns optimal batch sizes
+//! 3. **Dispatch**: Functions use `match engine` to select the optimal SIMD kernel
+//!
+//! **Key Dispatch Locations**:
+//! - `banded_swa.rs`: `simd_banded_swa_dispatch()` - Smith-Waterman alignment
+//! - `align.rs`: `determine_optimal_batch_size()` - Adaptive batch sizing
+//! - `mem.rs`: Initial detection for logging
+//!
+//! This pattern allows binary portability across different CPU generations while
+//! maximizing performance on modern hardware.
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64 as simd_arch;
@@ -1476,6 +1494,26 @@ pub fn simd_engine_description(engine: SimdEngineType) -> &'static str {
         SimdEngineType::Engine256 => "AVX2 (256-bit, 32-way parallelism)",
         #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
         SimdEngineType::Engine512 => "AVX-512 (512-bit, 64-way parallelism)",
+    }
+}
+
+/// Returns the optimal batch sizes for Smith-Waterman alignment for a given SIMD engine
+///
+/// Returns (max_batch_size, standard_batch_size):
+/// - max_batch_size: Maximum parallelism for low-divergence sequences
+/// - standard_batch_size: Standard batch size for medium-divergence sequences
+///
+/// **Batch Sizes by Engine**:
+/// - SSE2/NEON (128-bit): 16-way parallelism (max=16, standard=16)
+/// - AVX2 (256-bit): 32-way parallelism (max=32, standard=16)
+/// - AVX-512 (512-bit): 64-way parallelism (max=64, standard=32)
+pub fn get_simd_batch_sizes(engine: SimdEngineType) -> (usize, usize) {
+    match engine {
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => (64, 32), // AVX-512: 64-way max, 32-way standard
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => (32, 16), // AVX2: 32-way max, 16-way standard
+        SimdEngineType::Engine128 => (16, 16), // SSE2/NEON: 16-way
     }
 }
 
