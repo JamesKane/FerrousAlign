@@ -13,7 +13,9 @@ pub mod index; // Index management (BwaIndex loading/dumping)
 pub mod kseq; // Used for FASTA reference reading during index building
 pub mod mem;
 pub mod mem_opt;
+pub mod paired_end; // Paired-end read processing
 pub mod simd_abstraction;
+pub mod single_end; // Single-end read processing
 pub mod utils;
 
 // AVX2-specific SIMD implementations (x86_64 only)
