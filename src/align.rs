@@ -1527,6 +1527,16 @@ pub(crate) fn execute_scalar_alignments(
         .map(|(idx, job)| {
             let qlen = job.query.len() as i32;
             let tlen = job.target.len() as i32;
+
+            // Log query sequence being aligned
+            let query_str: String = job.query.iter().map(|&b| match b {
+                0 => 'A', 1 => 'C', 2 => 'G', 3 => 'T', _ => 'N',
+            }).collect();
+            log::debug!(
+                "SW alignment job {}: qlen={}, tlen={}, bw={}, query_seq={}",
+                idx, qlen, tlen, job.band_width, query_str
+            );
+
             let (score_out, cigar, ref_aligned, query_aligned) = sw_params.scalar_banded_swa(
                 qlen,
                 &job.query,
@@ -1998,7 +2008,7 @@ fn generate_seeds_with_mode(
         _opt.o_ins,      // Gap open insertion penalty
         _opt.e_ins,      // Gap extension insertion penalty
         _opt.zdrop,      // Z-dropoff
-        0,               // end_bonus (not configurable in C++)
+        5,               // end_bonus (pen_clip5/pen_clip3 in C++ bwa-mem2, default=5)
         _opt.mat,        // Scoring matrix (generated from -A/-B)
         _opt.a as i8,    // Match score
         -(_opt.b as i8), // Mismatch penalty (negative)
@@ -2325,7 +2335,10 @@ fn generate_seeds_with_mode(
     // This matches C++ bwa-mem2 mem_align1_core() flow exactly
 
     // --- Seed Chaining ---
-    let mut chained_results = chain_seeds(seeds.clone(), _opt);
+    // IMPORTANT: Pass seeds by value (not clone) so chain_seeds() sorts in place.
+    // The chain seed indices will then correctly refer to the sorted seeds array.
+    // chain_seeds() returns both the chains and the sorted seeds array.
+    let (mut chained_results, seeds) = chain_seeds(seeds, _opt);
     log::debug!(
         "{}: Chaining produced {} chains",
         query_name,
@@ -2446,7 +2459,10 @@ fn generate_seeds_with_mode(
     };
 
     // Separate scores, CIGARs, and aligned sequences
-    let alignment_scores: Vec<i32> = extended_cigars.iter().map(|(score, _, _, _)| *score).collect();
+    let alignment_scores: Vec<i32> = extended_cigars
+        .iter()
+        .map(|(score, _, _, _)| *score)
+        .collect();
     let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars
         .iter()
         .map(|(_, cigar, _, _)| cigar.clone())
@@ -2758,9 +2774,9 @@ fn generate_seeds_with_mode(
 // - Extension of chains into alignments
 // ============================================================================
 
-pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
+pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>) {
     if seeds.is_empty() {
-        return Vec::new();
+        return (Vec::new(), seeds);
     }
 
     // 1. Sort seeds: by query_pos, then by ref_pos
@@ -2783,14 +2799,27 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
                 && seeds[j].query_pos + seeds[j].len < seeds[i].query_pos
                 && seeds[j].ref_pos + (seeds[j].len as u64) < seeds[i].ref_pos
             {
-                // Calculate gap length
-                let q_gap = seeds[i].query_pos - (seeds[j].query_pos + seeds[j].len);
-                let r_gap =
-                    seeds[i].ref_pos as i32 - (seeds[j].ref_pos + seeds[j].len as u64) as i32;
+                // Calculate distances (matching C++ test_and_merge logic)
+                let x = seeds[i].query_pos - seeds[j].query_pos; // query distance
+                let y = seeds[i].ref_pos as i32 - seeds[j].ref_pos as i32; // reference distance
+                let q_gap = x - seeds[j].len; // gap after seed[j] ends
+                let r_gap = y - seeds[j].len as i32; // gap after seed[j] ends
 
-                // Check max_chain_gap constraint (do not chain if gap too large)
-                if q_gap.max(r_gap.abs()) > max_gap {
-                    continue; // Skip this potential chain connection
+                // C++ constraint 1: y >= 0 (new seed downstream on reference)
+                if y < 0 {
+                    continue;
+                }
+
+                // C++ constraint 2: Diagonal band width check (|x - y| <= w)
+                // This ensures seeds stay within a diagonal band
+                let diagonal_offset = x - y;
+                if diagonal_offset.abs() > opt.w {
+                    continue; // Seeds too far from diagonal
+                }
+
+                // C++ constraint 3 & 4: max_chain_gap check
+                if q_gap > max_gap || r_gap > max_gap {
+                    continue; // Gap too large
                 }
 
                 // Simple gap penalty (average of query and reference gaps)
@@ -2868,6 +2897,18 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
 
         chain_seeds_indices.reverse(); // Order from start to end
 
+        log::debug!(
+            "Chain extraction: chain_idx={}, num_seeds={}, score={}, query=[{}, {}), ref=[{}, {}), is_rev={}",
+            chains.len(),
+            chain_seeds_indices.len(),
+            best_chain_score,
+            query_start,
+            query_end,
+            ref_start,
+            ref_end,
+            is_rev
+        );
+
         chains.push(Chain {
             score: best_chain_score,
             seeds: chain_seeds_indices,
@@ -2898,7 +2939,7 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> Vec<Chain> {
         opt.min_chain_weight
     );
 
-    chains
+    (chains, seeds)
 }
 
 // ============================================================================
