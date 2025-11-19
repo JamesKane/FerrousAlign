@@ -326,6 +326,144 @@ impl Alignment {
         indels + estimated_mismatches
     }
 
+    /// Generate MD tag from aligned sequences and CIGAR
+    ///
+    /// The MD tag is a string representing the reference bases at mismatching positions
+    /// and deleted reference bases. Format:
+    /// - Numbers: count of matching bases
+    /// - Letters: mismatching reference base
+    /// - ^LETTERS: deleted reference bases
+    ///
+    /// Examples:
+    /// - "100" = 100 perfect matches
+    /// - "50A49" = 50 matches, mismatch at ref base A, 49 matches
+    /// - "25^AC25" = 25 matches, deletion of AC, 25 matches
+    ///
+    /// This requires ref_aligned and query_aligned sequences from Smith-Waterman traceback.
+    pub fn generate_md_tag(
+        ref_aligned: &[u8],
+        query_aligned: &[u8],
+        cigar: &[(u8, i32)],
+    ) -> String {
+        let mut md = String::new();
+        let mut match_count = 0;
+
+        // Base-to-char conversion for 2-bit encoding
+        let base_to_char = |b: u8| -> char {
+            match b {
+                0 => 'A',
+                1 => 'C',
+                2 => 'G',
+                3 => 'T',
+                _ => 'N',
+            }
+        };
+
+        let mut ref_idx = 0;
+        let mut query_idx = 0;
+
+        for &(op, len) in cigar {
+            match op as char {
+                'M' => {
+                    // Match/mismatch - compare bases
+                    for _ in 0..len {
+                        if ref_idx >= ref_aligned.len() || query_idx >= query_aligned.len() {
+                            break;
+                        }
+
+                        if ref_aligned[ref_idx] == query_aligned[query_idx] {
+                            // Match
+                            match_count += 1;
+                        } else {
+                            // Mismatch - emit match count, then mismatch base
+                            if match_count > 0 {
+                                md.push_str(&match_count.to_string());
+                                match_count = 0;
+                            }
+                            md.push(base_to_char(ref_aligned[ref_idx]));
+                        }
+
+                        ref_idx += 1;
+                        query_idx += 1;
+                    }
+                }
+                'D' => {
+                    // Deletion from reference - emit match count, then ^DELETED_BASES
+                    if match_count > 0 {
+                        md.push_str(&match_count.to_string());
+                        match_count = 0;
+                    }
+                    md.push('^');
+                    for _ in 0..len {
+                        if ref_idx >= ref_aligned.len() {
+                            break;
+                        }
+                        md.push(base_to_char(ref_aligned[ref_idx]));
+                        ref_idx += 1;
+                    }
+                }
+                'I' => {
+                    // Insertion to query - skip query bases, no MD tag entry
+                    query_idx += len as usize;
+                }
+                'S' | 'H' => {
+                    // Soft/hard clip - skip query bases, no MD tag entry
+                    query_idx += len as usize;
+                }
+                _ => {
+                    // Unknown op - skip
+                }
+            }
+        }
+
+        // Emit final match count
+        if match_count > 0 {
+            md.push_str(&match_count.to_string());
+        }
+
+        // Handle empty MD tag (shouldn't happen, but be safe)
+        if md.is_empty() {
+            md.push('0');
+        }
+
+        md
+    }
+
+    /// Calculate exact NM (edit distance) from MD tag and CIGAR
+    ///
+    /// NM = mismatches + insertions + deletions
+    ///
+    /// Mismatches and deletions are counted from the MD tag:
+    /// - Each letter (A, C, G, T, N) = 1 mismatch
+    /// - Each ^LETTERS segment = length deletions
+    ///
+    /// Insertions are counted from the CIGAR string.
+    pub fn calculate_exact_nm(md_tag: &str, cigar: &[(u8, i32)]) -> i32 {
+        let mut nm = 0;
+
+        // Count mismatches and deletions from MD tag
+        let mut in_deletion = false;
+        for ch in md_tag.chars() {
+            if ch == '^' {
+                in_deletion = true;
+            } else if ch.is_ascii_digit() {
+                in_deletion = false;
+            } else {
+                // It's a base letter (A, C, G, T, N)
+                nm += 1;
+            }
+        }
+
+        // Count insertions from CIGAR
+        for &(op, len) in cigar {
+            if op == b'I' {
+                nm += len;
+            }
+        }
+
+        nm
+    }
+
     /// Generate XA tag entry for this alignment (alternative alignment format)
     /// Format: RNAME,STRAND+POS,CIGAR,NM
     /// Example: chr1,+1000,50M,2
@@ -1140,9 +1278,9 @@ fn partition_jobs_by_divergence(jobs: &[AlignmentJob]) -> (Vec<AlignmentJob>, Ve
 pub(crate) fn execute_batched_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
-) -> Vec<(i32, Vec<(u8, i32)>)> {
+) -> Vec<(i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>)> {
     const BATCH_SIZE: usize = 16;
-    let mut all_results = vec![(0, Vec::new()); jobs.len()];
+    let mut all_results = vec![(0, Vec::new(), Vec::new(), Vec::new()); jobs.len()];
 
     // Process jobs in batches of 16
     for batch_start in (0..jobs.len()).step_by(BATCH_SIZE) {
@@ -1168,10 +1306,15 @@ pub(crate) fn execute_batched_alignments(
         // Use dispatch to automatically route to optimal SIMD width (16/32/64)
         let results = sw_params.simd_banded_swa_dispatch_with_cigar(&batch_data);
 
-        // Extract scores and CIGARs from results
+        // Extract scores, CIGARs, and aligned sequences from results
         for (i, result) in results.iter().enumerate() {
             if i < batch_jobs.len() {
-                all_results[batch_start + i] = (result.score.score, result.cigar.clone());
+                all_results[batch_start + i] = (
+                    result.score.score,
+                    result.cigar.clone(),
+                    result.ref_aligned.clone(),
+                    result.query_aligned.clone(),
+                );
             }
         }
     }
@@ -1193,7 +1336,7 @@ pub(crate) fn execute_batched_alignments(
 pub(crate) fn execute_adaptive_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
-) -> Vec<(i32, Vec<(u8, i32)>)> {
+) -> Vec<(i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>)> {
     if jobs.is_empty() {
         return Vec::new();
     }
@@ -1237,7 +1380,7 @@ pub(crate) fn execute_adaptive_alignments(
     );
 
     // Create result vector with correct size
-    let mut all_results = vec![(0, Vec::new()); jobs.len()];
+    let mut all_results = vec![(0, Vec::new(), Vec::new(), Vec::new()); jobs.len()];
 
     // Process high-divergence jobs with scalar (more efficient for divergent sequences)
     let high_div_results = if !high_div_jobs.is_empty() {
@@ -1299,8 +1442,8 @@ fn execute_batched_alignments_with_size(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
     batch_size: usize,
-) -> Vec<(i32, Vec<(u8, i32)>)> {
-    let mut all_results = vec![(0, Vec::new()); jobs.len()];
+) -> Vec<(i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>)> {
+    let mut all_results = vec![(0, Vec::new(), Vec::new(), Vec::new()); jobs.len()];
 
     // Process jobs in batches of specified size
     for batch_start in (0..jobs.len()).step_by(batch_size) {
@@ -1326,10 +1469,15 @@ fn execute_batched_alignments_with_size(
         // Dispatch automatically selects batch16/32/64 based on detected SIMD engine
         let results = sw_params.simd_banded_swa_dispatch_with_cigar(&batch_data);
 
-        // Extract scores and CIGARs from results
+        // Extract scores, CIGARs, and aligned sequences from results
         for (i, result) in results.iter().enumerate() {
             if i < batch_jobs.len() {
-                all_results[batch_start + i] = (result.score.score, result.cigar.clone());
+                all_results[batch_start + i] = (
+                    result.score.score,
+                    result.cigar.clone(),
+                    result.ref_aligned.clone(),
+                    result.query_aligned.clone(),
+                );
 
                 // Detect pathological CIGARs in SIMD path
                 let total_insertions: i32 = result
@@ -1373,13 +1521,13 @@ fn execute_batched_alignments_with_size(
 pub(crate) fn execute_scalar_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
-) -> Vec<(i32, Vec<(u8, i32)>)> {
+) -> Vec<(i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>)> {
     jobs.iter()
         .enumerate()
         .map(|(idx, job)| {
             let qlen = job.query.len() as i32;
             let tlen = job.target.len() as i32;
-            let (score_out, cigar) = sw_params.scalar_banded_swa(
+            let (score_out, cigar, ref_aligned, query_aligned) = sw_params.scalar_banded_swa(
                 qlen,
                 &job.query,
                 tlen,
@@ -1429,7 +1577,7 @@ pub(crate) fn execute_scalar_alignments(
                 );
             }
 
-            (score_out.score, cigar)
+            (score_out.score, cigar, ref_aligned, query_aligned)
         })
         .collect()
 }
@@ -2297,11 +2445,19 @@ fn generate_seeds_with_mode(
         execute_scalar_alignments(&sw_params, &alignment_jobs)
     };
 
-    // Separate scores and CIGARs
-    let alignment_scores: Vec<i32> = extended_cigars.iter().map(|(score, _)| *score).collect();
+    // Separate scores, CIGARs, and aligned sequences
+    let alignment_scores: Vec<i32> = extended_cigars.iter().map(|(score, _, _, _)| *score).collect();
     let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars
+        .iter()
+        .map(|(_, cigar, _, _)| cigar.clone())
+        .collect();
+    let ref_aligned_seqs: Vec<Vec<u8>> = extended_cigars
+        .iter()
+        .map(|(_, _, ref_aligned, _)| ref_aligned.clone())
+        .collect();
+    let query_aligned_seqs: Vec<Vec<u8>> = extended_cigars
         .into_iter()
-        .map(|(_, cigar)| cigar)
+        .map(|(_, _, _, query_aligned)| query_aligned)
         .collect();
 
     // Extract query offsets for soft-clipping (C++ strategy: match mem_reg2aln)
@@ -2435,27 +2591,15 @@ fn generate_seeds_with_mode(
         // Generate hash for tie-breaking (based on position and strand)
         let hash = hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 }));
 
-        // Calculate NM tag (edit distance) from score and CIGAR
-        // Count indels from CIGAR
-        let indels: i32 = cigar_for_alignment
-            .iter()
-            .filter_map(|&(op, len)| match op as char {
-                'I' | 'D' => Some(len),
-                _ => None,
-            })
-            .sum();
-        // Estimate mismatches from score
-        let aligned_query_len: i32 = cigar_for_alignment
-            .iter()
-            .filter_map(|&(op, len)| match op as char {
-                'M' | 'I' | 'S' | '=' | 'X' => Some(len),
-                _ => None,
-            })
-            .sum();
-        let perfect_score = aligned_query_len;
-        let score_diff = (perfect_score - score).max(0);
-        let estimated_mismatches = (score_diff / 5).max(0);
-        let nm = indels + estimated_mismatches;
+        // Generate MD tag from aligned sequences
+        let md_tag = Alignment::generate_md_tag(
+            &ref_aligned_seqs[job_idx],
+            &query_aligned_seqs[job_idx],
+            &cigar_for_alignment,
+        );
+
+        // Calculate exact NM (edit distance) from MD tag and CIGAR
+        let nm = Alignment::calculate_exact_nm(&md_tag, &cigar_for_alignment);
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
@@ -2474,6 +2618,7 @@ fn generate_seeds_with_mode(
             tags: vec![
                 ("AS".to_string(), format!("i:{}", score)),
                 ("NM".to_string(), format!("i:{}", nm)),
+                ("MD".to_string(), format!("Z:{}", md_tag)),
             ],
             // Internal fields for alignment selection
             query_start,

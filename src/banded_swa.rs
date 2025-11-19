@@ -108,7 +108,7 @@ impl BandedPairWiseSW {
         target: &[u8],
         w: i32,
         h0: i32,
-    ) -> (OutScore, Vec<(u8, i32)>) {
+    ) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
         // Handle degenerate cases: empty sequences
         if tlen == 0 || qlen == 0 {
             // For empty sequences, return zero score and empty CIGAR
@@ -121,7 +121,7 @@ impl BandedPairWiseSW {
                 global_score: 0,
                 max_offset: 0,
             };
-            return (out_score, Vec::new());
+            return (out_score, Vec::new(), Vec::new(), Vec::new());
         }
 
         // CRITICAL: Validate that qlen matches query.len() and tlen matches target.len()
@@ -139,7 +139,7 @@ impl BandedPairWiseSW {
                 global_score: 0,
                 max_offset: 0,
             };
-            return (out_score, Vec::new());
+            return (out_score, Vec::new(), Vec::new(), Vec::new());
         }
 
         let oe_del = self.o_del + self.e_del;
@@ -338,6 +338,11 @@ impl BandedPairWiseSW {
         const MAX_TRACEBACK_ITERATIONS: i32 = 10000; // Safety limit to prevent infinite loops
         let mut iteration_count = 0;
 
+        // Vectors to capture aligned bases for MD tag generation
+        // These will be reversed at the end (like CIGAR)
+        let mut ref_aligned = Vec::new();
+        let mut query_aligned = Vec::new();
+
         while curr_i > 0 || curr_j > 0 {
             // Safety check: prevent infinite loops
             if iteration_count >= MAX_TRACEBACK_ITERATIONS {
@@ -364,6 +369,7 @@ impl BandedPairWiseSW {
                 TB_MATCH => {
                     // Count consecutive alignment positions (both matches and mismatches use 'M')
                     // This matches bwa-mem2 behavior which uses MIDSH operations (no X or =)
+                    // Also capture the aligned bases for MD tag generation
                     let mut alignment_count = 0;
 
                     while curr_i > 0
@@ -371,6 +377,10 @@ impl BandedPairWiseSW {
                         && tb[curr_i as usize][curr_j as usize] == TB_MATCH
                     {
                         alignment_count += 1;
+                        // Capture aligned bases (1-indexed in arrays, so subtract 1)
+                        // Note: bases are added in reverse order, will be reversed later
+                        ref_aligned.push(target[(curr_i - 1) as usize]);
+                        query_aligned.push(query[(curr_j - 1) as usize]);
                         curr_i -= 1;
                         curr_j -= 1;
                     }
@@ -381,9 +391,13 @@ impl BandedPairWiseSW {
                     }
                 }
                 TB_DEL => {
+                    // Deletion: gap in query, target base consumed
                     let mut count = 0;
                     while curr_i > 0 && tb[curr_i as usize][curr_j as usize] == TB_DEL {
                         count += 1;
+                        // Capture deleted reference base (target consumes, query doesn't)
+                        ref_aligned.push(target[(curr_i - 1) as usize]);
+                        // No query base consumed for deletion
                         curr_i -= 1;
                     }
                     if count > 0 {
@@ -391,9 +405,13 @@ impl BandedPairWiseSW {
                     }
                 }
                 TB_INS => {
+                    // Insertion: gap in target, query base consumed
                     let mut count = 0;
                     while curr_j > 0 && tb[curr_i as usize][curr_j as usize] == TB_INS {
                         count += 1;
+                        // Capture inserted query base (query consumes, target doesn't)
+                        query_aligned.push(query[(curr_j - 1) as usize]);
+                        // No reference base consumed for insertion
                         curr_j -= 1;
                     }
                     if count > 0 {
@@ -416,6 +434,10 @@ impl BandedPairWiseSW {
         }
 
         cigar.reverse(); // CIGAR is usually represented from start to end
+
+        // Reverse aligned sequences to match CIGAR direction (start to end)
+        ref_aligned.reverse();
+        query_aligned.reverse();
 
         // --- Add Soft Clipping (Post-processing) ---
         // C++ bwa-mem2 adds soft clipping after Smith-Waterman (bwamem.cpp:1812)
@@ -469,7 +491,7 @@ impl BandedPairWiseSW {
             max_offset: current_max_off,
         };
 
-        (out_score, final_cigar)
+        (out_score, final_cigar, ref_aligned, query_aligned)
     }
 
     /// Batched SIMD Smith-Waterman alignment for up to 16 alignments in parallel
@@ -918,7 +940,7 @@ impl BandedPairWiseSW {
             .iter()
             .enumerate()
             .map(|(idx, (qlen, query, tlen, target, w, h0))| {
-                let (score, cigar) = self.scalar_banded_swa(*qlen, query, *tlen, target, *w, *h0);
+                let (score, cigar, ref_aligned, query_aligned) = self.scalar_banded_swa(*qlen, query, *tlen, target, *w, *h0);
 
                 // Debug logging for problematic CIGARs
                 if idx < 3 || cigar.iter().any(|(op, _)| *op == b'I' && cigar.len() == 1) {
@@ -937,7 +959,12 @@ impl BandedPairWiseSW {
                     );
                 }
 
-                AlignmentResult { score, cigar }
+                AlignmentResult {
+                    score,
+                    cigar,
+                    ref_aligned,
+                    query_aligned,
+                }
             })
             .collect()
     }
@@ -959,6 +986,12 @@ pub struct OutScore {
 pub struct AlignmentResult {
     pub score: OutScore,
     pub cigar: Vec<(u8, i32)>,
+    /// Reference bases in the alignment (for MD tag generation)
+    /// Encoded as 0=A, 1=C, 2=G, 3=T, 4=N
+    pub ref_aligned: Vec<u8>,
+    /// Query bases in the alignment (for MD tag generation)
+    /// Encoded as 0=A, 1=C, 2=G, 3=T, 4=N
+    pub query_aligned: Vec<u8>,
 }
 
 // Helper function to create scoring matrix (similar to bwa_fill_scmat in main_banded.cpp)
@@ -1102,7 +1135,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 3]; // ACGT
         let target = vec![0u8, 1, 2, 3]; // ACGT
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
         // Should have perfect match score: 4 bases * 1 = 4
         assert!(
@@ -1127,7 +1160,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 3]; // ACGT
         let target = vec![0u8, 1, 1, 3]; // ACCT
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
         // Score should be positive but less than perfect match
         // 3 matches (3) + 1 mismatch (-4) = -1, but local alignment clamps to 0
@@ -1146,7 +1179,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 2, 3]; // ACGGT
         let target = vec![0u8, 1, 2, 3]; // ACGT
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(5, &query, 4, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(5, &query, 4, &target, 100, 0);
 
         assert!(out_score.score >= 0, "Score should be non-negative");
 
@@ -1167,7 +1200,7 @@ mod tests {
         let query = vec![0u8, 1, 3]; // ACT
         let target = vec![0u8, 1, 2, 3]; // ACGT
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(3, &query, 4, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(3, &query, 4, &target, 100, 0);
 
         assert!(out_score.score >= 0, "Score should be non-negative");
 
@@ -1187,7 +1220,7 @@ mod tests {
         let query = vec![0u8]; // Single A
         let target = vec![1u8, 2, 3]; // CGT (no match)
 
-        let (out_score, _cigar) = bsw.scalar_banded_swa(1, &query, 3, &target, 100, 0);
+        let (out_score, _cigar, _, _) = bsw.scalar_banded_swa(1, &query, 3, &target, 100, 0);
 
         // Single base with no match should have zero or minimal score
         assert_eq!(
@@ -1208,7 +1241,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 3];
         let target = vec![];
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(4, &query, 0, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(4, &query, 0, &target, 100, 0);
 
         // Empty target should have zero score and empty CIGAR
         assert_eq!(out_score.score, 0, "Empty target should have zero score");
@@ -1224,7 +1257,7 @@ mod tests {
         let query = vec![0u8, 1, 4, 3]; // ACNT
         let target = vec![0u8, 1, 2, 3]; // ACGT
 
-        let (out_score, _cigar) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
+        let (out_score, _cigar, _, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
         // Score should account for ambiguous base penalty
         assert!(out_score.score >= 0, "Score should be non-negative");
@@ -1240,7 +1273,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 3, 3, 3, 3, 3]; // ACGTTTTT
         let target = vec![0u8, 1, 2, 3, 0, 0, 0, 0]; // ACGTAAAA
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(8, &query, 8, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(8, &query, 8, &target, 100, 0);
 
         // Should align the matching prefix and stop
         assert!(out_score.score > 0, "Should find some alignment");
@@ -1265,7 +1298,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 3, 0, 1, 2, 3];
         let target = vec![0u8, 1, 2, 3, 0, 1, 2, 3];
 
-        let (out_score, _cigar) = bsw.scalar_banded_swa(8, &query, 8, &target, w, 0);
+        let (out_score, _cigar, _, _) = bsw.scalar_banded_swa(8, &query, 8, &target, w, 0);
 
         // Should still find alignment within band
         assert!(out_score.score > 0, "Should find alignment within band");
@@ -1281,10 +1314,10 @@ mod tests {
         let target = vec![0u8, 1, 2, 3];
 
         // With h0 = 0
-        let (score1, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
+        let (score1, _, _, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
 
         // With h0 = 10
-        let (score2, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 10);
+        let (score2, _, _, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 10);
 
         // Score with higher h0 should be at least as good
         assert!(
@@ -1315,7 +1348,7 @@ mod tests {
         assert_eq!(query.len(), 100, "Query should be 100bp");
         assert_eq!(target.len(), 100, "Target should be 100bp");
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(100, &query, 100, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(100, &query, 100, &target, 100, 0);
 
         // Should have high score for perfect match
         assert!(
@@ -1362,7 +1395,7 @@ mod tests {
             };
         }
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(100, &query, 100, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(100, &query, 100, &target, 100, 0);
 
         // Should still align but with lower score
         assert!(
@@ -1410,7 +1443,7 @@ mod tests {
         assert_eq!(query.len(), 55, "Query should be 55bp (50 + 5 insertion)");
         assert_eq!(target.len(), 50, "Target should be 50bp");
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(55, &query, 50, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(55, &query, 50, &target, 100, 0);
 
         // Should find alignment
         assert!(out_score.score > 0, "Should find alignment with insertion");
@@ -1445,7 +1478,7 @@ mod tests {
         assert_eq!(query.len(), 50, "Query should be 50bp");
         assert_eq!(target.len(), 55, "Target should be 55bp (50 + 5 deletion)");
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(50, &query, 55, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(50, &query, 55, &target, 100, 0);
 
         // Should find alignment
         assert!(out_score.score > 0, "Should find alignment with deletion");
@@ -1482,7 +1515,7 @@ mod tests {
 
         let query_len = query.len(); // Should be 20 + 3 + 15 + 20 = 58bp
 
-        let (out_score, cigar) =
+        let (out_score, cigar, _, _) =
             bsw.scalar_banded_swa(query_len as i32, &query, 60, &target, 100, 0);
 
         // Should find alignment
@@ -1539,7 +1572,7 @@ mod tests {
             };
         }
 
-        let (out_score, cigar) = bsw.scalar_banded_swa(60, &query, 60, &target, 100, 0);
+        let (out_score, cigar, _, _) = bsw.scalar_banded_swa(60, &query, 60, &target, 100, 0);
 
         // Should still find some alignment
         assert!(
@@ -1586,7 +1619,7 @@ mod tests {
         let target4 = vec![0u8, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGT (8bp)
 
         // Get scalar results for comparison
-        let (scalar1, _) = bsw.scalar_banded_swa(
+        let (scalar1, _, _, _) = bsw.scalar_banded_swa(
             query1.len() as i32,
             &query1,
             target1.len() as i32,
@@ -1594,7 +1627,7 @@ mod tests {
             100,
             0,
         );
-        let (scalar2, _) = bsw.scalar_banded_swa(
+        let (scalar2, _, _, _) = bsw.scalar_banded_swa(
             query2.len() as i32,
             &query2,
             target2.len() as i32,
@@ -1602,7 +1635,7 @@ mod tests {
             100,
             0,
         );
-        let (scalar3, _) = bsw.scalar_banded_swa(
+        let (scalar3, _, _, _) = bsw.scalar_banded_swa(
             query3.len() as i32,
             &query3,
             target3.len() as i32,
@@ -1610,7 +1643,7 @@ mod tests {
             100,
             0,
         );
-        let (scalar4, _) = bsw.scalar_banded_swa(
+        let (scalar4, _, _, _) = bsw.scalar_banded_swa(
             query4.len() as i32,
             &query4,
             target4.len() as i32,
@@ -1732,8 +1765,8 @@ mod tests {
         let batch_results = bsw.simd_banded_swa_batch16_with_cigar(&batch);
 
         // Also run scalar for comparison
-        let (scalar1, cigar1) = bsw.scalar_banded_swa(4, &query1, 4, &target1, 100, 0);
-        let (scalar2, cigar2) = bsw.scalar_banded_swa(4, &query2, 4, &target2, 100, 0);
+        let (scalar1, cigar1, _, _) = bsw.scalar_banded_swa(4, &query1, 4, &target1, 100, 0);
+        let (scalar2, cigar2, _, _) = bsw.scalar_banded_swa(4, &query2, 4, &target2, 100, 0);
 
         // Verify results
         assert_eq!(batch_results.len(), 2, "Should return 2 results");
@@ -1826,7 +1859,7 @@ mod tests {
             );
 
             // Verify against scalar
-            let (scalar_score, scalar_cigar) =
+            let (scalar_score, scalar_cigar, _, _) =
                 bsw.scalar_banded_swa(4, &queries[i], 4, &targets[i], 100, 0);
 
             assert_eq!(
@@ -2263,7 +2296,7 @@ mod tests {
         let query = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT
         let target = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]; // ACGTACGTACGT
 
-        let (result, cigar) = bsw.scalar_banded_swa(
+        let (result, cigar, _, _) = bsw.scalar_banded_swa(
             query.len() as i32,
             &query,
             target.len() as i32,
@@ -2335,7 +2368,7 @@ mod tests {
         // Target: just the first 49 bases (matches the good part)
         let target: Vec<u8> = (0..49).map(|i| (i % 4) as u8).collect();
 
-        let (result, cigar) = bsw.scalar_banded_swa(
+        let (result, cigar, _, _) = bsw.scalar_banded_swa(
             query.len() as i32,
             &query,
             target.len() as i32,
@@ -2435,7 +2468,7 @@ mod tests {
             target.push(((i * 5 + 2) % 4) as u8);
         }
 
-        let (result, cigar) = bsw.scalar_banded_swa(
+        let (result, cigar, _, _) = bsw.scalar_banded_swa(
             query.len() as i32,
             &query,
             target.len() as i32,
@@ -2563,7 +2596,7 @@ mod tests {
             target.push(((i * 3 + 1) % 4) as u8); // Fill rest
         }
 
-        let (result, cigar) = bsw.scalar_banded_swa(
+        let (result, cigar, _, _) = bsw.scalar_banded_swa(
             query.len() as i32,
             &query,
             target.len() as i32,

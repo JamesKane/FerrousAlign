@@ -130,7 +130,7 @@ pub fn mem_matesw(
 
         // Perform Smith-Waterman alignment
         let ref_len = ref_seq.len() as i32;
-        let (out_score, cigar) = sw_params.scalar_banded_swa(
+        let (out_score, cigar, _, _) = sw_params.scalar_banded_swa(
             l_ms, &seq, ref_len, &ref_seq, 100, // w (bandwidth)
             0,   // h0 (initial score)
         );
