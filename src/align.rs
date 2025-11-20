@@ -1092,6 +1092,100 @@ fn generate_xa_tags(
     xa_tags
 }
 
+/// Generate SA (Supplementary Alignment) tags for chimeric/split-read alignments
+/// Implements C++ bwa-mem2 logic (bwamem.cpp:1694-1713)
+///
+/// SA tag format: "rname,pos,strand,CIGAR,mapQ,NM;"
+/// Links all non-secondary (primary + supplementary) alignments for the same read
+///
+/// Algorithm:
+/// 1. Only generate SA tags for non-secondary alignments (flag & 0x100 == 0)
+/// 2. Include all OTHER non-secondary alignments for the same read
+/// 3. Skip if only one non-secondary alignment exists (no supplementary)
+///
+/// Returns: HashMap<read_name, SA_tag_string>
+fn generate_sa_tags(
+    alignments: &[Alignment],
+) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+
+    let mut sa_tags: HashMap<String, String> = HashMap::new();
+
+    // Group alignments by read name
+    let mut alignments_by_read: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, aln) in alignments.iter().enumerate() {
+        alignments_by_read
+            .entry(aln.query_name.clone())
+            .or_insert_with(Vec::new)
+            .push(idx);
+    }
+
+    // Generate SA tags for reads with multiple non-secondary alignments
+    for (read_name, indices) in alignments_by_read.iter() {
+        // Count non-secondary alignments (primary + supplementary)
+        let non_secondary_indices: Vec<usize> = indices
+            .iter()
+            .filter(|&&idx| alignments[idx].flag & sam_flags::SECONDARY == 0)
+            .copied()
+            .collect();
+
+        // Only generate SA tag if there are 2+ non-secondary alignments (chimeric/split-read)
+        if non_secondary_indices.len() < 2 {
+            continue;
+        }
+
+        // Generate SA tag for each non-secondary alignment
+        for &current_idx in &non_secondary_indices {
+            let mut sa_parts: Vec<String> = Vec::new();
+
+            for &other_idx in &non_secondary_indices {
+                if other_idx == current_idx {
+                    continue; // Skip self
+                }
+
+                let other = &alignments[other_idx];
+
+                // Extract NM tag value (edit distance)
+                let nm_value = other
+                    .tags
+                    .iter()
+                    .find(|(tag, _)| tag == "NM")
+                    .and_then(|(_, val)| val.strip_prefix("i:"))
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(0);
+
+                // Format: rname,pos,strand,CIGAR,mapQ,NM;
+                // Note: pos is 1-based in SAM
+                let strand = if other.flag & sam_flags::REVERSE != 0 { '-' } else { '+' };
+                sa_parts.push(format!(
+                    "{},{},{},{},{},{}",
+                    other.ref_name,
+                    other.pos + 1,  // SAM is 1-based
+                    strand,
+                    other.cigar_string(),
+                    other.mapq,
+                    nm_value
+                ));
+            }
+
+            if !sa_parts.is_empty() {
+                let sa_tag = format!("Z:{};", sa_parts.join(";"));
+                sa_tags.insert(
+                    format!("{}:{}", read_name, current_idx),
+                    sa_tag
+                );
+            }
+        }
+    }
+
+    log::debug!(
+        "Generated SA tags for {} alignments (chimeric/split-read)",
+        sa_tags.len()
+    );
+
+    sa_tags
+}
+
 /// Mark secondary alignments and calculate MAPQ values
 /// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
 ///
@@ -1138,7 +1232,7 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
                 }
 
                 // Mark as secondary
-                alignments[i].flag |= 0x100; // Set secondary flag
+                alignments[i].flag |= sam_flags::SECONDARY; // 0x100
                 is_secondary = true;
                 break;
             }
@@ -1147,6 +1241,24 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
         // If no overlap with any primary, add as new primary
         if !is_secondary {
             primary_indices.push(i);
+        }
+    }
+
+    // Mark non-overlapping alignments after the first as SUPPLEMENTARY
+    // Implements C++ bwa-mem2 logic (bwamem.cpp:1551-1552)
+    // First non-overlapping alignment = PRIMARY (no flags)
+    // Subsequent non-overlapping alignments = SUPPLEMENTARY (0x800)
+    for (idx, &i) in primary_indices.iter().enumerate() {
+        if idx > 0 {
+            // Not the first non-overlapping alignment
+            alignments[i].flag |= sam_flags::SUPPLEMENTARY; // 0x800
+            log::debug!(
+                "Marked alignment {} as SUPPLEMENTARY ({}:{}, score={})",
+                i,
+                alignments[i].ref_name,
+                alignments[i].pos,
+                alignments[i].score
+            );
         }
     }
 
@@ -3286,6 +3398,29 @@ fn generate_seeds_with_mode(
                         "{}: Added XA tag with {} alternative alignments",
                         aln.query_name,
                         xa_tag.matches(';').count()
+                    );
+                }
+            }
+        }
+
+        // === SA TAG GENERATION ===
+        // Generate SA tags for chimeric/split-read alignments (supplementary)
+        // Format: SA:Z:chr1,100,+,50M,60,0;chr2,200,-,48M,60,1;
+        // Links all non-secondary (primary + supplementary) alignments for the same read
+        let sa_tags = generate_sa_tags(&alignments);
+
+        // Add SA tags to non-secondary alignments
+        for (idx, aln) in alignments.iter_mut().enumerate() {
+            if aln.flag & sam_flags::SECONDARY == 0 {
+                // Non-secondary (primary or supplementary) alignment
+                let lookup_key = format!("{}:{}", aln.query_name, idx);
+                if let Some(sa_tag) = sa_tags.get(&lookup_key) {
+                    // Add SA tag to this alignment's tags
+                    aln.tags.push(("SA".to_string(), sa_tag.clone()));
+                    log::debug!(
+                        "{}: Added SA tag (supplementary alignment) idx={}",
+                        aln.query_name,
+                        idx
                     );
                 }
             }
