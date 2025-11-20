@@ -1405,8 +1405,8 @@ pub(crate) fn execute_adaptive_alignments(
     let avg_target_len: f64 =
         jobs.iter().map(|job| job.target.len()).sum::<usize>() as f64 / jobs.len() as f64;
 
-    // Log routing statistics (INFO level - shows in default verbosity)
-    log::info!(
+    // Log routing statistics (DEBUG level - too verbose for INFO)
+    log::debug!(
         "Adaptive routing: {} total jobs, {} scalar ({:.1}%), {} SIMD ({:.1}%), avg_divergence={:.3}",
         jobs.len(),
         high_div_jobs.len(),
@@ -1417,7 +1417,7 @@ pub(crate) fn execute_adaptive_alignments(
     );
 
     // Show length statistics to understand why routing fails
-    log::info!(
+    log::debug!(
         "  → avg_query={:.1}bp, avg_target={:.1}bp, length_diff={:.1}%",
         avg_query_len,
         avg_target_len,
@@ -1551,7 +1551,7 @@ fn execute_batched_alignments_with_size(
                 if total_insertions > 10 || total_deletions > 5 {
                     let job = &batch_jobs[i];
                     // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
-                    log::warn!(
+                    log::debug!(
                         "PATHOLOGICAL_CIGAR_SIMD|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
                         batch_start + i,
                         job.query.len(),
@@ -1654,7 +1654,7 @@ pub(crate) fn execute_scalar_alignments(
             // Log if CIGAR has excessive indels (likely bug)
             if total_insertions > 10 || total_deletions > 5 {
                 // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
-                log::warn!(
+                log::debug!(
                     "PATHOLOGICAL_CIGAR_SCALAR|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
                     idx,
                     qlen,
@@ -3085,7 +3085,7 @@ fn generate_seeds_with_mode(
                 .sum();
 
             if cigar_len != query_len {
-                log::warn!(
+                log::debug!(
                     "{}: Chain {}: CIGAR length mismatch: cigar={}, query={}, diff={} - adjusting last query-consuming operation",
                     query_name, chain_idx, cigar_len, query_len, query_len - cigar_len
                 );
