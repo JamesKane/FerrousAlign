@@ -33,21 +33,10 @@ pub fn process_single_end(
     let bwa_idx = Arc::new(bwa_idx);
     let opt = Arc::new(opt);
 
-    // Load PAC file ONCE for MD tag generation (eliminates per-read I/O)
-    let pac_data = if let Some(pac_path) = &bwa_idx.bns.pac_file_path {
-        std::fs::read(pac_path).unwrap_or_else(|e| {
-            log::warn!(
-                "Could not load PAC file for MD tag generation: {}. Using simplified MD tags.",
-                e
-            );
-            Vec::new()
-        })
-    } else {
-        log::warn!("PAC file path not set. Using simplified MD tags.");
-        Vec::new()
-    };
-    log::debug!("Loaded PAC file: {} bytes", pac_data.len());
-    let pac_data = Arc::new(pac_data);
+    // PAC data is already loaded into memory in bwa_idx.bns.pac_data
+    // Just reference it directly - no file I/O needed!
+    log::debug!("Using in-memory PAC data: {} bytes", bwa_idx.bns.pac_data.len());
+    let pac_data = Arc::new(bwa_idx.bns.pac_data.clone());
 
     // Track overall statistics
     let start_time = Instant::now();

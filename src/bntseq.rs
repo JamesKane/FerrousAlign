@@ -1,7 +1,7 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 // From C's bntseq.h
@@ -73,8 +73,9 @@ pub struct BntSeq {
     pub ambiguous_region_count: i32,
     /// Ambiguous base regions (ambiguous_region_count elements)
     pub ambiguous_regions: Vec<BntAmb1>,
-    /// Optional path to .pac file for on-demand loading
-    pub pac_file_path: Option<PathBuf>,
+    /// Packed reference sequence data loaded into memory (740 MB for human genome)
+    /// Replaces on-demand file I/O to eliminate 5M+ read()/lseek() syscalls
+    pub pac_data: Vec<u8>,
 }
 
 #[path = "bntseq_test.rs"]
@@ -89,7 +90,7 @@ impl BntSeq {
             annotations: Vec::new(),
             ambiguous_region_count: 0,
             ambiguous_regions: Vec::new(),
-            pac_file_path: None,
+            pac_data: Vec::new(),
         }
     }
 
@@ -177,7 +178,9 @@ impl BntSeq {
         bns.sequence_count = seq_id;
         bns.ambiguous_regions = current_ambs;
         bns.ambiguous_region_count = bns.ambiguous_regions.len() as i32;
-        bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
+
+        // Store .pac data in memory (we already have it from index building)
+        bns.pac_data = pac_data.clone();
 
         // Write .pac file with C++ bwa-mem2 format (bntseq.cpp lines 340-347)
         // Format: packed_bases + [optional_zero_byte] + count_byte
@@ -367,8 +370,17 @@ impl BntSeq {
             bns.ambiguous_regions.push(BntAmb1 { offset, region_length: len, ambiguous_base: amb });
         }
 
-        bns.pac_file_path = Some(PathBuf::from(prefix.to_string_lossy().to_string() + ".pac"));
-        // eprintln!("PAC file path set to: {:?}", bns.pac_file_path);
+        // Load .pac file into memory to eliminate 5M+ read()/lseek() syscalls per alignment
+        let pac_path = PathBuf::from(prefix.to_string_lossy().to_string() + ".pac");
+        let mut pac_file = File::open(&pac_path)?;
+        let pac_file_size = pac_file.metadata()?.len();
+        bns.pac_data = Vec::with_capacity(pac_file_size as usize);
+        pac_file.read_to_end(&mut bns.pac_data)?;
+        log::info!(
+            "Loaded .pac file into memory: {} bytes ({:.1} MB)",
+            bns.pac_data.len(),
+            bns.pac_data.len() as f64 / 1024.0 / 1024.0
+        );
 
         Ok(bns)
     }
@@ -377,10 +389,13 @@ impl BntSeq {
     // CRITICAL: Handles both forward (start < l_pac) and reverse complement (start >= l_pac) strands
     // Matches C++ bwa-mem2 bns_get_seq() behavior
     pub fn get_reference_segment(&self, start: u64, len: u64) -> io::Result<Vec<u8>> {
-        let pac_file_path = self
-            .pac_file_path
-            .as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PAC file path not set"))?;
+        // Verify .pac data is loaded
+        if self.pac_data.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "PAC data not loaded in memory",
+            ));
+        }
 
         let end = start + len;
 
@@ -413,47 +428,40 @@ impl BntSeq {
                 end_f
             );
 
-            // Read in reverse order with complementation
-            let mut pac_file = BufReader::new(File::open(pac_file_path)?);
+            // Read from memory in reverse order with complementation
             for k in (beg_f + 1..=end_f).rev() {
-                let byte_idx = k / 4;
-                let mut byte_buf = [0u8; 1];
-                pac_file.seek(SeekFrom::Start(byte_idx))?;
-                pac_file.read_exact(&mut byte_buf)?;
+                let byte_idx = (k / 4) as usize;
+                let byte_val = self.pac_data[byte_idx];
 
                 let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
-                let base = (byte_buf[0] >> base_in_byte_offset) & 0x3;
+                let base = (byte_val >> base_in_byte_offset) & 0x3;
                 let complement = 3 - base; // A<->T (0<->3), C<->G (1<->2)
                 segment.push(complement);
             }
         } else {
-            // Forward strand: read normally
-            let start_byte_offset = start / 4;
-            let end_byte_offset = (end - 1) / 4;
-            let bytes_to_read = (end_byte_offset - start_byte_offset + 1) as usize;
-
-            let mut pac_file = BufReader::new(File::open(pac_file_path)?);
-            let mut pac_bytes = vec![0u8; bytes_to_read];
-            pac_file.seek(SeekFrom::Start(start_byte_offset))?;
-            pac_file.read_exact(&mut pac_bytes)?;
+            // Forward strand: read from memory
+            let start_byte_offset = (start / 4) as usize;
+            let end_byte_offset = ((end - 1) / 4) as usize;
 
             log::debug!(
-                "get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, bytes_to_read={}",
+                "get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, end_byte_offset={}",
                 start,
                 len,
                 self.packed_sequence_length,
                 start_byte_offset,
-                bytes_to_read
+                end_byte_offset
             );
 
             for i in 0..len {
                 let k = start + i;
-                let byte_idx_in_segment = (k / 4 - start_byte_offset) as usize;
+                let byte_idx = (k / 4) as usize;
+                let byte_val = self.pac_data[byte_idx];
+
                 // CRITICAL: Match C++ bwa-mem2 bit order
                 // C++ uses: ((pac)[(l)>>2]>>((~(l)&3)<<1)&3)
                 // Bit shifts are: l=0->6, l=1->4, l=2->2, l=3->0 (MSB to LSB)
                 let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
-                let base = (pac_bytes[byte_idx_in_segment] >> base_in_byte_offset) & 0x3;
+                let base = (byte_val >> base_in_byte_offset) & 0x3;
                 segment.push(base);
             }
         }

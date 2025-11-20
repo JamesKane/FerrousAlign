@@ -191,21 +191,10 @@ pub fn process_paired_end(
 
     log::debug!("[Main] Pipeline started: reader thread spawned");
 
-    // Load PAC file ONCE for all mate rescue operations
-    // This eliminates catastrophic I/O that was occurring in the old design
-    let pac = if let Some(pac_path) = &bwa_idx.bns.pac_file_path {
-        std::fs::read(pac_path).unwrap_or_else(|e| {
-            log::warn!(
-                "Could not load PAC file: {}. Mate rescue will be disabled.",
-                e
-            );
-            Vec::new()
-        })
-    } else {
-        log::warn!("PAC file path not set. Mate rescue will be disabled.");
-        Vec::new()
-    };
-    log::debug!("Loaded PAC file: {} bytes", pac.len());
+    // PAC data is already loaded into memory in bwa_idx.bns.pac_data
+    // Just reference it directly - no file I/O needed!
+    let pac = &bwa_idx.bns.pac_data;
+    log::debug!("Using in-memory PAC data: {} bytes", pac.len());
 
     // === PHASE 1: Bootstrap insert size statistics from first batch ===
     log::info!("Phase 1: Bootstrapping insert size statistics from first batch");
