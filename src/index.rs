@@ -34,7 +34,9 @@ impl BwaIndex {
         let bns = BntSeq::bns_restore(prefix)?;
 
         let cp_file_name = PathBuf::from(prefix.to_string_lossy().to_string() + ".bwt.2bit.64");
-        let mut cp_file = BufReader::new(File::open(&cp_file_name)?);
+        // Use 16MB buffer for index loading (default 8KB causes 1.2M syscalls for 9.4GB file!)
+        const INDEX_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16 MB
+        let mut cp_file = BufReader::with_capacity(INDEX_BUFFER_SIZE, File::open(&cp_file_name)?);
 
         let mut buf_i64 = [0u8; 8];
         let mut buf_u64 = [0u8; 8];
