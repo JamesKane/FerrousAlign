@@ -874,25 +874,27 @@ fn output_batch_paired(
         for (idx, mut alignment) in alignments1.into_iter().enumerate() {
             let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
             let is_primary = idx == best_idx1;
+            let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
 
-            // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
+            // By default (-a flag not set), output primary and supplementary alignments
             // With -a flag, output all alignments meeting score threshold
             let should_output = if opt.output_all_alignments {
                 is_unmapped || alignment.score >= opt.t
             } else {
-                is_primary
+                is_primary || is_supplementary  // Output both primary and supplementary
             };
 
             if !should_output {
-                continue; // Skip non-primary alignments (unless -a flag set)
+                continue; // Skip non-primary/non-supplementary alignments (unless -a flag set)
             }
 
             // Clear or set secondary flag based on pairing result
             if is_primary {
                 // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
+                // Preserve SUPPLEMENTARY flag (0x800) while clearing SECONDARY (0x100)
                 alignment.flag &= !sam_flags::SECONDARY;
-            } else if !is_unmapped {
-                // Non-best alignment - mark as secondary
+            } else if !is_unmapped && !is_supplementary {
+                // Non-best alignment that's not supplementary - mark as secondary
                 alignment.flag |= sam_flags::SECONDARY;
             }
 
@@ -915,25 +917,27 @@ fn output_batch_paired(
         for (idx, mut alignment) in alignments2.into_iter().enumerate() {
             let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
             let is_primary = idx == best_idx2;
+            let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
 
-            // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
+            // By default (-a flag not set), output primary and supplementary alignments
             // With -a flag, output all alignments meeting score threshold
             let should_output = if opt.output_all_alignments {
                 is_unmapped || alignment.score >= opt.t
             } else {
-                is_primary
+                is_primary || is_supplementary  // Output both primary and supplementary
             };
 
             if !should_output {
-                continue; // Skip non-primary alignments (unless -a flag set)
+                continue; // Skip non-primary/non-supplementary alignments (unless -a flag set)
             }
 
             // Clear or set secondary flag based on pairing result
             if is_primary {
                 // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
+                // Preserve SUPPLEMENTARY flag (0x800) while clearing SECONDARY (0x100)
                 alignment.flag &= !sam_flags::SECONDARY;
-            } else if !is_unmapped {
-                // Non-best alignment - mark as secondary
+            } else if !is_unmapped && !is_supplementary {
+                // Non-best alignment that's not supplementary - mark as secondary
                 alignment.flag |= sam_flags::SECONDARY;
             }
 
