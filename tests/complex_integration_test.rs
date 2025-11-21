@@ -96,19 +96,34 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCA
     let actual_lines: Vec<&str> = stdout.lines().collect();
 
     // Verify we have header lines and one alignment
-    assert!(actual_lines.len() >= 3, "Should have at least 3 lines (headers + alignment)");
+    assert!(
+        actual_lines.len() >= 3,
+        "Should have at least 3 lines (headers + alignment)"
+    );
 
     // Check for header lines
-    assert!(actual_lines.iter().any(|line| line.starts_with("@HD")), "Should have @HD header");
-    assert!(actual_lines.iter().any(|line| line.starts_with("@SQ\tSN:chr1")), "Should have @SQ header for chr1");
+    assert!(
+        actual_lines.iter().any(|line| line.starts_with("@HD")),
+        "Should have @HD header"
+    );
+    assert!(
+        actual_lines
+            .iter()
+            .any(|line| line.starts_with("@SQ\tSN:chr1")),
+        "Should have @SQ header for chr1"
+    );
 
     // Find the alignment line (non-header)
-    let alignment_line = actual_lines.iter()
+    let alignment_line = actual_lines
+        .iter()
         .find(|line| !line.starts_with('@'))
         .expect("Should have at least one alignment line");
 
     let fields: Vec<&str> = alignment_line.split('\t').collect();
-    assert!(fields.len() >= 11, "SAM line should have at least 11 fields");
+    assert!(
+        fields.len() >= 11,
+        "SAM line should have at least 11 fields"
+    );
 
     // Verify key fields
     assert_eq!(fields[0], "read1", "Read name should be 'read1'");
@@ -116,19 +131,32 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCA
 
     // Position should be reasonable (1-32 for 32bp reference)
     let pos: i32 = fields[3].parse().expect("Position should be numeric");
-    assert!(pos >= 1 && pos <= 32, "Position should be between 1-32, got {}", pos);
+    assert!(
+        pos >= 1 && pos <= 32,
+        "Position should be between 1-32, got {}",
+        pos
+    );
 
     // CIGAR should use M-only format (32M for 32bp alignment, or 31M1S if last base soft-clipped)
     let cigar = fields[5];
-    assert!(cigar.contains('M'), "CIGAR should contain M operator: {}", cigar);
+    assert!(
+        cigar.contains('M'),
+        "CIGAR should contain M operator: {}",
+        cigar
+    );
 
     // Verify MD tag indicates mismatch (if aligned with M operator)
     // MD tag should show mismatch at position 31 (e.g., MD:Z:31T or MD:Z:31)
     if cigar.contains("32M") {
-        let md_tag = fields.iter()
+        let md_tag = fields
+            .iter()
             .find(|f| f.starts_with("MD:Z:"))
             .expect("Should have MD tag");
-        assert!(md_tag.len() >= 5, "MD tag should contain mismatch information: {}", md_tag);
+        assert!(
+            md_tag.len() >= 5,
+            "MD tag should contain mismatch information: {}",
+            md_tag
+        );
     }
 
     // Check stderr - allow informational messages from CLI

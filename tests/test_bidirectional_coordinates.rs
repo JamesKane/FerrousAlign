@@ -23,7 +23,10 @@ fn test_bns_depos_forward_strand() {
         bidirectional_pos
     };
 
-    assert_eq!(forward_pos, 500, "Forward strand position should be unchanged");
+    assert_eq!(
+        forward_pos, 500,
+        "Forward strand position should be unchanged"
+    );
 }
 
 #[test]
@@ -45,7 +48,10 @@ fn test_bns_depos_reverse_strand() {
     };
 
     // (2 * 1000) - 1 - 1500 = 2000 - 1 - 1500 = 499
-    assert_eq!(forward_pos, 499, "Reverse position 1500 maps to forward position 499");
+    assert_eq!(
+        forward_pos, 499,
+        "Reverse position 1500 maps to forward position 499"
+    );
 }
 
 #[test]
@@ -78,7 +84,10 @@ fn test_actual_genome_coordinates() {
 
     // Is it on reverse strand?
     let is_rev = bidirectional_pos >= l_pac;
-    assert!(!is_rev, "Position 1299604748 should be on forward strand (< l_pac)");
+    assert!(
+        !is_rev,
+        "Position 1299604748 should be on forward strand (< l_pac)"
+    );
 
     // No conversion needed for forward strand
     let forward_pos = bidirectional_pos;

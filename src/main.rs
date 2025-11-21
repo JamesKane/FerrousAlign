@@ -380,6 +380,9 @@ fn main() {
                 opt.chunk_size = cs;
             }
 
+            // Set mapq_coef_fac after mapq_coef_len is finalized
+            opt.mapq_coef_fac = ((opt.mapq_coef_len as f64).ln()) as i32;
+
             // Configure rayon thread pool
             // Match C++ bwa-mem2 validation: n_threads = n_threads > 1 ? n_threads : 1
             // Default to number of CPU cores if not specified

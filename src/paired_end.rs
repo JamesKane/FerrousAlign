@@ -629,13 +629,14 @@ fn output_batch_paired(
                 rnext: "*".to_string(),
                 pnext: 0,
                 tlen: 0,
-                seq: String::from_utf8_lossy(seq1).to_string(),
-                qual: qual1.to_string(),
+                seq: "".to_string(),
+                qual: "".to_string(),
                 tags: Vec::new(),
                 query_start: 0,
                 query_end: 0,
                 seed_coverage: 0,
                 hash: 0,
+                frac_rep: 0.0,
             });
         }
 
@@ -663,6 +664,7 @@ fn output_batch_paired(
                 query_end: 0,
                 seed_coverage: 0,
                 hash: 0,
+                frac_rep: 0.0,
             });
         }
 

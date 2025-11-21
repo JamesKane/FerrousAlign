@@ -14,7 +14,10 @@ fn create_unique_test_dir(base_name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let thread_id = std::thread::current().id();
-    PathBuf::from(format!("target/{}_{:?}_{}", base_name, thread_id, timestamp))
+    PathBuf::from(format!(
+        "target/{}_{:?}_{}",
+        base_name, thread_id, timestamp
+    ))
 }
 
 // Helper to create test FASTA reference
@@ -159,17 +162,24 @@ fn test_alignment_100bp_with_scattered_mismatches() {
     // CIGAR should use M-only format (not X/=)
     // We expect: 100M (mismatches encoded in M operator)
     let cigar = fields[5];
-    assert!(cigar.contains('M'), "CIGAR should contain M for matches/mismatches");
+    assert!(
+        cigar.contains('M'),
+        "CIGAR should contain M for matches/mismatches"
+    );
 
     // Count total bases in CIGAR (should sum to 100)
     let total_bases = parse_cigar_length(cigar);
     assert_eq!(total_bases, 100, "CIGAR should cover 100 bases");
 
     // Verify MD tag contains mismatches (Session 33)
-    let md_tag = fields.iter()
+    let md_tag = fields
+        .iter()
         .find(|f| f.starts_with("MD:Z:"))
         .expect("Should have MD tag");
-    assert!(md_tag.len() > 5, "MD tag should contain mismatch information");
+    assert!(
+        md_tag.len() > 5,
+        "MD tag should contain mismatch information"
+    );
 
     // Cleanup
     fs::remove_dir_all(test_dir).ok();
@@ -322,7 +332,11 @@ fn test_alignment_complex_cigar() {
     let cigar = fields[5];
 
     // CIGAR should use M-only format with D for deletion
-    assert!(cigar.contains('M'), "CIGAR should contain M for matches/mismatches: {}", cigar);
+    assert!(
+        cigar.contains('M'),
+        "CIGAR should contain M for matches/mismatches: {}",
+        cigar
+    );
 
     // We expect deletion to be detected (5T deleted from reference)
     // Note: Deletion might be detected as soft clip depending on alignment scoring
@@ -394,19 +408,29 @@ fn test_alignment_low_quality() {
         // Verify unmapped flag is set (0x4)
         let flag: u16 = fields[1].parse().unwrap();
         assert!(flag & 0x4 != 0, "Unmapped read should have flag 0x4 set");
-        eprintln!("Note: Read marked as unmapped (correct for 20% mismatches on repetitive sequence)");
+        eprintln!(
+            "Note: Read marked as unmapped (correct for 20% mismatches on repetitive sequence)"
+        );
     } else {
         // If mapped, CIGAR should use M-only format
-        assert!(cigar.contains('M'), "CIGAR should contain M for matches/mismatches: {}", cigar);
+        assert!(
+            cigar.contains('M'),
+            "CIGAR should contain M for matches/mismatches: {}",
+            cigar
+        );
 
         // Verify MD tag contains mismatches (Session 33)
-        let md_tag = fields.iter()
+        let md_tag = fields
+            .iter()
             .find(|f| f.starts_with("MD:Z:"))
             .expect("Should have MD tag");
 
         // Parse MD tag to count mismatches (should be around 20)
         // MD tag format: numbers for matches, letters for mismatches
-        let mismatch_count = md_tag.chars().filter(|c| c.is_alphabetic() && *c != 'M' && *c != 'D' && *c != 'Z').count();
+        let mismatch_count = md_tag
+            .chars()
+            .filter(|c| c.is_alphabetic() && *c != 'M' && *c != 'D' && *c != 'Z')
+            .count();
         assert!(
             mismatch_count >= 15 && mismatch_count <= 25,
             "Should have ~20 mismatches in MD tag, found {}",

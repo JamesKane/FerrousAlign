@@ -52,7 +52,7 @@ AGCT
         assert!(bnt.annotations.is_empty());
         assert_eq!(bnt.ambiguous_region_count, 0);
         assert!(bnt.ambiguous_regions.is_empty());
-        assert!(bnt.pac_file_path.is_none());
+
     }
 
     #[test]

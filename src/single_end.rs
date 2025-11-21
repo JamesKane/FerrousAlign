@@ -161,6 +161,7 @@ pub fn process_single_end(
                         query_end: 0,
                         seed_coverage: 0,
                         hash: 0,
+                        frac_rep: 0.0,
                     };
 
                     // Add RG tag if read group is specified

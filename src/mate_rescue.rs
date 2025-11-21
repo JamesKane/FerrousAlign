@@ -213,8 +213,9 @@ pub fn mem_matesw(
             // Internal fields for alignment selection
             query_start: out_score.query_end_pos - out_score.query_end_pos, // Full query alignment
             query_end: out_score.query_end_pos,
-            seed_coverage: l_ms, // Mate sequence length as coverage
-            hash: 0,             // Will be set later if needed
+            seed_coverage: 0, // Not applicable here, will be updated later
+            hash: 0, // Will be updated later
+            frac_rep: 0.0,
         };
 
         rescued_alignments.push(rescued_aln);

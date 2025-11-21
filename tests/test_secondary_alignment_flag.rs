@@ -9,7 +9,6 @@
 /// 1. Primary alignments never have SECONDARY flag (0x100)
 /// 2. Non-primary alignments are marked as secondary
 /// 3. Paired-end logic correctly overrides single-read secondary marking
-
 use ferrous_align::align::sam_flags;
 
 /// Test that primary alignments don't have secondary flag set
@@ -24,7 +23,10 @@ fn test_primary_alignment_not_secondary() {
 
     // Simulate single-read phase marking as secondary (the bug)
     alignment_flag |= sam_flags::SECONDARY;
-    assert!(alignment_flag & sam_flags::SECONDARY != 0, "Flag should have secondary bit set");
+    assert!(
+        alignment_flag & sam_flags::SECONDARY != 0,
+        "Flag should have secondary bit set"
+    );
 
     // Simulate paired-end phase selecting this as primary (the fix)
     let is_primary = true;
@@ -96,7 +98,10 @@ fn test_output_filtering_default_primary_only() {
         is_primary
     };
 
-    assert!(!should_output, "Secondary alignment should be filtered (no -a flag)");
+    assert!(
+        !should_output,
+        "Secondary alignment should be filtered (no -a flag)"
+    );
 }
 
 /// Test output filtering with -a flag enabled
@@ -133,7 +138,10 @@ fn test_output_filtering_all_alignments() {
         is_primary
     };
 
-    assert!(should_output, "Secondary alignment above threshold should be output with -a flag");
+    assert!(
+        should_output,
+        "Secondary alignment above threshold should be output with -a flag"
+    );
 
     // Secondary alignment with poor score
     let score = 20; // Below threshold
@@ -143,7 +151,10 @@ fn test_output_filtering_all_alignments() {
         is_primary
     };
 
-    assert!(!should_output, "Secondary alignment below threshold should be filtered even with -a flag");
+    assert!(
+        !should_output,
+        "Secondary alignment below threshold should be filtered even with -a flag"
+    );
 }
 
 /// Test that unmapped reads are always output regardless of -a flag
@@ -166,7 +177,10 @@ fn test_unmapped_always_output() {
     };
 
     // Without -a flag, only primary should be output
-    assert!(!should_output, "Unmapped non-primary should be filtered without -a flag");
+    assert!(
+        !should_output,
+        "Unmapped non-primary should be filtered without -a flag"
+    );
 
     // With -a flag
     let output_all_alignments = true;
@@ -176,5 +190,8 @@ fn test_unmapped_always_output() {
         is_primary
     };
 
-    assert!(should_output, "Unmapped alignment should be output with -a flag");
+    assert!(
+        should_output,
+        "Unmapped alignment should be output with -a flag"
+    );
 }

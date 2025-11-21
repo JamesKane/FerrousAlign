@@ -99,10 +99,10 @@ fn test_seed_length_calculation() {
 
     // Test cases: (query_start, query_end, expected_length)
     let test_cases = vec![
-        (0, 10, 10),    // 10 bases from [0, 10)
-        (5, 15, 10),    // 10 bases from [5, 15)
-        (0, 1, 1),      // 1 base from [0, 1)
-        (10, 50, 40),   // 40 bases from [10, 50)
+        (0, 10, 10),  // 10 bases from [0, 10)
+        (5, 15, 10),  // 10 bases from [5, 15)
+        (0, 1, 1),    // 1 base from [0, 1)
+        (10, 50, 40), // 40 bases from [10, 50)
     ];
 
     for (start, end, expected_len) in test_cases {
@@ -150,9 +150,9 @@ fn test_complex_cigar_scenarios() {
     // Scenario 1: Multiple insertions and deletions
     let cigar = vec![
         (b'M', 20),
-        (b'I', 5),  // Insertion: consumes query
+        (b'I', 5), // Insertion: consumes query
         (b'M', 10),
-        (b'D', 3),  // Deletion: does NOT consume query
+        (b'D', 3), // Deletion: does NOT consume query
         (b'M', 15),
         (b'S', 10), // Soft clip: consumes query
     ];
@@ -164,11 +164,7 @@ fn test_complex_cigar_scenarios() {
     );
 
     // Scenario 2: Leading and trailing soft clips
-    let cigar = vec![
-        (b'S', 5),
-        (b'M', 90),
-        (b'S', 5),
-    ];
+    let cigar = vec![(b'S', 5), (b'M', 90), (b'S', 5)];
     assert_eq!(
         calculate_cigar_query_length(&cigar),
         100,
@@ -177,7 +173,7 @@ fn test_complex_cigar_scenarios() {
 
     // Scenario 3: Hard clips (don't consume query)
     let cigar = vec![
-        (b'H', 5),  // Hard clip: does NOT consume query
+        (b'H', 5), // Hard clip: does NOT consume query
         (b'M', 90),
         (b'H', 5),
     ];
@@ -247,6 +243,12 @@ fn is_query_consuming_op(op: u8) -> bool {
 fn test_helper_calculate_cigar_query_length() {
     // Self-test for the helper function
     assert_eq!(calculate_cigar_query_length(&[(b'M', 100)]), 100);
-    assert_eq!(calculate_cigar_query_length(&[(b'M', 50), (b'D', 10), (b'M', 50)]), 100);
-    assert_eq!(calculate_cigar_query_length(&[(b'M', 50), (b'I', 10), (b'M', 40)]), 100);
+    assert_eq!(
+        calculate_cigar_query_length(&[(b'M', 50), (b'D', 10), (b'M', 50)]),
+        100
+    );
+    assert_eq!(
+        calculate_cigar_query_length(&[(b'M', 50), (b'I', 10), (b'M', 40)]),
+        100
+    );
 }

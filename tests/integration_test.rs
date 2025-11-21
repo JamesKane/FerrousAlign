@@ -91,20 +91,40 @@ AGCTAGCTAGCTAGCTAGCTAGCT
     let actual_lines: Vec<&str> = stdout.lines().collect();
 
     // Verify we have header lines and one alignment
-    assert!(actual_lines.len() >= 4, "Should have at least 4 lines (3 headers + alignment)");
+    assert!(
+        actual_lines.len() >= 4,
+        "Should have at least 4 lines (3 headers + alignment)"
+    );
 
     // Check for header lines
-    assert!(actual_lines.iter().any(|line| line.starts_with("@HD")), "Should have @HD header");
-    assert!(actual_lines.iter().any(|line| line.starts_with("@SQ\tSN:chr1")), "Should have @SQ header for chr1");
-    assert!(actual_lines.iter().any(|line| line.starts_with("@PG\tID:ferrous-align")), "Should have @PG header");
+    assert!(
+        actual_lines.iter().any(|line| line.starts_with("@HD")),
+        "Should have @HD header"
+    );
+    assert!(
+        actual_lines
+            .iter()
+            .any(|line| line.starts_with("@SQ\tSN:chr1")),
+        "Should have @SQ header for chr1"
+    );
+    assert!(
+        actual_lines
+            .iter()
+            .any(|line| line.starts_with("@PG\tID:ferrous-align")),
+        "Should have @PG header"
+    );
 
     // Find the alignment line (non-header)
-    let alignment_line = actual_lines.iter()
+    let alignment_line = actual_lines
+        .iter()
         .find(|line| !line.starts_with('@'))
         .expect("Should have at least one alignment line");
 
     let fields: Vec<&str> = alignment_line.split('\t').collect();
-    assert!(fields.len() >= 11, "SAM line should have at least 11 fields");
+    assert!(
+        fields.len() >= 11,
+        "SAM line should have at least 11 fields"
+    );
 
     // Verify key fields
     assert_eq!(fields[0], "read1", "Read name should be 'read1'");
@@ -112,15 +132,27 @@ AGCTAGCTAGCTAGCTAGCTAGCT
 
     // Should be mapped (not flag 4)
     let flag: u16 = fields[1].parse().expect("Flag should be numeric");
-    assert_eq!(flag & 0x4, 0, "Read should be mapped (not have unmapped flag)");
+    assert_eq!(
+        flag & 0x4,
+        0,
+        "Read should be mapped (not have unmapped flag)"
+    );
 
     // Position should be reasonable (1-16 for 16bp reference)
     let pos: i32 = fields[3].parse().expect("Position should be numeric");
-    assert!(pos >= 1 && pos <= 16, "Position should be between 1-16, got {}", pos);
+    assert!(
+        pos >= 1 && pos <= 16,
+        "Position should be between 1-16, got {}",
+        pos
+    );
 
     // CIGAR should use M-only format
     let cigar = fields[5];
-    assert!(cigar.contains('M'), "CIGAR should contain M operator: {}", cigar);
+    assert!(
+        cigar.contains('M'),
+        "CIGAR should contain M operator: {}",
+        cigar
+    );
 
     // Check stderr - allow informational messages from CLI
     // Just ensure no actual errors occurred (command succeeded above)

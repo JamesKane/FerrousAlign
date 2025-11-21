@@ -27,10 +27,11 @@ pub struct Seed {
     pub ref_pos: u64,   // Position in the reference
     pub len: i32,       // Length of the seed
     pub is_rev: bool,   // Is it on the reverse strand?
+    pub interval_size: u64, // BWT interval size (occurrence count)
 }
 
 // Define a struct to represent a Super Maximal Exact Match (SMEM)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SMEM {
     /// Read identifier (for batch processing)
     pub read_id: i32,
@@ -146,6 +147,7 @@ pub struct Chain {
     pub is_rev: bool,
     pub weight: i32, // Chain weight (seed coverage), calculated by mem_chain_weight
     pub kept: i32,   // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
+    pub frac_rep: f32, // Fraction of repetitive seeds in this chain
 }
 
 /// SAM flag bit masks (SAM specification v1.6)
@@ -187,6 +189,7 @@ pub struct Alignment {
     pub(crate) query_end: i32,     // Query end position (exclusive)
     pub(crate) seed_coverage: i32, // Length of region covered by seeds (for MAPQ)
     pub(crate) hash: u64,          // Hash for deterministic tie-breaking
+    pub(crate) frac_rep: f32,       // Fraction of repetitive seeds in this alignment
 }
 
 impl Alignment {
@@ -707,8 +710,9 @@ impl Alignment {
             // Internal fields - default for unmapped
             query_start: 0,
             query_end: seq.len() as i32,
-            seed_coverage: 0,
             hash: 0,
+            seed_coverage: 0,
+            frac_rep: 0.0,
         }
     }
 }
@@ -770,6 +774,7 @@ fn calculate_mapq(
     sub_count: i32,
     match_score: i32,
     mismatch_penalty: i32,
+    frac_rep: f32,
     opt: &MemOpt,
 ) -> u8 {
     const MEM_MAPQ_COEF: f64 = 30.0;
@@ -801,15 +806,28 @@ fn calculate_mapq(
         return 0;
     }
 
-    // Traditional MAPQ formula (default when mapQ_coef_len = 0)
-    // mapq = 30.0 * (1 - sub/score) * ln(seed_coverage)
-    let mut mapq =
-        (MEM_MAPQ_COEF * (1.0 - (sub as f64) / (score as f64)) * (seed_coverage as f64).ln()
-            + 0.499) as i32;
+    let mut mapq: i32;
 
-    // Apply identity penalty if < 95%
-    if identity < 0.95 {
-        mapq = (mapq as f64 * identity * identity + 0.499) as i32;
+    if opt.mapq_coef_len > 0.0 {
+        let mut tmp_val: f64;
+        if (l as f64) < opt.mapq_coef_len as f64 {
+            tmp_val = 1.0;
+        } else {
+            tmp_val = opt.mapq_coef_fac as f64 / (l as f64).ln();
+        }
+        tmp_val *= identity * identity;
+        mapq = (6.02 * (score - sub) as f64 / match_score as f64 * tmp_val * tmp_val + 0.499) as i32;
+    } else {
+        // Traditional MAPQ formula (default when mapQ_coef_len = 0)
+        // mapq = 30.0 * (1 - sub/score) * ln(seed_coverage)
+        mapq =
+            (MEM_MAPQ_COEF * (1.0 - (sub as f64) / (score as f64)) * (seed_coverage as f64).ln()
+                + 0.499) as i32;
+
+        // Apply identity penalty if < 95%
+        if identity < 0.95 {
+            mapq = (mapq as f64 * identity * identity + 0.499) as i32;
+        }
     }
 
     // Penalty for multiple suboptimal alignments
@@ -817,6 +835,10 @@ fn calculate_mapq(
     if sub_count > 0 {
         mapq -= (((sub_count + 1) as f64).ln() * 4.343) as i32;
     }
+
+    // Apply repetitive region penalty (missing in Rust previously)
+    // mapq = mapq * (1. - frac_rep)
+    mapq = (mapq as f64 * (1.0 - frac_rep as f64) + 0.499) as i32;
 
     // Cap at max and floor at 0
     if mapq > MEM_MAPQ_MAX as i32 {
@@ -838,14 +860,14 @@ fn calculate_mapq(
 ///
 /// Weight = minimum of query coverage and reference coverage
 /// This accounts for non-overlapping seed lengths in the chain
-fn calculate_chain_weight(chain: &Chain, seeds: &[Seed]) -> i32 {
+fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, i32) {
     if chain.seeds.is_empty() {
-        return 0;
+        return (0, 0);
     }
 
-    // Calculate query coverage (non-overlapping seed lengths on query)
     let mut query_cov = 0;
     let mut last_qe = -1i32;
+    let mut l_rep = 0; // Length of repetitive seeds
 
     for &seed_idx in &chain.seeds {
         let seed = &seeds[seed_idx];
@@ -853,18 +875,20 @@ fn calculate_chain_weight(chain: &Chain, seeds: &[Seed]) -> i32 {
         let qe = seed.query_pos + seed.len;
 
         if qb > last_qe {
-            // No overlap with previous seed
             query_cov += seed.len;
         } else if qe > last_qe {
-            // Partial overlap
             query_cov += qe - last_qe;
         }
-        // else: completely overlapped, no contribution
-
         last_qe = last_qe.max(qe);
+
+        // Check for repetitive seeds: if interval_size > max_occ
+        // This threshold needs to be dynamically adjusted based on context if we want to mimic BWA-MEM2's exact filtering.
+        // For now, using opt.max_occ as the threshold for 'repetitive'.
+        if seed.interval_size > opt.max_occ as u64 { // Assuming interval_size is the occurrence count of the seed
+            l_rep += seed.len;
+        }
     }
 
-    // Calculate reference coverage (non-overlapping seed lengths on reference)
     let mut ref_cov = 0;
     let mut last_re = 0u64;
 
@@ -874,18 +898,15 @@ fn calculate_chain_weight(chain: &Chain, seeds: &[Seed]) -> i32 {
         let re = seed.ref_pos + seed.len as u64;
 
         if rb > last_re {
-            // No overlap
             ref_cov += seed.len;
         } else if re > last_re {
-            // Partial overlap
             ref_cov += (re - last_re) as i32;
         }
 
         last_re = last_re.max(re);
     }
 
-    // Weight = min(query_cov, ref_cov)
-    query_cov.min(ref_cov)
+    (query_cov.min(ref_cov), l_rep)
 }
 
 /// Filter chains using drop_ratio and score thresholds
@@ -897,16 +918,23 @@ fn calculate_chain_weight(chain: &Chain, seeds: &[Seed]) -> i32 {
 /// 3. Filter by min_chain_weight
 /// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
 /// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
-fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt) -> Vec<Chain> {
+fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt, query_length: i32) -> Vec<Chain> {
     if chains.is_empty() {
         return Vec::new();
     }
 
     // Calculate weights for all chains
-    for chain in chains.iter_mut() {
-        chain.weight = calculate_chain_weight(chain, seeds);
-        chain.kept = 0; // Initially mark as discarded
-    }
+                    for chain in chains.iter_mut() {
+                        let (weight, l_rep) = calculate_chain_weight(chain, seeds, opt);
+                        chain.weight = weight;
+                        // Calculate frac_rep = l_rep / query_length
+                        chain.frac_rep = if query_length > 0 {
+                            l_rep as f32 / query_length as f32
+                        } else {
+                            0.0
+                        };
+                        chain.kept = 0; // Initially mark as discarded
+                    }
 
     // Sort chains by weight (descending)
     chains.sort_by(|a, b| b.weight.cmp(&a.weight));
@@ -1092,11 +1120,7 @@ fn generate_xa_tags(
     xa_tags
 }
 
-/// Generate SA (Supplementary Alignment) tags for chimeric/split-read alignments
-/// Implements C++ bwa-mem2 logic (bwamem.cpp:1694-1713)
-///
-/// SA tag format: "rname,pos,strand,CIGAR,mapQ,NM;"
-/// Links all non-secondary (primary + supplementary) alignments for the same read
+
 ///
 /// Algorithm:
 /// 1. Only generate SA tags for non-secondary alignments (flag & 0x100 == 0)
@@ -1109,81 +1133,85 @@ fn generate_sa_tags(
 ) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
 
-    let mut sa_tags: HashMap<String, String> = HashMap::new();
+    let mut all_sa_tags: HashMap<String, String> = HashMap::new();
 
-    // Group alignments by read name
-    let mut alignments_by_read: HashMap<String, Vec<usize>> = HashMap::new();
-    for (idx, aln) in alignments.iter().enumerate() {
+    if alignments.is_empty() {
+        return all_sa_tags;
+    }
+
+    // Group alignments by query name
+    let mut alignments_by_read: HashMap<String, Vec<&Alignment>> = HashMap::new();
+    for aln in alignments {
         alignments_by_read
             .entry(aln.query_name.clone())
             .or_insert_with(Vec::new)
-            .push(idx);
+            .push(aln);
     }
 
     // Generate SA tags for reads with multiple non-secondary alignments
-    for (read_name, indices) in alignments_by_read.iter() {
-        // Count non-secondary alignments (primary + supplementary)
-        let non_secondary_indices: Vec<usize> = indices
+    for (read_name, read_alns) in alignments_by_read.iter() {
+        // Collect all non-secondary alignments for this read
+        let non_secondary_alns: Vec<&Alignment> = read_alns
             .iter()
-            .filter(|&&idx| alignments[idx].flag & sam_flags::SECONDARY == 0)
-            .copied()
+            .filter(|a| (a.flag & sam_flags::SECONDARY) == 0) // Exclude secondary alignments
+            .cloned()
             .collect();
 
         // Only generate SA tag if there are 2+ non-secondary alignments (chimeric/split-read)
-        if non_secondary_indices.len() < 2 {
+        if non_secondary_alns.len() < 2 {
             continue;
         }
 
-        // Generate SA tag for each non-secondary alignment
-        for &current_idx in &non_secondary_indices {
-            let mut sa_parts: Vec<String> = Vec::new();
+        // Sort non-secondary alignments for deterministic SA tag output
+        let mut sorted_alns = non_secondary_alns.clone();
+        sorted_alns.sort_by(|a, b| {
+            a.ref_name
+                .cmp(&b.ref_name)
+                .then_with(|| a.pos.cmp(&b.pos))
+                .then_with(|| (a.flag & sam_flags::REVERSE).cmp(&(b.flag & sam_flags::REVERSE)))
+        });
 
-            for &other_idx in &non_secondary_indices {
-                if other_idx == current_idx {
-                    continue; // Skip self
-                }
+        let mut sa_parts: Vec<String> = Vec::new();
+        for aln in sorted_alns.iter() {
+            // Extract NM tag value (edit distance)
+            let nm_value = aln
+                .tags
+                .iter()
+                .find(|(tag_name, _)| tag_name == "NM")
+                .map(|(_, val)| val.clone())
+                .unwrap_or_else(|| "i:0".to_string())
+                .strip_prefix("i:")
+                .unwrap_or("0")
+                .parse::<i32>()
+                .unwrap_or(0);
 
-                let other = &alignments[other_idx];
 
-                // Extract NM tag value (edit distance)
-                let nm_value = other
-                    .tags
-                    .iter()
-                    .find(|(tag, _)| tag == "NM")
-                    .and_then(|(_, val)| val.strip_prefix("i:"))
-                    .and_then(|v| v.parse::<i32>().ok())
-                    .unwrap_or(0);
+            // Format: rname,pos,strand,CIGAR,mapQ,NM;
+            // Note: pos is 1-based in SAM
+            let strand = if (aln.flag & sam_flags::REVERSE) != 0 { '-' } else { '+' };
+            sa_parts.push(format!(
+                "{},{},{},{},{},{}",
+                aln.ref_name,
+                aln.pos + 1,  // SAM is 1-based
+                strand,
+                aln.cigar_string(),
+                aln.mapq,
+                nm_value
+            ));
+        }
 
-                // Format: rname,pos,strand,CIGAR,mapQ,NM;
-                // Note: pos is 1-based in SAM
-                let strand = if other.flag & sam_flags::REVERSE != 0 { '-' } else { '+' };
-                sa_parts.push(format!(
-                    "{},{},{},{},{},{}",
-                    other.ref_name,
-                    other.pos + 1,  // SAM is 1-based
-                    strand,
-                    other.cigar_string(),
-                    other.mapq,
-                    nm_value
-                ));
-            }
-
-            if !sa_parts.is_empty() {
-                let sa_tag = format!("Z:{};", sa_parts.join(";"));
-                sa_tags.insert(
-                    format!("{}:{}", read_name, current_idx),
-                    sa_tag
-                );
-            }
+        if !sa_parts.is_empty() {
+            let sa_tag_value = format!("Z:{};", sa_parts.join(";"));
+            all_sa_tags.insert(read_name.clone(), sa_tag_value);
         }
     }
 
     log::debug!(
-        "Generated SA tags for {} alignments (chimeric/split-read)",
-        sa_tags.len()
+        "Generated SA tags for {} reads (chimeric/split-read)",
+        all_sa_tags.len()
     );
 
-    sa_tags
+    all_sa_tags
 }
 
 /// Mark secondary alignments and calculate MAPQ values
@@ -1262,6 +1290,21 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
         }
     }
 
+    // Ensure the designated primary alignment does not have the SUPPLEMENTARY flag set.
+    // The first alignment in `primary_indices` is considered the primary candidate.
+    if !primary_indices.is_empty() {
+        let primary_candidate_idx = primary_indices[0];
+        // Clear the SUPPLEMENTARY flag (0x800) for the primary candidate
+        alignments[primary_candidate_idx].flag &= !sam_flags::SUPPLEMENTARY;
+        log::debug!(
+            "Cleared SUPPLEMENTARY flag for primary candidate alignment {} ({}:{}, score={})",
+            primary_candidate_idx,
+            alignments[primary_candidate_idx].ref_name,
+            alignments[primary_candidate_idx].pos,
+            alignments[primary_candidate_idx].score
+        );
+    }
+
     // Calculate MAPQ for all alignments
     for i in 0..alignments.len() {
         if alignments[i].flag & 0x100 == 0 {
@@ -1273,6 +1316,7 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
                 sub_counts[i],
                 opt.a,
                 opt.b,
+                alignments[i].frac_rep,
                 opt,
             );
         } else {
@@ -2287,12 +2331,12 @@ fn generate_seeds_with_mode(
     // eprintln!("all_smems: {:?}", all_smems);
 
     // --- Filtering SMEMs ---
-    // TODO: Implement re-seeding (-r split_factor) and split width (-y)
-    // Re-seeding splits long MEMs (length > min_seed_len * split_factor) into shorter seeds
-    // Split width controls occurrence threshold for splitting (if occurrences <= split_width)
-    // See C++ bwamem.cpp:639-695 for full implementation
+    let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
+    let mut filtered_too_short = 0;
+    let mut filtered_too_many_occ = 0;
+    let mut duplicates = 0;
 
-    // 1. Sort SMEMs
+    // Sort SMEMs to process unique ones efficiently
     all_smems.sort_by_key(|smem| {
         (
             smem.query_start,
@@ -2300,50 +2344,49 @@ fn generate_seeds_with_mode(
             smem.bwt_interval_start,
             smem.is_reverse_complement,
         )
-    }); // Include is_rev_comp in sort key
+    });
 
-    // 2. Remove duplicates and filter by minimum length and max occurrences
-    let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
-    let mut filtered_too_short = 0;
-    let mut filtered_too_many_occ = 0;
-    let mut duplicates = 0;
+    let split_len_threshold = (_opt.min_seed_len as f32 * _opt.split_factor) as i32;
 
     if let Some(mut prev_smem) = all_smems.first().cloned() {
         let seed_len = prev_smem.query_end - prev_smem.query_start + 1;
-        // CRITICAL FIX: Use s field for occurrences, NOT l - k
-        // The l field encodes reverse complement BWT info, not interval endpoint
         let occurrences = prev_smem.interval_size;
 
-        // Filter by min_seed_len (-k) and max_occ (-c)
-        if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
+        // Standard filter (min_seed_len, max_occ)
+        let mut keep_smem = seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64;
+
+        // Chimeric filter (from BWA-MEM2 bwamem.cpp:685)
+        // If SMEM is too short for splitting OR too repetitive, it's NOT considered for chimeric re-seeding
+        if seed_len < split_len_threshold || occurrences > _opt.split_width as u64 {
+            keep_smem = false; // Mark as not suitable for chimeric processing
+        }
+
+        if keep_smem {
             unique_filtered_smems.push(prev_smem);
         } else {
-            if seed_len < _opt.min_seed_len {
-                filtered_too_short += 1;
-            }
-            if occurrences > _opt.max_occ as u64 {
-                filtered_too_many_occ += 1;
-            }
+            if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
+            if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
         }
 
         for i in 1..all_smems.len() {
             let current_smem = all_smems[i];
-            if current_smem != prev_smem {
-                // Use PartialEq for comparison
+            if current_smem != prev_smem { // Use PartialEq for comparison
                 let seed_len = current_smem.query_end - current_smem.query_start + 1;
-                // CRITICAL FIX: Use s field for occurrences, NOT l - k
                 let occurrences = current_smem.interval_size;
 
-                // Filter by min_seed_len (-k) and max_occ (-c)
-                if seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64 {
+                // Standard filter (min_seed_len, max_occ)
+                let mut keep_smem_current = seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64;
+
+                // Chimeric filter
+                if seed_len < split_len_threshold || occurrences > _opt.split_width as u64 {
+                    keep_smem_current = false;
+                }
+
+                if keep_smem_current {
                     unique_filtered_smems.push(current_smem);
                 } else {
-                    if seed_len < _opt.min_seed_len {
-                        filtered_too_short += 1;
-                    }
-                    if occurrences > _opt.max_occ as u64 {
-                        filtered_too_many_occ += 1;
-                    }
+                    if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
+                    if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
                 }
             } else {
                 duplicates += 1;
@@ -2380,7 +2423,6 @@ fn generate_seeds_with_mode(
             );
         }
     }
-    // eprintln!("unique_filtered_smems: {:?}", unique_filtered_smems);
     // --- End Filtering SMEMs ---
 
     log::debug!(
@@ -2389,6 +2431,7 @@ fn generate_seeds_with_mode(
         all_smems.len(),
         unique_filtered_smems.len()
     );
+
 
     // Convert SMEMs to Seed structs and perform seed extension
     // FIXED: Remove artificial SMEM limit - process ALL seeds like C++ bwa-mem2
@@ -2516,6 +2559,7 @@ fn generate_seeds_with_mode(
             // C++ bwamem uses qend = qbeg + len (exclusive end), matching this calculation
             len: smem.query_end - smem.query_start,
             is_rev,
+            interval_size: smem.interval_size, // Propagate interval_size from SMEM to Seed
         };
 
         // DEBUG: Log each seed creation with SMEM bounds
@@ -2563,8 +2607,7 @@ fn generate_seeds_with_mode(
 
     // --- Chain Filtering ---
     // Implements bwa-mem2 mem_chain_flt logic (bwamem.cpp:506-624)
-    let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt);
-    log::debug!(
+            let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt, query_len as i32);    log::debug!(
         "{}: Chain filtering kept {} chains (from {} total)",
         query_name,
         filtered_chains.len(),
@@ -3309,6 +3352,7 @@ fn generate_seeds_with_mode(
                 query_end,
                 seed_coverage,
                 hash,
+                frac_rep: chain.frac_rep,
             });
         } else {
             log::warn!(
@@ -3382,45 +3426,27 @@ fn generate_seeds_with_mode(
             alignments.iter().filter(|a| a.flag & 0x100 != 0).count()
         );
 
-        // === XA TAG GENERATION ===
-        // Generate XA tags for primary alignments with qualifying secondaries
-        // Format: XA:Z:chr1,+100,50M,2;chr2,-200,48M,3;
         let xa_tags = generate_xa_tags(&alignments, _opt);
+        let sa_tags = generate_sa_tags(&alignments);
 
-        // Add XA tags to primary alignments
         for aln in alignments.iter_mut() {
-            if aln.flag & 0x100 == 0 {
-                // This is a primary alignment
-                if let Some(xa_tag) = xa_tags.get(&aln.query_name) {
-                    // Add XA tag to this alignment's tags
+            // Only consider non-secondary alignments for SA/XA tags
+            if aln.flag & sam_flags::SECONDARY == 0 {
+                if let Some(sa_tag) = sa_tags.get(&aln.query_name) {
+                    // This is part of a chimeric read, add SA tag
+                    aln.tags.push(("SA".to_string(), sa_tag.clone()));
+                    log::debug!(
+                        "{}: Added SA tag for read {}",
+                        aln.query_name,
+                        aln.query_name
+                    );
+                } else if let Some(xa_tag) = xa_tags.get(&aln.query_name) {
+                    // Not a chimeric read, add XA tag if available
                     aln.tags.push(("XA".to_string(), xa_tag.clone()));
                     log::debug!(
                         "{}: Added XA tag with {} alternative alignments",
                         aln.query_name,
                         xa_tag.matches(';').count()
-                    );
-                }
-            }
-        }
-
-        // === SA TAG GENERATION ===
-        // Generate SA tags for chimeric/split-read alignments (supplementary)
-        // Format: SA:Z:chr1,100,+,50M,60,0;chr2,200,-,48M,60,1;
-        // Links all non-secondary (primary + supplementary) alignments for the same read
-        let sa_tags = generate_sa_tags(&alignments);
-
-        // Add SA tags to non-secondary alignments
-        for (idx, aln) in alignments.iter_mut().enumerate() {
-            if aln.flag & sam_flags::SECONDARY == 0 {
-                // Non-secondary (primary or supplementary) alignment
-                let lookup_key = format!("{}:{}", aln.query_name, idx);
-                if let Some(sa_tag) = sa_tags.get(&lookup_key) {
-                    // Add SA tag to this alignment's tags
-                    aln.tags.push(("SA".to_string(), sa_tag.clone()));
-                    log::debug!(
-                        "{}: Added SA tag (supplementary alignment) idx={}",
-                        aln.query_name,
-                        idx
                     );
                 }
             }
@@ -3457,6 +3483,7 @@ fn generate_seeds_with_mode(
             query_end: 0,
             seed_coverage: 0,
             hash: 0,
+            frac_rep: 0.0, // Initial placeholder
         });
     }
 
@@ -3618,6 +3645,7 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
             is_rev,
             weight: 0, // Will be calculated by filter_chains()
             kept: 0,   // Will be set by filter_chains()
+            frac_rep: 0.0, // Initial placeholder
         });
 
         // Safety limit: stop after extracting a reasonable number of chains
@@ -4310,6 +4338,7 @@ mod tests {
             query_end: 65,
             seed_coverage: 50,
             hash: 0,
+            frac_rep: 0.0,
         };
 
         // Create a supplementary alignment with soft clips
@@ -4332,6 +4361,7 @@ mod tests {
             query_end: 65,
             seed_coverage: 50,
             hash: 0,
+            frac_rep: 0.0,
         };
 
         // Create a secondary alignment with soft clips
@@ -4354,6 +4384,7 @@ mod tests {
             query_end: 65,
             seed_coverage: 50,
             hash: 0,
+            frac_rep: 0.0,
         };
 
         // Verify CIGAR strings

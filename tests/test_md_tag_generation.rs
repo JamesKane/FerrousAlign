@@ -63,7 +63,10 @@ fn test_md_tag_multiple_mismatches() {
     let cigar = vec![(b'M', 10)];
 
     let md_tag = generate_md_tag_test_helper(&cigar, ref_aligned, query_aligned);
-    assert_eq!(md_tag, "0A3A5", "Multiple mismatches should produce MD:Z:0A3A5");
+    assert_eq!(
+        md_tag, "0A3A5",
+        "Multiple mismatches should produce MD:Z:0A3A5"
+    );
 
     let nm = calculate_nm_from_md(&md_tag, &cigar);
     assert_eq!(nm, 2, "Two mismatches should have NM=2");
@@ -122,7 +125,10 @@ fn test_md_tag_complex() {
     let cigar = vec![(b'M', 5), (b'D', 2), (b'M', 4)];
 
     let md_tag = generate_md_tag_test_helper(&cigar, ref_aligned, query_aligned);
-    assert_eq!(md_tag, "4A0^CC4", "Complex scenario should produce MD:Z:4A0^CC4");
+    assert_eq!(
+        md_tag, "4A0^CC4",
+        "Complex scenario should produce MD:Z:4A0^CC4"
+    );
 
     let nm = calculate_nm_from_md(&md_tag, &cigar);
     assert_eq!(nm, 3, "1 mismatch + 2bp deletion should have NM=3");
@@ -161,7 +167,10 @@ fn test_md_tag_consecutive_mismatches() {
     let cigar = vec![(b'M', 10)];
 
     let md_tag = generate_md_tag_test_helper(&cigar, ref_aligned, query_aligned);
-    assert_eq!(md_tag, "0A0C8", "Consecutive mismatches should be separated by 0");
+    assert_eq!(
+        md_tag, "0A0C8",
+        "Consecutive mismatches should be separated by 0"
+    );
 
     let nm = calculate_nm_from_md(&md_tag, &cigar);
     assert_eq!(nm, 2, "Two consecutive mismatches should have NM=2");
@@ -173,7 +182,11 @@ fn test_md_tag_consecutive_mismatches() {
 // ============================================================================
 
 /// Simplified MD tag generation for testing
-fn generate_md_tag_test_helper(cigar: &[(u8, i32)], ref_aligned: &[u8], query_aligned: &[u8]) -> String {
+fn generate_md_tag_test_helper(
+    cigar: &[(u8, i32)],
+    ref_aligned: &[u8],
+    query_aligned: &[u8],
+) -> String {
     let mut md = String::new();
     let mut match_count = 0;
     let mut ref_idx = 0;
