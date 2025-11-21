@@ -619,7 +619,7 @@ fn output_batch_paired(
             );
             alignments1.push(align::Alignment {
                 query_name: name1.to_string(),
-                flag: 0x4, // Unmapped (paired flags will be set later)
+                flag: sam_flags::UNMAPPED, // Unmapped (paired flags will be set later)
                 ref_name: "*".to_string(),
                 ref_id: 0,
                 pos: 0,
@@ -647,7 +647,7 @@ fn output_batch_paired(
             );
             alignments2.push(align::Alignment {
                 query_name: name2.to_string(),
-                flag: 0x4, // Unmapped (paired flags will be set later)
+                flag: sam_flags::UNMAPPED, // Unmapped (paired flags will be set later)
                 ref_name: "*".to_string(),
                 ref_id: 0,
                 pos: 0,
@@ -758,7 +758,7 @@ fn output_batch_paired(
                 true, // is_first_in_pair
                 &mate2_ref_initial,
                 mate2_pos_initial,
-                mate2_flag_initial & 0x10 != 0, // mate_is_reverse
+                mate2_flag_initial & sam_flags::REVERSE != 0, // mate_is_reverse
             );
             alignments1.push(unmapped);
         }
@@ -771,7 +771,7 @@ fn output_batch_paired(
                 false, // is_first_in_pair (this is read2)
                 &mate1_ref_initial,
                 mate1_pos_initial,
-                mate1_flag_initial & 0x10 != 0, // mate_is_reverse
+                mate1_flag_initial & sam_flags::REVERSE != 0, // mate_is_reverse
             );
             alignments2.push(unmapped);
         }
@@ -792,22 +792,22 @@ fn output_batch_paired(
 
         // Set flags and mate information for read1
         for (idx, alignment) in alignments1.iter_mut().enumerate() {
-            let is_unmapped = alignment.flag & 0x4 != 0;
+            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
 
-            // ALWAYS set paired flag (0x1) - even for unmapped reads
-            alignment.flag |= 0x1;
+            // ALWAYS set paired flag (sam_flags::PAIRED) - even for unmapped reads
+            alignment.flag |= sam_flags::PAIRED;
 
-            // ALWAYS set first in pair flag (0x40) - even for unmapped reads
-            alignment.flag |= 0x40;
+            // ALWAYS set first in pair flag (sam_flags::FIRST_IN_PAIR) - even for unmapped reads
+            alignment.flag |= sam_flags::FIRST_IN_PAIR;
 
             // Only set proper pair flag for mapped reads in proper pairs
             if !is_unmapped && is_properly_paired && idx == best_idx1 {
-                alignment.flag |= 0x2;
+                alignment.flag |= sam_flags::PROPER_PAIR;
             }
 
             // Set mate unmapped flag if mate is unmapped
             if mate2_ref == "*" {
-                alignment.flag |= 0x8;
+                alignment.flag |= sam_flags::MATE_UNMAPPED;
             }
 
             // Only set mate position and TLEN for mapped reads
@@ -819,8 +819,8 @@ fn output_batch_paired(
                 };
                 alignment.pnext = mate2_pos + 1;
 
-                if mate2_flag & 0x10 != 0 {
-                    alignment.flag |= 0x20;
+                if mate2_flag & sam_flags::REVERSE != 0 {
+                    alignment.flag |= sam_flags::MATE_REVERSE;
                 }
 
                 if alignment.ref_name == mate2_ref {
@@ -835,22 +835,22 @@ fn output_batch_paired(
 
         // Set flags and mate information for read2
         for (idx, alignment) in alignments2.iter_mut().enumerate() {
-            let is_unmapped = alignment.flag & 0x4 != 0;
+            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
 
-            // ALWAYS set paired flag (0x1) - even for unmapped reads
-            alignment.flag |= 0x1;
+            // ALWAYS set paired flag (sam_flags::PAIRED) - even for unmapped reads
+            alignment.flag |= sam_flags::PAIRED;
 
-            // ALWAYS set second in pair flag (0x80) - even for unmapped reads
-            alignment.flag |= 0x80;
+            // ALWAYS set second in pair flag (sam_flags::SECOND_IN_PAIR) - even for unmapped reads
+            alignment.flag |= sam_flags::SECOND_IN_PAIR;
 
             // Only set proper pair flag for mapped reads in proper pairs
             if !is_unmapped && is_properly_paired && idx == best_idx2 {
-                alignment.flag |= 0x2;
+                alignment.flag |= sam_flags::PROPER_PAIR;
             }
 
             // Set mate unmapped flag if mate is unmapped
             if mate1_ref == "*" {
-                alignment.flag |= 0x8;
+                alignment.flag |= sam_flags::MATE_UNMAPPED;
             }
 
             // Only set mate position and TLEN for mapped reads
@@ -862,8 +862,8 @@ fn output_batch_paired(
                 };
                 alignment.pnext = mate1_pos + 1;
 
-                if mate1_flag & 0x10 != 0 {
-                    alignment.flag |= 0x20;
+                if mate1_flag & sam_flags::REVERSE != 0 {
+                    alignment.flag |= sam_flags::MATE_REVERSE;
                 }
 
                 if alignment.ref_name == mate1_ref {
@@ -910,7 +910,7 @@ fn output_batch_paired(
             // Clear or set secondary flag based on pairing result
             if is_primary {
                 // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
-                // Preserve SUPPLEMENTARY flag (0x800) while clearing SECONDARY (0x100)
+                // Preserve SUPPLEMENTARY flag (sam_flags::SUPPLEMENTARY) while clearing SECONDARY (sam_flags::SECONDARY)
                 alignment.flag &= !sam_flags::SECONDARY;
             } else if !is_unmapped && !is_supplementary {
                 // Non-best alignment that's not supplementary - mark as secondary
@@ -953,7 +953,7 @@ fn output_batch_paired(
             // Clear or set secondary flag based on pairing result
             if is_primary {
                 // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
-                // Preserve SUPPLEMENTARY flag (0x800) while clearing SECONDARY (0x100)
+                // Preserve SUPPLEMENTARY flag (sam_flags::SUPPLEMENTARY) while clearing SECONDARY (sam_flags::SECONDARY)
                 alignment.flag &= !sam_flags::SECONDARY;
             } else if !is_unmapped && !is_supplementary {
                 // Non-best alignment that's not supplementary - mark as secondary

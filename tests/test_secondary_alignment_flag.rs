@@ -2,11 +2,11 @@
 ///
 /// Bug: 36% of reads (7,264/20,000) were incorrectly marked as secondary
 /// Root cause: Single-read alignment phase marked overlapping alignments as
-/// secondary (0x100 flag), but paired-end logic selected different "best"
+/// secondary (sam_flags::SECONDARY flag), but paired-end logic selected different "best"
 /// alignments without clearing the flag.
 ///
 /// This test ensures:
-/// 1. Primary alignments never have SECONDARY flag (0x100)
+/// 1. Primary alignments never have SECONDARY flag (sam_flags::SECONDARY)
 /// 2. Non-primary alignments are marked as secondary
 /// 3. Paired-end logic correctly overrides single-read secondary marking
 use ferrous_align::align::sam_flags;

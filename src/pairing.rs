@@ -45,7 +45,7 @@ pub fn mem_pair(
     // Add alignments from read1
     for (i, aln) in alns1.iter().enumerate() {
         // Use forward-strand position directly (aln.pos is always on forward strand)
-        let is_rev = (aln.flag & 0x10) != 0;
+        let is_rev = (aln.flag & align::sam_flags::REVERSE) != 0;
         let pos = aln.pos as i64;
 
         let pos_key = ((aln.ref_id as u64) << 32) | (pos as u64);
@@ -67,7 +67,7 @@ pub fn mem_pair(
 
     // Add alignments from read2
     for (i, aln) in alns2.iter().enumerate() {
-        let is_rev = (aln.flag & 0x10) != 0;
+        let is_rev = (aln.flag & align::sam_flags::REVERSE) != 0;
         let pos = aln.pos as i64;
 
         let pos_key = ((aln.ref_id as u64) << 32) | (pos as u64);

@@ -180,7 +180,7 @@ pub fn mem_matesw(
         // Create alignment structure
         let mut flag = 0u16;
         if is_rev {
-            flag |= 0x10; // Reverse complement
+            flag |= align::sam_flags::REVERSE; // Reverse complement
         }
 
         let rescued_aln = align::Alignment {

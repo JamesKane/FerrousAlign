@@ -262,8 +262,8 @@ pub fn bootstrap_insert_size_stats(
             if aln1.ref_name == aln2.ref_name {
                 // Convert positions to bidirectional coordinate space [0, 2*l_pac)
                 // Forward strand: [0, l_pac), Reverse strand: [l_pac, 2*l_pac)
-                let is_rev1 = (aln1.flag & 0x10) != 0;
-                let is_rev2 = (aln2.flag & 0x10) != 0;
+                let is_rev1 = (aln1.flag & align::sam_flags::REVERSE) != 0;
+                let is_rev2 = (aln2.flag & align::sam_flags::REVERSE) != 0;
 
                 let pos1 = if is_rev1 {
                     (l_pac << 1) - 1 - (aln1.pos as i64)

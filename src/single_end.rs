@@ -151,7 +151,7 @@ pub fn process_single_end(
                     // Create unmapped alignment for single-end read
                     let unmapped = align::Alignment {
                         query_name: best_alignment.query_name.clone(),
-                        flag: align::sam_flags::UNMAPPED, // 0x4
+                        flag: align::sam_flags::UNMAPPED, // sam_flags::UNMAPPED
                         ref_name: "*".to_string(),
                         ref_id: 0,
                         pos: 0,

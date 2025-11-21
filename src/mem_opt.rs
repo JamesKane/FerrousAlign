@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+use clap::Args;
+
 // bwa-mem2-rust/src/mem_opt.rs
 //
 // Alignment options structure matching C++ mem_opt_t from bwamem.h
@@ -84,6 +87,189 @@ pub struct InsertSizeOverride {
     pub stddev: f64, // Standard deviation (default: 10% of mean)
     pub max: i32,    // Maximum insert size (default: mean + 4*stddev)
     pub min: i32,    // Minimum insert size (default: 0)
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MemCliOptions {
+    /// Index prefix (built with 'index' command)
+    #[arg(value_name = "INDEX")]
+    pub index: PathBuf,
+
+    /// Input FASTQ file(s) - single file for single-end, two files for paired-end
+    #[arg(value_name = "READS.FQ", required = true)]
+    pub reads: Vec<PathBuf>,
+
+    // ===== Algorithm Options =====
+    /// Minimum seed length
+    #[arg(short = 'k', long, value_name = "INT", default_value_t = 19)]
+    pub min_seed_len: i32,
+
+    /// Band width for banded alignment
+    #[arg(short = 'w', long, value_name = "INT", default_value_t = 100)]
+    pub band_width: i32,
+
+    /// Off-diagonal X-dropoff
+    #[arg(short = 'z', long, value_name = "INT", default_value_t = 100)]
+    pub off_diagonal_dropoff: i32,
+
+    /// Look for internal seeds inside a seed longer than {-k} * FLOAT
+    #[arg(short = 'r', long, value_name = "FLOAT", default_value_t = 1.5)]
+    pub reseed_factor: f32,
+
+    /// Seed occurrence for the 3rd round seeding
+    #[arg(short = 'y', long, value_name = "INT", default_value_t = 20)]
+    pub seed_occurrence_3rd: u64,
+
+    /// Skip seeds with more than INT occurrences
+    #[arg(short = 'X', long, value_name = "INT", default_value_t = 500)]
+    pub max_occurrences: i32,
+
+    /// Drop chains shorter than FLOAT fraction of the longest overlapping chain
+    #[arg(short = 'D', long, value_name = "FLOAT", default_value_t = 0.50)]
+    pub drop_chain_fraction: f32,
+
+    /// Discard a chain if seeded bases shorter than INT
+    #[arg(short = 'm', long, value_name = "INT", default_value_t = 0)]
+    pub min_chain_weight: i32,
+
+    /// Perform at most INT rounds of mate rescues for each read
+    #[arg(short = 'r', long, value_name = "INT", default_value_t = 50)]
+    pub max_mate_rescues: i32,
+
+    /// Skip mate rescue
+    #[arg(long)]
+    pub skip_mate_rescue: bool,
+
+    /// Skip pairing; mate rescue performed unless -S also in use
+    #[arg(long)]
+    pub skip_pairing: bool,
+
+    // ===== Scoring Options =====
+    /// Score for a sequence match, which scales options -TdBOELU unless overridden
+    #[arg(short = 'A', long, value_name = "INT", default_value_t = 1)]
+    pub match_score: i32,
+
+    /// Penalty for a mismatch
+    #[arg(short = 'B', long, value_name = "INT", default_value_t = 4)]
+    pub mismatch_penalty: i32,
+
+    /// Gap open penalties for deletions and insertions [6,6]
+    #[arg(short = 'O', long, value_name = "INT[,INT]", default_value = "6")]
+    pub gap_open: String,
+
+    /// Gap extension penalty; a gap of size k cost '{-O} + {-E}*k' [1,1]
+    #[arg(short = 'E', long, value_name = "INT[,INT]", default_value = "1")]
+    pub gap_extend: String,
+
+    /// Penalty for 5'- and 3'-end clipping [5,5]
+    #[arg(short = 'L', long, value_name = "INT[,INT]", default_value = "5")]
+    pub clipping_penalty: String,
+
+    /// Penalty for an unpaired read pair
+    #[arg(short = 'U', long, value_name = "INT", default_value_t = 17)]
+    pub unpaired_penalty: i32,
+
+    // ===== I/O Options =====
+    /// Output SAM file (default: stdout)
+    #[arg(short = 'o', long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
+
+    /// Read group header line such as '@RG\tID:foo\tSM:bar'
+    #[arg(short = 'R', long, value_name = "STR")]
+    pub read_group: Option<String>,
+
+    /// Insert STR to header if it starts with @; or insert lines in FILE
+    #[arg(short = 'H', long, value_name = "FILE|STR")]
+    pub header: Option<String>,
+
+    /// Treat ALT contigs as part of the primary assembly (i.e. ignore <idxbase>.alt file)
+    #[arg(short = 'j', long)]
+    pub treat_alt_as_primary: bool,
+
+    /// For split alignment, take the alignment with the smallest coordinate as primary
+    #[arg(short = '5', long)]
+    pub smallest_coord_primary: bool,
+
+    /// Don't modify mapQ of supplementary alignments
+    #[arg(long)]
+    pub no_modify_mapq: bool,
+
+    /// Process INT input bases in each batch regardless of nThreads (for reproducibility)
+    #[arg(short = 'K', long, value_name = "INT")]
+    pub chunk_size: Option<i64>,
+
+    /// Verbose level: 1=error, 2=warning, 3=message, 4+=debugging
+    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    pub verbosity: i32,
+
+    /// Minimum score to output
+    #[arg(short = 'T', long, value_name = "INT", default_value_t = 30)]
+    pub min_score: i32,
+
+    /// If there are <INT hits with score >80% of the max score, output all in XA [5,200]
+    /// Note: bwa-mem2 uses -h, but we use --max-xa-hits to avoid conflict with --help
+    #[arg(short = 'x', long, value_name = "INT[,INT]", default_value = "5")]
+    pub max_xa_hits: String,
+
+    /// Output all alignments for SE or unpaired PE
+    #[arg(short = 'a', long)]
+    pub output_all: bool,
+
+    /// Append FASTA/FASTQ comment to SAM output
+    #[arg(short = 'C', long)]
+    pub append_comment: bool,
+
+    /// Output the reference FASTA header in the XR tag
+    #[arg(long)]
+    pub output_ref_header: bool,
+
+    /// Use soft clipping for supplementary alignments
+    #[arg(long)]
+    pub soft_clip_supplementary: bool,
+
+    /// Mark shorter split hits as secondary
+    #[arg(long)]
+    pub mark_secondary: bool,
+
+    /// Smart pairing (ignoring in2.fq)
+    #[arg(short = 'P', long)]
+    pub smart_pairing: bool,
+
+    /// Specify the mean, standard deviation (10% of the mean if absent), max
+    /// (4 sigma from the mean if absent) and min of the insert size distribution.
+    /// FR orientation only. [inferred]
+    #[arg(short = 'I', long, value_name = "FLOAT[,FLOAT[,INT[,INT]]]")]
+    pub insert_size: Option<String>,
+
+    // ===== Processing Options =====
+    /// Number of threads (default: all available cores)
+    #[arg(short = 't', long, value_name = "INT")]
+    pub threads: Option<usize>,
+}
+
+
+
+/// Parse XA hits string "INT" or "INT,INT"
+pub fn parse_xa_hits(s: &str) -> Result<(i32, i32), String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    match parts.len() {
+        1 => {
+            let val = parts[0]
+                .parse::<i32>()
+                .map_err(|_| format!("Invalid XA hits value: {}", s))?;
+            Ok((val, 200)) // Default alt hits to 200
+        }
+        2 => {
+            let primary = parts[0]
+                .parse::<i32>()
+                .map_err(|_| format!("Invalid primary XA hits: {}", parts[0]))?;
+            let alt = parts[1]
+                .parse::<i32>()
+                .map_err(|_| format!("Invalid alt XA hits: {}", parts[1]))?;
+            Ok((primary, alt))
+        }
+        _ => Err(format!("XA hits must be INT or INT,INT: {}", s)),
+    }
 }
 
 impl Default for MemOpt {

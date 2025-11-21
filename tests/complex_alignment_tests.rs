@@ -107,7 +107,7 @@ fn test_alignment_100bp_exact_match() {
     assert_eq!(fields[3], "1", "Should align at position 1");
     assert_eq!(fields[5], "100M", "CIGAR should be 100M for exact match");
 
-    // Verify not marked as secondary (flag 0x100)
+    // Verify not marked as secondary (flag sam_flags::SECONDARY)
     let flag: u16 = fields[1].parse().unwrap();
     assert_eq!(flag & 0x100, 0, "Should not be marked as secondary");
 }
@@ -405,7 +405,7 @@ fn test_alignment_low_quality() {
     // With 20% mismatches on repetitive sequence, may be unmapped (CIGAR = "*")
     // This is correct behavior - highly divergent reads on repetitive sequences should be unmapped
     if cigar == "*" {
-        // Verify unmapped flag is set (0x4)
+        // Verify unmapped flag is set (sam_flags::UNMAPPED)
         let flag: u16 = fields[1].parse().unwrap();
         assert!(flag & 0x4 != 0, "Unmapped read should have flag 0x4 set");
         eprintln!(

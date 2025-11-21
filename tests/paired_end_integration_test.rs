@@ -160,7 +160,7 @@ fn test_paired_end_fr_orientation() -> io::Result<()> {
 ///
 /// Expected behavior:
 /// - Both reads map but not as "properly paired"
-/// - FLAG should have 0x1 (paired) but NOT 0x2 (properly paired)
+/// - FLAG should have sam_flags::PAIRED but NOT sam_flags::PROPER_PAIR
 /// - RNEXT should be the other chromosome name (not '=')
 ///
 /// NOTE: This test is currently disabled because creating synthetic test sequences
@@ -232,7 +232,7 @@ TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC\n\
     let fields: Vec<&str> = read1_line.split('\t').collect();
     let flag: u16 = fields[1].parse().unwrap();
 
-    // Check that FLAG has 0x1 (paired) but NOT 0x2 (properly paired)
+    // Check that FLAG has sam_flags::PAIRED but NOT sam_flags::PROPER_PAIR
     assert_ne!(flag & 0x1, 0, "Should be marked as paired");
     assert_eq!(flag & 0x2, 0, "Should NOT be marked as properly paired");
 
@@ -250,8 +250,8 @@ TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC\n\
 /// near the mapped mate using Smith-Waterman.
 ///
 /// Expected behavior:
-/// - Mapped read: FLAG with 0x1 (paired) and 0x8 (mate unmapped)
-/// - Unmapped read: FLAG with 0x1 (paired) and 0x4 (unmapped)
+/// - Mapped read: FLAG with sam_flags::PAIRED and sam_flags::MATE_UNMAPPED
+/// - Unmapped read: FLAG with sam_flags::PAIRED and sam_flags::UNMAPPED
 #[test]
 fn test_paired_end_mate_rescue() -> io::Result<()> {
     let test_name = "pe_mate_rescue";

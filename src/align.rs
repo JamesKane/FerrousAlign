@@ -242,9 +242,9 @@ impl Alignment {
         // They affect score calculation during alignment extension and pair scoring.
         // This requires deeper integration into the scoring logic in banded_swa.rs
 
-        // Handle reverse complement for SEQ and QUAL if flag 0x10 (reverse strand) is set
+        // Handle reverse complement for SEQ and QUAL if flag sam_flags::REVERSE (reverse strand) is set
         // Matching bwa-mem2 mem_aln2sam() behavior (bwamem.cpp:1706-1716)
-        let (output_seq, output_qual) = if self.flag & 0x10 != 0 {
+        let (output_seq, output_qual) = if self.flag & sam_flags::REVERSE != 0 {
             // Reverse strand: reverse complement the sequence and reverse the quality
             let rev_comp_seq: String = self
                 .seq
@@ -499,7 +499,7 @@ impl Alignment {
     /// Format: RNAME,STRAND+POS,CIGAR,NM
     /// Example: chr1,+1000,50M,2
     pub fn to_xa_entry(&self) -> String {
-        let strand = if self.flag & 0x10 != 0 { '-' } else { '+' };
+        let strand = if self.flag & sam_flags::REVERSE != 0 { '-' } else { '+' };
         let pos = self.pos + 1; // XA uses 1-based position
         let cigar = self.cigar_string();
         let nm = self.calculate_edit_distance();
@@ -517,9 +517,9 @@ impl Alignment {
     /// * `mate_reverse` - true if the mate is reverse-complemented
     ///
     /// # SAM Flags Set
-    /// - Always sets PAIRED (0x1)
-    /// - Sets FIRST_IN_PAIR (0x40) or SECOND_IN_PAIR (0x80) based on `is_first`
-    /// - Conditionally sets PROPER_PAIR (0x2), MATE_UNMAPPED (0x8), MATE_REVERSE (0x20)
+    /// - Always sets PAIRED (sam_flags::PAIRED)
+    /// - Sets FIRST_IN_PAIR (sam_flags::FIRST_IN_PAIR) or SECOND_IN_PAIR (sam_flags::SECOND_IN_PAIR) based on `is_first`
+    /// - Conditionally sets PROPER_PAIR (sam_flags::PROPER_PAIR), MATE_UNMAPPED (sam_flags::MATE_UNMAPPED), MATE_REVERSE (sam_flags::MATE_REVERSE)
     ///
     /// # Example
     /// ```ignore
@@ -624,10 +624,10 @@ impl Alignment {
     /// * `mate_is_reverse` - true if mate is reverse-complemented
     ///
     /// # SAM Flags Set
-    /// - PAIRED (0x1) - always set
-    /// - UNMAPPED (0x4) - always set
-    /// - FIRST_IN_PAIR (0x40) or SECOND_IN_PAIR (0x80) - based on is_first_in_pair
-    /// - MATE_REVERSE (0x20) - if mate_is_reverse is true
+    /// - PAIRED (sam_flags::PAIRED) - always set
+    /// - UNMAPPED (sam_flags::UNMAPPED) - always set
+    /// - FIRST_IN_PAIR (sam_flags::FIRST_IN_PAIR) or SECOND_IN_PAIR (sam_flags::SECOND_IN_PAIR) - based on is_first_in_pair
+    /// - MATE_REVERSE (sam_flags::MATE_REVERSE) - if mate_is_reverse is true
     ///
     /// # SAM Field Values
     /// - POS: mate position (or 0 if mate unmapped)
@@ -652,7 +652,7 @@ impl Alignment {
     ///     false   // mate forward
     /// );
     /// assert_eq!(unmapped.mapq, 0);
-    /// assert_ne!(unmapped.flag & 0x4, 0); // UNMAPPED flag
+    /// assert_ne!(unmapped.flag & sam_flags::UNMAPPED, 0); // UNMAPPED flag
     /// ```
     pub fn create_unmapped(
         query_name: String,
@@ -1070,8 +1070,8 @@ fn generate_xa_tags(
 
     // For each read, generate XA tag from secondary alignments
     for (read_name, read_alns) in by_read.iter() {
-        // Find primary alignment (flag & 0x100 == 0)
-        let primary = read_alns.iter().find(|a| a.flag & 0x100 == 0);
+        // Find primary alignment (flag & sam_flags::SECONDARY == 0)
+        let primary = read_alns.iter().find(|a| a.flag & sam_flags::SECONDARY == 0);
 
         if primary.is_none() {
             continue; // No primary alignment
@@ -1084,7 +1084,7 @@ fn generate_xa_tags(
         let mut secondaries: Vec<&Alignment> = read_alns
             .iter()
             .filter(|a| {
-                (a.flag & 0x100 != 0) && // Is secondary
+                (a.flag & sam_flags::SECONDARY != 0) && // Is secondary
                 (a.score >= xa_threshold) // Score passes threshold
             })
             .cloned()
@@ -1128,7 +1128,7 @@ fn generate_xa_tags(
 
 ///
 /// Algorithm:
-/// 1. Only generate SA tags for non-secondary alignments (flag & 0x100 == 0)
+/// 1. Only generate SA tags for non-secondary alignments (flag & sam_flags::SECONDARY == 0)
 /// 2. Include all OTHER non-secondary alignments for the same read
 /// 3. Skip if only one non-secondary alignment exists (no supplementary)
 ///
@@ -1226,7 +1226,7 @@ fn generate_sa_tags(alignments: &[Alignment]) -> std::collections::HashMap<Strin
 /// Algorithm:
 /// 1. Sort alignments by score (descending), then by hash
 /// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
-/// 3. If overlap >= mask_level, mark as secondary (set 0x100 flag)
+/// 3. If overlap >= mask_level, mark as secondary (set sam_flags::SECONDARY flag)
 /// 4. Calculate MAPQ based on score difference and overlap count
 fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     if alignments.is_empty() {
@@ -1266,7 +1266,7 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
                 }
 
                 // Mark as secondary
-                alignments[i].flag |= sam_flags::SECONDARY; // 0x100
+                alignments[i].flag |= sam_flags::SECONDARY;
                 is_secondary = true;
                 break;
             }
@@ -1281,11 +1281,11 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     // Mark non-overlapping alignments after the first as SUPPLEMENTARY
     // Implements C++ bwa-mem2 logic (bwamem.cpp:1551-1552)
     // First non-overlapping alignment = PRIMARY (no flags)
-    // Subsequent non-overlapping alignments = SUPPLEMENTARY (0x800)
+    // Subsequent non-overlapping alignments = SUPPLEMENTARY (sam_flags::SUPPLEMENTARY)
     for (idx, &i) in primary_indices.iter().enumerate() {
         if idx > 0 {
             // Not the first non-overlapping alignment
-            alignments[i].flag |= sam_flags::SUPPLEMENTARY; // 0x800
+            alignments[i].flag |= sam_flags::SUPPLEMENTARY;
             log::debug!(
                 "Marked alignment {} as SUPPLEMENTARY ({}:{}, score={})",
                 i,
@@ -1300,7 +1300,7 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     // The first alignment in `primary_indices` is considered the primary candidate.
     if !primary_indices.is_empty() {
         let primary_candidate_idx = primary_indices[0];
-        // Clear the SUPPLEMENTARY flag (0x800) for the primary candidate
+        // Clear the SUPPLEMENTARY flag (sam_flags::SUPPLEMENTARY) for the primary candidate
         alignments[primary_candidate_idx].flag &= !sam_flags::SUPPLEMENTARY;
         log::debug!(
             "Cleared SUPPLEMENTARY flag for primary candidate alignment {} ({}:{}, score={})",
@@ -1313,7 +1313,7 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
 
     // Calculate MAPQ for all alignments
     for i in 0..alignments.len() {
-        if alignments[i].flag & 0x100 == 0 {
+        if alignments[i].flag & sam_flags::SECONDARY == 0 {
             // Primary alignment: calculate MAPQ
             alignments[i].mapq = calculate_mapq(
                 alignments[i].score,
@@ -1334,7 +1334,7 @@ fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     // Add XS tags (suboptimal alignment score) to primary alignments
     // XS should only be present if there's a secondary alignment
     for i in 0..alignments.len() {
-        if alignments[i].flag & 0x100 == 0 && sub_scores[i] > 0 {
+        if alignments[i].flag & sam_flags::SECONDARY == 0 && sub_scores[i] > 0 {
             // Primary alignment with a suboptimal score
             alignments[i]
                 .tags
@@ -3416,7 +3416,7 @@ fn generate_seeds_with_mode(
 
             alignments.push(Alignment {
                 query_name: query_name.to_string(),
-                flag: if chain.is_rev { 0x10 } else { 0 }, // 0x10 for reverse strand
+                flag: if chain.is_rev { sam_flags::REVERSE } else { 0 },
                 ref_name,
                 ref_id,
                 pos: chr_pos,
@@ -3500,7 +3500,7 @@ fn generate_seeds_with_mode(
 
         // Mark secondary alignments and calculate MAPQ
         // This modifies alignments in-place:
-        // - Sets 0x100 flag for secondary alignments
+        // - Sets sam_flags::SECONDARY flag for secondary alignments
         // - Calculates proper MAPQ values (0-60) based on score differences
         mark_secondary_alignments(&mut alignments, _opt);
 
@@ -3508,8 +3508,8 @@ fn generate_seeds_with_mode(
             "{}: After alignment selection: {} alignments ({} primary, {} secondary)",
             query_name,
             alignments.len(),
-            alignments.iter().filter(|a| a.flag & 0x100 == 0).count(),
-            alignments.iter().filter(|a| a.flag & 0x100 != 0).count()
+            alignments.iter().filter(|a| a.flag & sam_flags::SECONDARY == 0).count(),
+            alignments.iter().filter(|a| a.flag & sam_flags::SECONDARY != 0).count()
         );
 
         let xa_tags = generate_xa_tags(&alignments, _opt);
@@ -3540,7 +3540,7 @@ fn generate_seeds_with_mode(
     } else {
         // === NO ALIGNMENTS FOUND: Create unmapped read (C++ bwa-mem2 behavior) ===
         // When no seeds/chains were generated, we must still output the read as unmapped
-        // (SAM flag 0x4) to match C++ bwa-mem2 behavior and avoid silently dropping reads
+        // (SAM flag sam_flags::UNMAPPED) to match C++ bwa-mem2 behavior and avoid silently dropping reads
         log::debug!(
             "{}: No alignments generated (no seeds or all chains filtered), creating unmapped read",
             query_name
@@ -3548,7 +3548,7 @@ fn generate_seeds_with_mode(
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
-            flag: 0x4, // 0x4 = read unmapped
+            flag: sam_flags::UNMAPPED,
             ref_name: "*".to_string(),
             ref_id: 0, // 0 for unmapped (doesn't correspond to any real chromosome)
             pos: 0,
@@ -4397,7 +4397,7 @@ mod tests {
             "Expected at least one alignment for a matching query"
         );
 
-        let primary_alignment = alignments.iter().find(|a| a.flag & 0x100 == 0);
+        let primary_alignment = alignments.iter().find(|a| a.flag & sam_flags::SECONDARY == 0);
         assert!(primary_alignment.is_some(), "Expected a primary alignment");
 
         let pa = primary_alignment.unwrap();
@@ -4442,7 +4442,7 @@ mod tests {
         // Create a supplementary alignment with soft clips
         let supplementary = Alignment {
             query_name: "read1".to_string(),
-            flag: sam_flags::SUPPLEMENTARY, // 0x800
+            flag: sam_flags::SUPPLEMENTARY,
             ref_name: "chr2".to_string(),
             ref_id: 1,
             pos: 200,
@@ -4465,7 +4465,7 @@ mod tests {
         // Create a secondary alignment with soft clips
         let secondary = Alignment {
             query_name: "read1".to_string(),
-            flag: sam_flags::SECONDARY, // 0x100
+            flag: sam_flags::SECONDARY,
             ref_name: "chr3".to_string(),
             ref_id: 2,
             pos: 300,
