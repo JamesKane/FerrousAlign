@@ -23,10 +23,10 @@ fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]
 pub struct Seed {
-    pub query_pos: i32, // Position in the query
-    pub ref_pos: u64,   // Position in the reference
-    pub len: i32,       // Length of the seed
-    pub is_rev: bool,   // Is it on the reverse strand?
+    pub query_pos: i32,     // Position in the query
+    pub ref_pos: u64,       // Position in the reference
+    pub len: i32,           // Length of the seed
+    pub is_rev: bool,       // Is it on the reverse strand?
     pub interval_size: u64, // BWT interval size (occurrence count)
 }
 
@@ -145,8 +145,8 @@ pub struct Chain {
     pub ref_start: u64,
     pub ref_end: u64,
     pub is_rev: bool,
-    pub weight: i32, // Chain weight (seed coverage), calculated by mem_chain_weight
-    pub kept: i32,   // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
+    pub weight: i32,   // Chain weight (seed coverage), calculated by mem_chain_weight
+    pub kept: i32,     // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
     pub frac_rep: f32, // Fraction of repetitive seeds in this chain
 }
 
@@ -189,7 +189,7 @@ pub struct Alignment {
     pub(crate) query_end: i32,     // Query end position (exclusive)
     pub(crate) seed_coverage: i32, // Length of region covered by seeds (for MAPQ)
     pub(crate) hash: u64,          // Hash for deterministic tie-breaking
-    pub(crate) frac_rep: f32,       // Fraction of repetitive seeds in this alignment
+    pub(crate) frac_rep: f32,      // Fraction of repetitive seeds in this alignment
 }
 
 impl Alignment {
@@ -816,13 +816,13 @@ fn calculate_mapq(
             tmp_val = opt.mapq_coef_fac as f64 / (l as f64).ln();
         }
         tmp_val *= identity * identity;
-        mapq = (6.02 * (score - sub) as f64 / match_score as f64 * tmp_val * tmp_val + 0.499) as i32;
+        mapq =
+            (6.02 * (score - sub) as f64 / match_score as f64 * tmp_val * tmp_val + 0.499) as i32;
     } else {
         // Traditional MAPQ formula (default when mapQ_coef_len = 0)
         // mapq = 30.0 * (1 - sub/score) * ln(seed_coverage)
-        mapq =
-            (MEM_MAPQ_COEF * (1.0 - (sub as f64) / (score as f64)) * (seed_coverage as f64).ln()
-                + 0.499) as i32;
+        mapq = (MEM_MAPQ_COEF * (1.0 - (sub as f64) / (score as f64)) * (seed_coverage as f64).ln()
+            + 0.499) as i32;
 
         // Apply identity penalty if < 95%
         if identity < 0.95 {
@@ -884,7 +884,8 @@ fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, 
         // Check for repetitive seeds: if interval_size > max_occ
         // This threshold needs to be dynamically adjusted based on context if we want to mimic BWA-MEM2's exact filtering.
         // For now, using opt.max_occ as the threshold for 'repetitive'.
-        if seed.interval_size > opt.max_occ as u64 { // Assuming interval_size is the occurrence count of the seed
+        if seed.interval_size > opt.max_occ as u64 {
+            // Assuming interval_size is the occurrence count of the seed
             l_rep += seed.len;
         }
     }
@@ -918,23 +919,28 @@ fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, 
 /// 3. Filter by min_chain_weight
 /// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
 /// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
-fn filter_chains(chains: &mut Vec<Chain>, seeds: &[Seed], opt: &MemOpt, query_length: i32) -> Vec<Chain> {
+fn filter_chains(
+    chains: &mut Vec<Chain>,
+    seeds: &[Seed],
+    opt: &MemOpt,
+    query_length: i32,
+) -> Vec<Chain> {
     if chains.is_empty() {
         return Vec::new();
     }
 
     // Calculate weights for all chains
-                    for chain in chains.iter_mut() {
-                        let (weight, l_rep) = calculate_chain_weight(chain, seeds, opt);
-                        chain.weight = weight;
-                        // Calculate frac_rep = l_rep / query_length
-                        chain.frac_rep = if query_length > 0 {
-                            l_rep as f32 / query_length as f32
-                        } else {
-                            0.0
-                        };
-                        chain.kept = 0; // Initially mark as discarded
-                    }
+    for chain in chains.iter_mut() {
+        let (weight, l_rep) = calculate_chain_weight(chain, seeds, opt);
+        chain.weight = weight;
+        // Calculate frac_rep = l_rep / query_length
+        chain.frac_rep = if query_length > 0 {
+            l_rep as f32 / query_length as f32
+        } else {
+            0.0
+        };
+        chain.kept = 0; // Initially mark as discarded
+    }
 
     // Sort chains by weight (descending)
     chains.sort_by(|a, b| b.weight.cmp(&a.weight));
@@ -1120,7 +1126,6 @@ fn generate_xa_tags(
     xa_tags
 }
 
-
 ///
 /// Algorithm:
 /// 1. Only generate SA tags for non-secondary alignments (flag & 0x100 == 0)
@@ -1128,9 +1133,7 @@ fn generate_xa_tags(
 /// 3. Skip if only one non-secondary alignment exists (no supplementary)
 ///
 /// Returns: HashMap<read_name, SA_tag_string>
-fn generate_sa_tags(
-    alignments: &[Alignment],
-) -> std::collections::HashMap<String, String> {
+fn generate_sa_tags(alignments: &[Alignment]) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
 
     let mut all_sa_tags: HashMap<String, String> = HashMap::new();
@@ -1185,14 +1188,17 @@ fn generate_sa_tags(
                 .parse::<i32>()
                 .unwrap_or(0);
 
-
             // Format: rname,pos,strand,CIGAR,mapQ,NM;
             // Note: pos is 1-based in SAM
-            let strand = if (aln.flag & sam_flags::REVERSE) != 0 { '-' } else { '+' };
+            let strand = if (aln.flag & sam_flags::REVERSE) != 0 {
+                '-'
+            } else {
+                '+'
+            };
             sa_parts.push(format!(
                 "{},{},{},{},{},{}",
                 aln.ref_name,
-                aln.pos + 1,  // SAM is 1-based
+                aln.pos + 1, // SAM is 1-based
                 strand,
                 aln.cigar_string(),
                 aln.mapq,
@@ -1481,15 +1487,27 @@ pub(crate) fn execute_batched_alignments(
         // Prepare batch data for SIMD dispatch
         // CRITICAL: h0 must be seed_len, not 0 (C++ bwamem.cpp:2232)
         // CRITICAL: Include direction for LEFT/RIGHT extension (fixes insertion detection bug)
-        let batch_data: Vec<(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<crate::banded_swa::ExtensionDirection>)> = batch_jobs
+        let batch_data: Vec<(
+            i32,
+            Vec<u8>,
+            i32,
+            Vec<u8>,
+            i32,
+            i32,
+            Option<crate::banded_swa::ExtensionDirection>,
+        )> = batch_jobs
             .iter()
             .map(|job| {
                 // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
-                let (query, target) = if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
-                    (job.query.iter().copied().rev().collect(), job.target.iter().copied().rev().collect())
-                } else {
-                    (job.query.clone(), job.target.clone())
-                };
+                let (query, target) =
+                    if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
+                        (
+                            job.query.iter().copied().rev().collect(),
+                            job.target.iter().copied().rev().collect(),
+                        )
+                    } else {
+                        (job.query.clone(), job.target.clone())
+                    };
 
                 (
                     query.len() as i32,
@@ -1654,15 +1672,27 @@ fn execute_batched_alignments_with_size(
         // Prepare batch data
         // CRITICAL: h0 must be seed_len, not 0 (C++ bwamem.cpp:2232)
         // CRITICAL: Include direction for LEFT/RIGHT extension (fixes insertion detection bug)
-        let batch_data: Vec<(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<crate::banded_swa::ExtensionDirection>)> = batch_jobs
+        let batch_data: Vec<(
+            i32,
+            Vec<u8>,
+            i32,
+            Vec<u8>,
+            i32,
+            i32,
+            Option<crate::banded_swa::ExtensionDirection>,
+        )> = batch_jobs
             .iter()
             .map(|job| {
                 // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
-                let (query, target) = if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
-                    (job.query.iter().copied().rev().collect(), job.target.iter().copied().rev().collect())
-                } else {
-                    (job.query.clone(), job.target.clone())
-                };
+                let (query, target) =
+                    if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
+                        (
+                            job.query.iter().copied().rev().collect(),
+                            job.target.iter().copied().rev().collect(),
+                        )
+                    } else {
+                        (job.query.clone(), job.target.clone())
+                    };
 
                 (
                     query.len() as i32,
@@ -1861,7 +1891,9 @@ pub fn generate_seeds(
     query_qual: &str,
     opt: &MemOpt,
 ) -> Vec<Alignment> {
-    generate_seeds_with_mode(bwa_idx, pac_data, query_name, query_seq, query_qual, true, opt)
+    generate_seeds_with_mode(
+        bwa_idx, pac_data, query_name, query_seq, query_qual, true, opt,
+    )
 }
 
 /// Generate SMEMs for a single strand (forward or reverse complement)
@@ -2256,17 +2288,17 @@ fn generate_seeds_with_mode(
 
     // Instantiate BandedPairWiseSW with parameters from MemOpt
     let sw_params = BandedPairWiseSW::new(
-        _opt.o_del,       // Gap open deletion penalty
-        _opt.e_del,       // Gap extension deletion penalty
-        _opt.o_ins,       // Gap open insertion penalty
-        _opt.e_ins,       // Gap extension insertion penalty
-        _opt.zdrop,       // Z-dropoff
-        5,                // end_bonus (reserved for future use)
-        _opt.pen_clip5,   // 5' clipping penalty (default=5)
-        _opt.pen_clip3,   // 3' clipping penalty (default=5)
-        _opt.mat,         // Scoring matrix (generated from -A/-B)
-        _opt.a as i8,     // Match score
-        -(_opt.b as i8),  // Mismatch penalty (negative)
+        _opt.o_del,      // Gap open deletion penalty
+        _opt.e_del,      // Gap extension deletion penalty
+        _opt.o_ins,      // Gap open insertion penalty
+        _opt.e_ins,      // Gap extension insertion penalty
+        _opt.zdrop,      // Z-dropoff
+        5,               // end_bonus (reserved for future use)
+        _opt.pen_clip5,  // 5' clipping penalty (default=5)
+        _opt.pen_clip3,  // 3' clipping penalty (default=5)
+        _opt.mat,        // Scoring matrix (generated from -A/-B)
+        _opt.a as i8,    // Match score
+        -(_opt.b as i8), // Mismatch penalty (negative)
     );
 
     let mut encoded_query = Vec::with_capacity(query_len);
@@ -2364,18 +2396,24 @@ fn generate_seeds_with_mode(
         if keep_smem {
             unique_filtered_smems.push(prev_smem);
         } else {
-            if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
-            if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
+            if seed_len < _opt.min_seed_len {
+                filtered_too_short += 1;
+            }
+            if occurrences > _opt.max_occ as u64 {
+                filtered_too_many_occ += 1;
+            }
         }
 
         for i in 1..all_smems.len() {
             let current_smem = all_smems[i];
-            if current_smem != prev_smem { // Use PartialEq for comparison
+            if current_smem != prev_smem {
+                // Use PartialEq for comparison
                 let seed_len = current_smem.query_end - current_smem.query_start + 1;
                 let occurrences = current_smem.interval_size;
 
                 // Standard filter (min_seed_len, max_occ)
-                let mut keep_smem_current = seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64;
+                let mut keep_smem_current =
+                    seed_len >= _opt.min_seed_len && occurrences <= _opt.max_occ as u64;
 
                 // Chimeric filter
                 if seed_len < split_len_threshold || occurrences > _opt.split_width as u64 {
@@ -2385,8 +2423,12 @@ fn generate_seeds_with_mode(
                 if keep_smem_current {
                     unique_filtered_smems.push(current_smem);
                 } else {
-                    if seed_len < _opt.min_seed_len { filtered_too_short += 1; }
-                    if occurrences > _opt.max_occ as u64 { filtered_too_many_occ += 1; }
+                    if seed_len < _opt.min_seed_len {
+                        filtered_too_short += 1;
+                    }
+                    if occurrences > _opt.max_occ as u64 {
+                        filtered_too_many_occ += 1;
+                    }
                 }
             } else {
                 duplicates += 1;
@@ -2431,7 +2473,6 @@ fn generate_seeds_with_mode(
         all_smems.len(),
         unique_filtered_smems.len()
     );
-
 
     // Convert SMEMs to Seed structs and perform seed extension
     // FIXED: Remove artificial SMEM limit - process ALL seeds like C++ bwa-mem2
@@ -2554,7 +2595,7 @@ fn generate_seeds_with_mode(
 
         let seed = Seed {
             query_pos,
-            ref_pos,  // Keep bidirectional coordinates!
+            ref_pos, // Keep bidirectional coordinates!
             // CRITICAL: smem.query_end is EXCLUSIVE (see line 187), so len = end - start, NOT +1
             // C++ bwamem uses qend = qbeg + len (exclusive end), matching this calculation
             len: smem.query_end - smem.query_start,
@@ -2607,7 +2648,8 @@ fn generate_seeds_with_mode(
 
     // --- Chain Filtering ---
     // Implements bwa-mem2 mem_chain_flt logic (bwamem.cpp:506-624)
-            let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt, query_len as i32);    log::debug!(
+    let filtered_chains = filter_chains(&mut chained_results, &seeds, _opt, query_len as i32);
+    log::debug!(
         "{}: Chain filtering kept {} chains (from {} total)",
         query_name,
         filtered_chains.len(),
@@ -2622,14 +2664,14 @@ fn generate_seeds_with_mode(
     // Track left and right job indices for each seed in a chain
     #[derive(Debug, Clone)]
     struct SeedJobMapping {
-        seed_idx: usize,                    // Index into chain.seeds
-        left_job_idx: Option<usize>,        // LEFT extension job index
-        right_job_idx: Option<usize>,       // RIGHT extension job index
+        seed_idx: usize,              // Index into chain.seeds
+        left_job_idx: Option<usize>,  // LEFT extension job index
+        right_job_idx: Option<usize>, // RIGHT extension job index
     }
 
     #[derive(Debug, Clone)]
     struct ChainJobMapping {
-        seed_jobs: Vec<SeedJobMapping>,     // Multiple seeds per chain
+        seed_jobs: Vec<SeedJobMapping>, // Multiple seeds per chain
     }
 
     let mut chain_to_job_map: Vec<ChainJobMapping> = Vec::new();
@@ -2666,7 +2708,7 @@ fn generate_seeds_with_mode(
         // This covers all seeds with margins for gaps
         let l_pac = bwa_idx.bns.packed_sequence_length;
         let mut rmax_0 = l_pac << 1; // Start with max possible
-        let mut rmax_1 = 0u64;       // Start with min possible
+        let mut rmax_1 = 0u64; // Start with min possible
 
         for &seed_idx in &chain.seeds {
             let seed = &seeds[seed_idx];
@@ -2775,9 +2817,20 @@ fn generate_seeds_with_mode(
 
             // Verify seed matches: check if query[seed_query_start..seed_query_end] matches rseq[seed_buffer_pos..seed_buffer_pos+seed.len]
             let seed_buffer_pos = (seed.ref_pos - rmax_0) as usize;
-            let seed_query_slice: Vec<u8> = full_query[seed_query_start as usize..seed_query_end as usize].iter().take(10.min(seed.len as usize)).copied().collect();
-            let seed_ref_slice: Vec<u8> = if seed_buffer_pos < rseq.len() && seed_buffer_pos + seed.len as usize <= rseq.len() {
-                rseq[seed_buffer_pos..seed_buffer_pos + seed.len as usize].iter().take(10.min(seed.len as usize)).copied().collect()
+            let seed_query_slice: Vec<u8> = full_query
+                [seed_query_start as usize..seed_query_end as usize]
+                .iter()
+                .take(10.min(seed.len as usize))
+                .copied()
+                .collect();
+            let seed_ref_slice: Vec<u8> = if seed_buffer_pos < rseq.len()
+                && seed_buffer_pos + seed.len as usize <= rseq.len()
+            {
+                rseq[seed_buffer_pos..seed_buffer_pos + seed.len as usize]
+                    .iter()
+                    .take(10.min(seed.len as usize))
+                    .copied()
+                    .collect()
             } else {
                 vec![]
             };
@@ -2811,7 +2864,8 @@ fn generate_seeds_with_mode(
             }
             let query_boundary_start = seed_query_end.saturating_sub(5) as usize;
             let query_boundary_end = ((seed_query_end + 5).min(query_len)) as usize;
-            let boundary_query: Vec<u8> = full_query[query_boundary_start..query_boundary_end].to_vec();
+            let boundary_query: Vec<u8> =
+                full_query[query_boundary_start..query_boundary_end].to_vec();
             log::debug!(
                 "{}: Chain {}: Seed {}: QUERY BOUNDARY: full_query[{}..{}]={:?} (pos {} is last seed base, pos {} is first RIGHT base)",
                 query_name,
@@ -2862,7 +2916,11 @@ fn generate_seeds_with_mode(
                         seed_chain_idx,
                         seed_query_start,
                         left_query_len,
-                        full_query.iter().take(10.min(left_query_len)).copied().collect::<Vec<u8>>()
+                        full_query
+                            .iter()
+                            .take(10.min(left_query_len))
+                            .copied()
+                            .collect::<Vec<u8>>()
                     );
                     log::debug!(
                         "{}: Chain {}: Seed {}: LEFT target extraction: tmp={}, rseq[0..10]={:?}",
@@ -2872,8 +2930,10 @@ fn generate_seeds_with_mode(
                         tmp,
                         rseq.iter().take(10.min(tmp)).copied().collect::<Vec<u8>>()
                     );
-                    let left_query_first_10: Vec<u8> = left_query.iter().take(10).copied().collect();
-                    let left_target_first_10: Vec<u8> = left_target.iter().take(10).copied().collect();
+                    let left_query_first_10: Vec<u8> =
+                        left_query.iter().take(10).copied().collect();
+                    let left_target_first_10: Vec<u8> =
+                        left_target.iter().take(10).copied().collect();
                     log::debug!(
                         "{}: Chain {}: Seed {}: LEFT left_query[0..10]={:?}",
                         query_name,
@@ -2934,7 +2994,11 @@ fn generate_seeds_with_mode(
                     seed_chain_idx,
                     right_query_start,
                     right_query_start + 10.min(full_query.len() - right_query_start),
-                    full_query[right_query_start..].iter().take(10).copied().collect::<Vec<u8>>()
+                    full_query[right_query_start..]
+                        .iter()
+                        .take(10)
+                        .copied()
+                        .collect::<Vec<u8>>()
                 );
 
                 let right_query: Vec<u8> = full_query[right_query_start..].to_vec();
@@ -2989,7 +3053,8 @@ fn generate_seeds_with_mode(
                     );
 
                     // Show first 10 bases of right_target
-                    let right_target_first_10: Vec<u8> = right_target.iter().take(10).copied().collect();
+                    let right_target_first_10: Vec<u8> =
+                        right_target.iter().take(10).copied().collect();
                     log::debug!(
                         "{}: Chain {}: Seed {}: RIGHT right_target[0..10]: {:?}",
                         query_name,
@@ -2999,7 +3064,8 @@ fn generate_seeds_with_mode(
                     );
 
                     // Show first 10 bases of right_query
-                    let right_query_first_10: Vec<u8> = right_query.iter().take(10).copied().collect();
+                    let right_query_first_10: Vec<u8> =
+                        right_query.iter().take(10).copied().collect();
                     log::debug!(
                         "{}: Chain {}: Seed {}: RIGHT right_query[0..10]: {:?}",
                         query_name,
@@ -3217,7 +3283,14 @@ fn generate_seeds_with_mode(
         } // End of seed_job iteration
 
         // Use the best alignment candidate for this chain
-        if let Some((mut cigar_for_alignment, combined_score, alignment_start_pos, query_start_aligned, query_end_aligned)) = best_alignment_data {
+        if let Some((
+            mut cigar_for_alignment,
+            combined_score,
+            alignment_start_pos,
+            query_start_aligned,
+            query_end_aligned,
+        )) = best_alignment_data
+        {
             log::debug!(
                 "{}: Chain {} (weight={}, kept={}): BEST score={} from {} candidates",
                 query_name,
@@ -3242,7 +3315,11 @@ fn generate_seeds_with_mode(
             if cigar_len != query_len {
                 log::debug!(
                     "{}: Chain {}: CIGAR length mismatch: cigar={}, query={}, diff={} - adjusting last query-consuming operation",
-                    query_name, chain_idx, cigar_len, query_len, query_len - cigar_len
+                    query_name,
+                    chain_idx,
+                    cigar_len,
+                    query_len,
+                    query_len - cigar_len
                 );
 
                 // Adjust the last query-consuming operation (S or M) to match query length
@@ -3252,40 +3329,49 @@ fn generate_seeds_with_mode(
                         let old_len = op.1;
                         op.1 += diff;
                         if op.1 > 0 {
-                            log::debug!("{}: Adjusted CIGAR op {} from {} to {}",
-                                query_name, op.0 as char, old_len, op.1);
+                            log::debug!(
+                                "{}: Adjusted CIGAR op {} from {} to {}",
+                                query_name,
+                                op.0 as char,
+                                old_len,
+                                op.1
+                            );
                             break;
                         } else {
-                            log::warn!("{}: CIGAR op {} became negative ({})! Setting to 0 and continuing...",
-                                query_name, op.0 as char, op.1);
+                            log::warn!(
+                                "{}: CIGAR op {} became negative ({})! Setting to 0 and continuing...",
+                                query_name,
+                                op.0 as char,
+                                op.1
+                            );
                             op.1 = 0;
                         }
                     }
                 }
             }
 
-        // Use the alignment start position calculated from extensions
-        let adjusted_ref_start = alignment_start_pos;
+            // Use the alignment start position calculated from extensions
+            let adjusted_ref_start = alignment_start_pos;
 
-        // Convert global position to chromosome-specific position
-        let global_pos = adjusted_ref_start as i64;
-        let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(global_pos);
-        let rid = bwa_idx.bns.bns_pos2rid(pos_f);
+            // Convert global position to chromosome-specific position
+            let global_pos = adjusted_ref_start as i64;
+            let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(global_pos);
+            let rid = bwa_idx.bns.bns_pos2rid(pos_f);
 
-        let (ref_name, ref_id, chr_pos) =
-            if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
-                let ann = &bwa_idx.bns.annotations[rid as usize];
-                let chr_relative_pos = pos_f - ann.offset as i64;
-                (ann.name.clone(), rid as usize, chr_relative_pos as u64)
-            } else {
-                log::warn!(
-                    "{}: Invalid reference ID {} for position {}",
-                    query_name,
-                    rid,
-                    global_pos
-                );
-                ("unknown_ref".to_string(), 0, 0)
-            };
+            let (ref_name, ref_id, chr_pos) =
+                if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
+                    let ann = &bwa_idx.bns.annotations[rid as usize];
+                    let chr_relative_pos = pos_f - ann.offset as i64;
+                    (ann.name.clone(), rid as usize, chr_relative_pos as u64)
+                } else {
+                    log::warn!(
+                        "{}: Invalid reference ID {} for position {}",
+                        query_name,
+                        rid,
+                        global_pos
+                    );
+                    ("unknown_ref".to_string(), 0, 0)
+                };
 
             // Calculate query bounds from aligned region
             let query_start = query_start_aligned;
@@ -3334,7 +3420,7 @@ fn generate_seeds_with_mode(
                 ref_name,
                 ref_id,
                 pos: chr_pos,
-                mapq: 60, // Will be calculated by mark_secondary_alignments
+                mapq: 60,              // Will be calculated by mark_secondary_alignments
                 score: combined_score, // Use combined score from left + seed + right
                 cigar: cigar_for_alignment,
                 rnext: "*".to_string(),
@@ -3643,8 +3729,8 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
             ref_start,
             ref_end,
             is_rev,
-            weight: 0, // Will be calculated by filter_chains()
-            kept: 0,   // Will be set by filter_chains()
+            weight: 0,     // Will be calculated by filter_chains()
+            kept: 0,       // Will be set by filter_chains()
             frac_rep: 0.0, // Initial placeholder
         });
 
@@ -3812,8 +3898,8 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::sam_flags;
     use super::Alignment;
+    use super::sam_flags;
     use crate::align::SMEM;
     use crate::fm_index::{backward_ext, popcount64};
     use crate::index::BwaIndex;
@@ -4190,8 +4276,19 @@ mod tests {
         // Test that the batched alignment infrastructure works correctly
         use crate::banded_swa::BandedPairWiseSW;
 
-        let sw_params =
-            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, 5, 5, super::DEFAULT_SCORING_MATRIX, 2, -4);
+        let sw_params = BandedPairWiseSW::new(
+            4,
+            2,
+            4,
+            2,
+            100,
+            0,
+            5,
+            5,
+            super::DEFAULT_SCORING_MATRIX,
+            2,
+            -4,
+        );
 
         // Create test alignment jobs
         let query1 = vec![0u8, 1, 2, 3]; // ACGT
@@ -4208,7 +4305,7 @@ mod tests {
                 band_width: 10,
                 query_offset: 0, // Test: align from start
                 direction: None, // Legacy test mode
-                seed_len: 4, // Actual sequence length (4bp queries)
+                seed_len: 4,     // Actual sequence length (4bp queries)
             },
             super::AlignmentJob {
                 seed_idx: 1,
@@ -4217,7 +4314,7 @@ mod tests {
                 band_width: 10,
                 query_offset: 0, // Test: align from start
                 direction: None, // Legacy test mode
-                seed_len: 4, // Actual sequence length (4bp queries)
+                seed_len: 4,     // Actual sequence length (4bp queries)
             },
         ];
 
@@ -4292,7 +4389,8 @@ mod tests {
 
         // Test doesn't need real MD tags, use empty pac_data
         let pac_data: &[u8] = &[];
-        let alignments = super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt);
+        let alignments =
+            super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt);
 
         assert!(
             !alignments.is_empty(),

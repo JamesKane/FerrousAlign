@@ -699,20 +699,37 @@ fn output_batch_paired(
             if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
                 // If mem_pair returned a valid pair, it's properly paired
                 // mem_pair already verified: same chromosome, insert size within bounds, valid orientation
-                log::trace!("{}/{}: mem_pair selected best_idx1={}, best_idx2={}, n_aln1={}, n_aln2={}",
-                    name1, name2, idx1, idx2, alignments1.len(), alignments2.len());
+                log::trace!(
+                    "{}/{}: mem_pair selected best_idx1={}, best_idx2={}, n_aln1={}, n_aln2={}",
+                    name1,
+                    name2,
+                    idx1,
+                    idx2,
+                    alignments1.len(),
+                    alignments2.len()
+                );
                 (idx1, idx2, true)
             } else if !alignments1.is_empty() && !alignments2.is_empty() {
                 // mem_pair returned None - no valid pair found
                 // Use first alignments but NOT properly paired
                 // (insert size out of bounds, or wrong orientation)
-                log::trace!("{}/{}: No valid pair found, using (0,0), n_aln1={}, n_aln2={}",
-                    name1, name2, alignments1.len(), alignments2.len());
+                log::trace!(
+                    "{}/{}: No valid pair found, using (0,0), n_aln1={}, n_aln2={}",
+                    name1,
+                    name2,
+                    alignments1.len(),
+                    alignments2.len()
+                );
                 (0, 0, false)
             } else {
                 // One or both reads unmapped
-                log::trace!("{}/{}: One or both unmapped, n_aln1={}, n_aln2={}",
-                    name1, name2, alignments1.len(), alignments2.len());
+                log::trace!(
+                    "{}/{}: One or both unmapped, n_aln1={}, n_aln2={}",
+                    name1,
+                    name2,
+                    alignments1.len(),
+                    alignments2.len()
+                );
                 (0, 0, false)
             };
 
@@ -883,7 +900,7 @@ fn output_batch_paired(
             let should_output = if opt.output_all_alignments {
                 is_unmapped || alignment.score >= opt.t
             } else {
-                is_primary || is_supplementary  // Output both primary and supplementary
+                is_primary || is_supplementary // Output both primary and supplementary
             };
 
             if !should_output {
@@ -926,7 +943,7 @@ fn output_batch_paired(
             let should_output = if opt.output_all_alignments {
                 is_unmapped || alignment.score >= opt.t
             } else {
-                is_primary || is_supplementary  // Output both primary and supplementary
+                is_primary || is_supplementary // Output both primary and supplementary
             };
 
             if !should_output {

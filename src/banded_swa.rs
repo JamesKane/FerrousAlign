@@ -1109,7 +1109,15 @@ impl BandedPairWiseSW {
     ///   (but adds significant complexity and risk)
     pub fn simd_banded_swa_batch16_with_cigar(
         &self,
-        batch: &[(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<ExtensionDirection>)],
+        batch: &[(
+            i32,
+            Vec<u8>,
+            i32,
+            Vec<u8>,
+            i32,
+            i32,
+            Option<ExtensionDirection>,
+        )],
     ) -> Vec<AlignmentResult> {
         // Use proven scalar implementation for each alignment
         // This matches the production C++ bwa-mem2 design pattern
@@ -1265,7 +1273,15 @@ impl BandedPairWiseSW {
     /// The SIMD width only affects the batch scoring phase (if implemented).
     pub fn simd_banded_swa_dispatch_with_cigar(
         &self,
-        batch: &[(i32, Vec<u8>, i32, Vec<u8>, i32, i32, Option<ExtensionDirection>)],
+        batch: &[(
+            i32,
+            Vec<u8>,
+            i32,
+            Vec<u8>,
+            i32,
+            i32,
+            Option<ExtensionDirection>,
+        )],
     ) -> Vec<AlignmentResult> {
         use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
 

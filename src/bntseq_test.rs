@@ -52,7 +52,6 @@ AGCT
         assert!(bnt.annotations.is_empty());
         assert_eq!(bnt.ambiguous_region_count, 0);
         assert!(bnt.ambiguous_regions.is_empty());
-
     }
 
     #[test]
@@ -278,7 +277,10 @@ AGCT
             bns.ambiguous_regions[0].offset, 3106,
             "Ambiguous base at position 3106"
         );
-        assert_eq!(bns.ambiguous_regions[0].ambiguous_base, 'N', "Ambiguous base is 'N'");
+        assert_eq!(
+            bns.ambiguous_regions[0].ambiguous_base, 'N',
+            "Ambiguous base is 'N'"
+        );
 
         // Test 1: Get first 10 bases of chrM
         // From FASTA: GATCACAGGT

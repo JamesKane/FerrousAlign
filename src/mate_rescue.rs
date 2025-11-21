@@ -214,7 +214,7 @@ pub fn mem_matesw(
             query_start: out_score.query_end_pos - out_score.query_end_pos, // Full query alignment
             query_end: out_score.query_end_pos,
             seed_coverage: 0, // Not applicable here, will be updated later
-            hash: 0, // Will be updated later
+            hash: 0,          // Will be updated later
             frac_rep: 0.0,
         };
 

@@ -26,7 +26,7 @@ log = "0.4"
 env_logger = "0.11"
 rand = "0.8"
 crossbeam-channel = "0.5"
-noodles-bgzf = "0.32"  # Parallel BGZIP decompression for genomics data
+noodles-bgzf = "0.32"
 
 [features]
 # AVX-512 support (requires nightly Rust due to unstable intrinsics)
@@ -43,15 +43,11 @@ name = "simd_benchmarks"
 harness = false
 
 [[bench]]
-
 name = "simd_engine_comparison"
-
 harness = false
 
 
 
 [[bench]]
-
 name = "bwa_mem2_comparison"
-
 harness = false

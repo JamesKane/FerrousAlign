@@ -301,9 +301,12 @@ fn main() {
             }
 
             if reads.len() > 2 {
-                log::error!("Maximum 2 read files allowed (paired-end), got {} files:", reads.len());
+                log::error!(
+                    "Maximum 2 read files allowed (paired-end), got {} files:",
+                    reads.len()
+                );
                 for (i, r) in reads.iter().enumerate() {
-                    log::error!("  File {}: {}", i+1, r.display());
+                    log::error!("  File {}: {}", i + 1, r.display());
                 }
                 std::process::exit(1);
             }

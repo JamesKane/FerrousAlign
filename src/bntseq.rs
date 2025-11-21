@@ -242,7 +242,11 @@ impl BntSeq {
             self.packed_sequence_length, self.sequence_count, self.ambiguous_region_count
         )?;
         for p in &self.ambiguous_regions {
-            writeln!(amb_file, "{} {} {}", p.offset, p.region_length, p.ambiguous_base)?;
+            writeln!(
+                amb_file,
+                "{} {} {}",
+                p.offset, p.region_length, p.ambiguous_base
+            )?;
         }
         amb_file.flush()?;
 
@@ -367,7 +371,11 @@ impl BntSeq {
                 io::Error::new(io::ErrorKind::InvalidData, "Missing amb char in .amb")
             })?;
 
-            bns.ambiguous_regions.push(BntAmb1 { offset, region_length: len, ambiguous_base: amb });
+            bns.ambiguous_regions.push(BntAmb1 {
+                offset,
+                region_length: len,
+                ambiguous_base: amb,
+            });
         }
 
         // Load .pac file into memory to eliminate 5M+ read()/lseek() syscalls per alignment

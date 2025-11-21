@@ -35,7 +35,10 @@ pub fn process_single_end(
 
     // PAC data is already loaded into memory in bwa_idx.bns.pac_data
     // Just reference it directly - no file I/O needed!
-    log::debug!("Using in-memory PAC data: {} bytes", bwa_idx.bns.pac_data.len());
+    log::debug!(
+        "Using in-memory PAC data: {} bytes",
+        bwa_idx.bns.pac_data.len()
+    );
     let pac_data = Arc::new(bwa_idx.bns.pac_data.clone());
 
     // Track overall statistics
@@ -101,7 +104,14 @@ pub fn process_single_end(
                 .zip(batch.seqs.par_iter())
                 .zip(batch.quals.par_iter())
                 .map(|((name, seq), qual)| {
-                    align::generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone)
+                    align::generate_seeds(
+                        &bwa_idx_clone,
+                        &pac_data_clone,
+                        name,
+                        seq,
+                        qual,
+                        &opt_clone,
+                    )
                 })
                 .collect();
 
@@ -167,7 +177,9 @@ pub fn process_single_end(
                     // Add RG tag if read group is specified
                     let mut output_alignment = unmapped;
                     if let Some(ref rg) = rg_id {
-                        output_alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                        output_alignment
+                            .tags
+                            .push(("RG".to_string(), format!("Z:{}", rg)));
                     }
 
                     let sam_record = output_alignment.to_sam_string();
