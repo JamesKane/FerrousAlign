@@ -24,7 +24,7 @@ pub fn mem_matesw(
     mate_name: &str,
     rescued_alignments: &mut Vec<Alignment>,
 ) -> usize {
-    use crate::banded_swa::BandedPairWiseSW;
+    use crate::alignment::banded_swa::BandedPairWiseSW;
 
     let l_pac = bwa_idx.bns.packed_sequence_length as i64;
     let l_ms = mate_seq.len() as i32;

@@ -1,3 +1,5 @@
+use crate::alignment::banded_swa::BandedPairWiseSW;
+use crate::alignment::banded_swa::merge_cigar_operations;
 use crate::alignment::chaining::cal_max_gap;
 use crate::alignment::chaining::chain_seeds;
 use crate::alignment::chaining::filter_chains;
@@ -15,8 +17,6 @@ use crate::alignment::seeding::generate_smems_for_strand;
 use crate::alignment::seeding::get_sa_entry;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
-use crate::banded_swa::BandedPairWiseSW;
-use crate::banded_swa::merge_cigar_operations;
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::utils::hash_64;
@@ -737,7 +737,7 @@ fn generate_seeds_with_mode(
                         target: left_target,
                         band_width: _opt.w,
                         query_offset: 0,
-                        direction: Some(crate::banded_swa::ExtensionDirection::Left),
+                        direction: Some(crate::alignment::banded_swa::ExtensionDirection::Left),
                         seed_len: seed.len, // For h0 calculation
                     });
                 } else {
@@ -862,7 +862,7 @@ fn generate_seeds_with_mode(
                         target: right_target,
                         band_width: _opt.w,
                         query_offset: seed_query_end,
-                        direction: Some(crate::banded_swa::ExtensionDirection::Right),
+                        direction: Some(crate::alignment::banded_swa::ExtensionDirection::Right),
                         seed_len: seed.len, // For h0 calculation
                     });
                 }

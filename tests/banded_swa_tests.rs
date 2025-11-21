@@ -1,7 +1,7 @@
 // Tests for src/banded_swa.rs
 // Extracted from inline tests to reduce clutter in production code
-
-use ferrous_align::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
+use ferrous_align::alignment::banded_swa::BandedPairWiseSW;
+use ferrous_align::alignment::banded_swa::bwa_fill_scmat;
 
 #[test]
 fn test_soft_clipping_at_end() {

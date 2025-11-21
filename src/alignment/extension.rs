@@ -1,8 +1,7 @@
 // ----------------------------------------------------------------------------
 // Alignment Job Structure and Divergence Estimation
 // ----------------------------------------------------------------------------
-
-use crate::banded_swa::BandedPairWiseSW;
+use crate::alignment::banded_swa::BandedPairWiseSW;
 
 // Structure to hold alignment job for batching
 #[derive(Clone)]
@@ -19,7 +18,7 @@ pub(crate) struct AlignmentJob {
     /// Extension direction: LEFT (seed → qb=0) or RIGHT (seed → qe=qlen)
     /// Used for separate left/right extensions matching C++ bwa-mem2
     /// None = legacy single-pass mode (deprecated)
-    pub direction: Option<crate::banded_swa::ExtensionDirection>,
+    pub direction: Option<crate::alignment::banded_swa::ExtensionDirection>,
     /// Seed length for calculating h0 (initial score = seed_len * match_score)
     /// C++ bwamem.cpp:2232 sets h0 = s->len * opt->a
     pub seed_len: i32,
@@ -163,20 +162,21 @@ fn execute_batched_alignments_with_size(
             Vec<u8>,
             i32,
             i32,
-            Option<crate::banded_swa::ExtensionDirection>,
+            Option<crate::alignment::banded_swa::ExtensionDirection>,
         )> = batch_jobs
             .iter()
             .map(|job| {
                 // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
-                let (query, target) =
-                    if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
-                        (
-                            job.query.iter().copied().rev().collect(),
-                            job.target.iter().copied().rev().collect(),
-                        )
-                    } else {
-                        (job.query.clone(), job.target.clone())
-                    };
+                let (query, target) = if job.direction
+                    == Some(crate::alignment::banded_swa::ExtensionDirection::Left)
+                {
+                    (
+                        job.query.iter().copied().rev().collect(),
+                        job.target.iter().copied().rev().collect(),
+                    )
+                } else {
+                    (job.query.clone(), job.target.clone())
+                };
 
                 (
                     query.len() as i32,
@@ -475,20 +475,21 @@ pub(crate) fn execute_batched_alignments(
             Vec<u8>,
             i32,
             i32,
-            Option<crate::banded_swa::ExtensionDirection>,
+            Option<crate::alignment::banded_swa::ExtensionDirection>,
         )> = batch_jobs
             .iter()
             .map(|job| {
                 // For LEFT extension: reverse both query and target (C++ bwamem.cpp:2278)
-                let (query, target) =
-                    if job.direction == Some(crate::banded_swa::ExtensionDirection::Left) {
-                        (
-                            job.query.iter().copied().rev().collect(),
-                            job.target.iter().copied().rev().collect(),
-                        )
-                    } else {
-                        (job.query.clone(), job.target.clone())
-                    };
+                let (query, target) = if job.direction
+                    == Some(crate::alignment::banded_swa::ExtensionDirection::Left)
+                {
+                    (
+                        job.query.iter().copied().rev().collect(),
+                        job.target.iter().copied().rev().collect(),
+                    )
+                } else {
+                    (job.query.clone(), job.target.clone())
+                };
 
                 (
                     query.len() as i32,
@@ -529,7 +530,7 @@ mod tests {
     #[test]
     fn test_batched_alignment_infrastructure() {
         // Test that the batched alignment infrastructure works correctly
-        use crate::banded_swa::BandedPairWiseSW;
+        use crate::alignment::banded_swa::BandedPairWiseSW;
 
         let sw_params =
             BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, 5, 5, DEFAULT_SCORING_MATRIX, 2, -4);
