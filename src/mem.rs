@@ -1,3 +1,4 @@
+use anyhow::Result;
 // bwa-mem2-rust/src/mem.rs
 //
 // Main entry point for BWA-MEM alignment
@@ -16,7 +17,7 @@ pub fn main_mem(
     query_files: &Vec<String>,
     output: Option<&String>,
     opt: &MemOpt,
-) {
+) -> Result<()> {
     // Detect and display SIMD capabilities
 use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     let simd_engine = detect_optimal_simd_engine();
@@ -24,38 +25,20 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     log::info!("Using SIMD engine: {}", simd_desc);
 
     // Load the BWA index
-    let bwa_idx = match BwaIndex::bwa_idx_load(idx_prefix) {
-        Ok(idx) => idx,
-        Err(e) => {
-            log::error!("Error loading BWA index: {}", e);
-            return; // Or handle error appropriately
-        }
-    };
+    let bwa_idx = BwaIndex::bwa_idx_load(idx_prefix).map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
 
     // Determine output writer
     let mut writer: Box<dyn Write> = match output {
-        Some(file_name) => match File::create(file_name) {
-            Ok(file) => Box::new(file),
-            Err(e) => {
-                log::error!("Error creating output file {}: {}", file_name, e);
-                return;
-            }
-        },
+        Some(file_name) => Box::new(File::create(file_name).map_err(|e| anyhow::anyhow!("Error creating output file {}: {}", file_name, e))?),
         None => Box::new(io::stdout()),
     };
 
     // Write SAM header
-    if let Err(e) = writeln!(writer, "@HD\tVN:1.0\tSO:unsorted") {
-        log::error!("Error writing SAM header: {}", e);
-        return;
-    }
+    writeln!(writer, "@HD\tVN:1.0\tSO:unsorted").map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
 
     // Write @SQ lines for reference sequences
     for ann in &bwa_idx.bns.annotations {
-        if let Err(e) = writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length) {
-            log::error!("Error writing SAM header: {}", e);
-            return;
-        }
+        writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length).map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
     }
 
     // Write @PG (program) line
@@ -65,17 +48,14 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     const PKG_NAME: &str = env!("CARGO_PKG_NAME");
     const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-    if let Err(e) = writeln!(
+    writeln!(
         writer,
         "@PG\tID:{}\tPN:{}\tVN:{}\tCL:{}",
         PKG_NAME,
         PKG_NAME,
         PKG_VERSION,
         std::env::args().collect::<Vec<_>>().join(" ")
-    ) {
-        log::error!("Error writing @PG header: {}", e);
-        return;
-    }
+    ).map_err(|e| anyhow::anyhow!("Error writing @PG header: {}", e))?;
 
     // Write read group header if provided (-R option)
     if let Some(ref rg_line) = opt.read_group {
@@ -86,18 +66,12 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
             format!("@RG\t{}", rg_line)
         };
 
-        if let Err(e) = writeln!(writer, "{}", formatted_rg) {
-            log::error!("Error writing read group header: {}", e);
-            return;
-        }
+        writeln!(writer, "{}", formatted_rg).map_err(|e| anyhow::anyhow!("Error writing read group header: {}", e))?;
     }
 
     // Write custom header lines if provided (-H option)
     for header_line in &opt.header_lines {
-        if let Err(e) = writeln!(writer, "{}", header_line) {
-            log::error!("Error writing custom header: {}", e);
-            return;
-        }
+        writeln!(writer, "{}", header_line).map_err(|e| anyhow::anyhow!("Error writing custom header: {}", e))?;
     }
 
     // Detect paired-end mode: if exactly 2 query files provided
@@ -108,4 +82,5 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
         // Single-end mode (original behavior)
         process_single_end(&bwa_idx, query_files, &mut writer, opt);
     }
+    Ok(())
 }
