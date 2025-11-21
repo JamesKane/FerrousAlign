@@ -21,6 +21,7 @@ pub mod simd_abstraction;
 pub mod simd;
 pub mod single_end; // Single-end read processing
 pub mod utils;
+pub mod defaults;
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

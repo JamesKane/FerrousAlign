@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use ferrous_align::{bwa_index, mem, mem_opt::MemOpt};
+use ferrous_align::{bwa_index, mem, mem_opt::MemOpt, defaults};
 
 #[derive(Parser)]
 #[command(name = "ferrous-align")]
@@ -37,39 +37,39 @@ enum Commands {
 
         // ===== Algorithm Options =====
         /// Minimum seed length
-        #[arg(short = 'k', long, value_name = "INT", default_value = "19")]
+        #[arg(short = 'k', long, value_name = "INT", default_value_t = defaults::MIN_SEED_LEN)]
         min_seed_len: i32,
 
         /// Band width for banded alignment
-        #[arg(short = 'w', long, value_name = "INT", default_value = "100")]
+        #[arg(short = 'w', long, value_name = "INT", default_value_t = defaults::BAND_WIDTH)]
         band_width: i32,
 
         /// Off-diagonal X-dropoff
-        #[arg(short = 'd', long, value_name = "INT", default_value = "100")]
+        #[arg(short = 'd', long, value_name = "INT", default_value_t = defaults::OFF_DIAGONAL_DROPOFF)]
         off_diagonal_dropoff: i32,
 
         /// Look for internal seeds inside a seed longer than {-k} * FLOAT
-        #[arg(short = 'r', long, value_name = "FLOAT", default_value = "1.5")]
+        #[arg(short = 'r', long, value_name = "FLOAT", default_value_t = defaults::RESEED_FACTOR)]
         reseed_factor: f32,
 
         /// Seed occurrence for the 3rd round seeding
-        #[arg(short = 'y', long, value_name = "INT", default_value = "20")]
+        #[arg(short = 'y', long, value_name = "INT", default_value_t = defaults::SEED_OCCURRENCE_3RD)]
         seed_occurrence_3rd: u64,
 
         /// Skip seeds with more than INT occurrences
-        #[arg(short = 'c', long, value_name = "INT", default_value = "500")]
+        #[arg(short = 'c', long, value_name = "INT", default_value_t = defaults::MAX_OCCURRENCES)]
         max_occurrences: i32,
 
         /// Drop chains shorter than FLOAT fraction of the longest overlapping chain
-        #[arg(short = 'D', long, value_name = "FLOAT", default_value = "0.50")]
+        #[arg(short = 'D', long, value_name = "FLOAT", default_value_t = defaults::DROP_CHAIN_FRACTION)]
         drop_chain_fraction: f32,
 
         /// Discard a chain if seeded bases shorter than INT
-        #[arg(short = 'W', long, value_name = "INT", default_value = "0")]
+        #[arg(short = 'W', long, value_name = "INT", default_value_t = defaults::MIN_CHAIN_WEIGHT)]
         min_chain_weight: i32,
 
         /// Perform at most INT rounds of mate rescues for each read
-        #[arg(short = 'm', long, value_name = "INT", default_value = "50")]
+        #[arg(short = 'm', long, value_name = "INT", default_value_t = defaults::MAX_MATE_RESCUES)]
         max_mate_rescues: i32,
 
         /// Skip mate rescue
@@ -82,33 +82,33 @@ enum Commands {
 
         // ===== Scoring Options =====
         /// Score for a sequence match, which scales options -TdBOELU unless overridden
-        #[arg(short = 'A', long, value_name = "INT", default_value = "1")]
+        #[arg(short = 'A', long, value_name = "INT", default_value_t = defaults::MATCH_SCORE)]
         match_score: i32,
 
         /// Penalty for a mismatch
-        #[arg(short = 'B', long, value_name = "INT", default_value = "4")]
+        #[arg(short = 'B', long, value_name = "INT", default_value_t = defaults::MISMATCH_PENALTY)]
         mismatch_penalty: i32,
 
         /// Gap open penalties for deletions and insertions [6,6]
-        #[arg(short = 'O', long, value_name = "INT[,INT]", default_value = "6,6")]
+        #[arg(short = 'O', long, value_name = "INT[,INT]", default_value = defaults::GAP_OPEN_PENALTIES)]
         gap_open: String,
 
         /// Gap extension penalty; a gap of size k cost '{-O} + {-E}*k' [1,1]
-        #[arg(short = 'E', long, value_name = "INT[,INT]", default_value = "1,1")]
+        #[arg(short = 'E', long, value_name = "INT[,INT]", default_value = defaults::GAP_EXTEND_PENALTIES)]
         gap_extend: String,
 
         /// Penalty for 5'- and 3'-end clipping [5,5]
-        #[arg(short = 'L', long, value_name = "INT[,INT]", default_value = "5,5")]
+        #[arg(short = 'L', long, value_name = "INT[,INT]", default_value = defaults::CLIPPING_PENALTIES)]
         clipping_penalty: String,
 
         /// Penalty for an unpaired read pair
-        #[arg(short = 'U', long, value_name = "INT", default_value = "17")]
+        #[arg(short = 'U', long, value_name = "INT", default_value_t = defaults::UNPAIRED_PENALTY)]
         unpaired_penalty: i32,
 
         // ===== Input/Output Options =====
         /// Output SAM file (default: stdout)
         #[arg(short = 'o', long, value_name = "FILE")]
-        output: Option<String>,
+        output: Option<PathBuf>,
 
         /// Read group header line such as '@RG\tID:foo\tSM:bar'
         #[arg(short = 'R', long, value_name = "STR")]
@@ -135,16 +135,16 @@ enum Commands {
         chunk_size: Option<i64>,
 
         /// Verbose level: 1=error, 2=warning, 3=message, 4+=debugging
-        #[arg(short = 'v', long, value_name = "INT", default_value = "3")]
+        #[arg(short = 'v', long, value_name = "INT", default_value_t = defaults::VERBOSITY as i32)]
         verbosity: i32,
 
         /// Minimum score to output
-        #[arg(short = 'T', long, value_name = "INT", default_value = "30")]
+        #[arg(short = 'T', long, value_name = "INT", default_value_t = defaults::MIN_SCORE)]
         min_score: i32,
 
         /// If there are <INT hits with score >80% of the max score, output all in XA [5,200]
         /// Note: bwa-mem2 uses -h, but we use --max-xa-hits to avoid conflict with --help
-        #[arg(long, value_name = "INT[,INT]", default_value = "5,200")]
+        #[arg(long, value_name = "INT[,INT]", default_value = defaults::MAX_XA_HITS)]
         max_xa_hits: String,
 
         /// Output all alignments for SE or unpaired PE
@@ -207,17 +207,28 @@ fn parse_xa_hits(s: &str) -> Result<(i32, i32), String> {
     }
 }
 
+fn init_logging(verbosity: u8) {
+    let log_level = match verbosity {
+        v if v <= 1 => log::LevelFilter::Error,
+        2 => log::LevelFilter::Warn,
+        3 => log::LevelFilter::Info,
+        4 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace, // 5+ = trace
+    };
+
+    env_logger::Builder::from_default_env()
+        .filter_level(log_level)
+        .format_timestamp(None) // Don't show timestamps
+        .format_target(false) // Don't show module names
+        .init();
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Index { fasta, prefix } => {
-            // Initialize logger with info level for index command
-            env_logger::Builder::from_default_env()
-                .filter_level(log::LevelFilter::Info)
-                .format_timestamp(None)
-                .format_target(false)
-                .init();
+            init_logging(3); // 3 corresponds to Info level
 
             // Use FASTA filename as prefix if not specified
             let idx_prefix = prefix.unwrap_or_else(|| fasta.clone());
@@ -276,22 +287,7 @@ fn main() {
             // Processing
             threads,
         } => {
-            // Initialize logger based on verbosity level
-            // Map bwa-mem2 verbosity (1=error, 2=warning, 3=message, 4=debug, 5+=trace)
-            // to Rust log levels
-            let log_level = match verbosity {
-                v if v <= 1 => log::LevelFilter::Error,
-                2 => log::LevelFilter::Warn,
-                3 => log::LevelFilter::Info,
-                4 => log::LevelFilter::Debug,
-                _ => log::LevelFilter::Trace, // 5+ = trace
-            };
-
-            env_logger::Builder::from_default_env()
-                .filter_level(log_level)
-                .format_timestamp(None) // Don't show timestamps
-                .format_target(false) // Don't show module names
-                .init();
+            init_logging(verbosity as u8);
 
             log::info!("Aligning reads to index: {}", index.display());
 
@@ -538,7 +534,7 @@ fn main() {
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            mem::main_mem(&index, &read_files, output.as_ref(), &opt);
+            mem::main_mem(&index, &read_files, output.as_deref(), &opt).expect("FerrousAlign encountered a fatal error.");
         }
     }
 }

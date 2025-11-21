@@ -15,7 +15,7 @@ use std::path::Path;
 pub fn main_mem(
     idx_prefix: &Path,
     query_files: &Vec<String>,
-    output: Option<&String>,
+    output: Option<&Path>,
     opt: &MemOpt,
 ) -> Result<()> {
     // Detect and display SIMD capabilities
@@ -29,7 +29,7 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
 
     // Determine output writer
     let mut writer: Box<dyn Write> = match output {
-        Some(file_name) => Box::new(File::create(file_name).map_err(|e| anyhow::anyhow!("Error creating output file {}: {}", file_name, e))?),
+        Some(file_name) => Box::new(File::create(file_name).map_err(|e| anyhow::anyhow!("Error creating output file {}: {}", file_name.display(), e))?),
         None => Box::new(io::stdout()),
     };
 
