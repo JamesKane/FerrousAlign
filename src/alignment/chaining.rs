@@ -29,9 +29,18 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
     if seeds.is_empty() {
         return (Vec::new(), seeds);
     }
+    log::debug!("chain_seeds: Input with {} seeds", seeds.len());
 
     // 1. Sort seeds: by query_pos, then by ref_pos
     seeds.sort_by_key(|s| (s.query_pos, s.ref_pos));
+
+    log::debug!("chain_seeds: Sorted input seeds:");
+    for (idx, seed) in seeds.iter().enumerate() {
+        log::debug!(
+            "  Seed {}: qpos={}, rpos={}, len={}, is_rev={}, interval_size={}",
+            idx, seed.query_pos, seed.ref_pos, seed.len, seed.is_rev, seed.interval_size
+        );
+    }
 
     let num_seeds = seeds.len();
     let mut dp = vec![0; num_seeds]; // dp[i] stores the max score of a chain ending at seeds[i]
@@ -73,16 +82,21 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
                     continue; // Gap too large
                 }
 
-                // Simple gap penalty (average of query and reference gaps)
-                let current_gap_penalty = (q_gap + r_gap.abs()) / 2;
-
-                let potential_score = dp[j] + seeds[i].len - current_gap_penalty;
-
-                if potential_score > dp[i] {
-                    dp[i] = potential_score;
-                    prev_seed_idx[i] = Some(j);
-                }
-            }
+                            // Simple gap penalty (average of query and reference gaps)
+                            let current_gap_penalty = (q_gap + r_gap.abs()) / 2;
+                
+                            let potential_score = dp[j] + seeds[i].len - current_gap_penalty;
+                
+                            if potential_score > dp[i] {
+                                log::debug!(
+                                    "  DP: Seed {} (q={}, r={}) extends Seed {} (q={}, r={}). Potential score: {} (dp[j]={}, len[i]={}, gap_pen={})",
+                                    i, seeds[i].query_pos, seeds[i].ref_pos,
+                                    j, seeds[j].query_pos, seeds[j].ref_pos,
+                                    potential_score, dp[j], seeds[i].len, current_gap_penalty
+                                );
+                                dp[i] = potential_score;
+                                prev_seed_idx[i] = Some(j);
+                            }            }
         }
     }
 
@@ -107,6 +121,7 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
             if !used_seeds[i] && dp[i] >= best_chain_score {
                 best_chain_score = dp[i];
                 best_chain_end_idx = Some(i);
+                log::debug!("  Multi-chain extraction: Found new best peak at index {}, score {}", i, best_chain_score);
             }
         }
 
@@ -172,6 +187,10 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
             kept: 0,       // Will be set by filter_chains()
             frac_rep: 0.0, // Initial placeholder
         });
+        log::debug!(
+            "  Pushed chain {}: score={}, q=[{},{}), r=[{},{}), is_rev={}",
+            chains.len() - 1, best_chain_score, query_start, query_end, ref_start, ref_end, is_rev
+        );
 
         // Safety limit: stop after extracting a reasonable number of chains
         // This prevents pathological cases from consuming too much memory
@@ -212,9 +231,10 @@ pub fn filter_chains(
     if chains.is_empty() {
         return Vec::new();
     }
+    log::debug!("filter_chains: Input with {} chains", chains.len());
 
     // Calculate weights for all chains
-    for chain in chains.iter_mut() {
+    for (idx, chain) in chains.iter_mut().enumerate() {
         let (weight, l_rep) = calculate_chain_weight(chain, seeds, opt);
         chain.weight = weight;
         // Calculate frac_rep = l_rep / query_length
@@ -224,10 +244,21 @@ pub fn filter_chains(
             0.0
         };
         chain.kept = 0; // Initially mark as discarded
+        log::debug!(
+            "  filter_chains: Chain {} (score {}) weight={}, frac_rep={:.2}",
+            idx, chain.score, chain.weight, chain.frac_rep
+        );
     }
 
     // Sort chains by weight (descending)
     chains.sort_by(|a, b| b.weight.cmp(&a.weight));
+    log::debug!("filter_chains: Chains after sorting by weight:");
+    for (idx, chain) in chains.iter().enumerate() {
+        log::debug!(
+            "  Sorted Chain {}: score={}, weight={}, q=[{},{}), r=[{},{}), is_rev={}, kept={}",
+            idx, chain.score, chain.weight, chain.query_start, chain.query_end, chain.ref_start, chain.ref_end, chain.is_rev, chain.kept
+        );
+    }
 
     // Filter by minimum weight
     let mut kept_chains: Vec<Chain> = Vec::new();
@@ -237,6 +268,10 @@ pub fn filter_chains(
 
         // Skip if below minimum weight
         if chain.weight < opt.min_chain_weight {
+            log::debug!(
+                "  filter_chains: Chain {} discarded (weight {} < min_chain_weight {})",
+                i, chain.weight, opt.min_chain_weight
+            );
             continue;
         }
 
@@ -246,7 +281,12 @@ pub fn filter_chains(
         let mut should_discard = false;
         let mut chain_copy = chain.clone();
 
-        for kept_chain in &kept_chains {
+        log::debug!(
+            "  filter_chains: Processing chain {}: score={}, weight={}, q=[{},{}), r=[{},{}), is_rev={}",
+            i, chain.score, chain.weight, chain.query_start, chain.query_end, chain.ref_start, chain.ref_end, chain.is_rev
+        );
+
+        for (kept_idx, kept_chain) in kept_chains.iter().enumerate() {
             // Check if chains overlap on query
             let qb_max = chain.query_start.max(kept_chain.query_start);
             let qe_min = chain.query_end.min(kept_chain.query_end);
@@ -256,6 +296,11 @@ pub fn filter_chains(
                 let overlap = qe_min - qb_max;
                 let min_len = (chain.query_end - chain.query_start)
                     .min(kept_chain.query_end - kept_chain.query_start);
+
+                log::debug!(
+                    "    Overlap check: Chain {} (q=[{},{}]) vs Kept Chain {} (q=[{},{}]) -> Overlap={}, min_len={}",
+                    i, chain.query_start, chain.query_end, kept_idx, kept_chain.query_start, kept_chain.query_end, overlap, min_len
+                );
 
                 // Check if overlap is significant
                 if overlap >= (min_len as f32 * opt.mask_level) as i32 {
@@ -267,31 +312,49 @@ pub fn filter_chains(
                     let weight_threshold = (kept_chain.weight as f32 * opt.drop_ratio) as i32;
                     let weight_diff = kept_chain.weight - chain.weight;
 
+                    log::debug!(
+                        "      Significant overlap: weight_threshold={}, weight_diff={}, min_seed_len={}",
+                        weight_threshold, weight_diff, opt.min_seed_len
+                    );
+
                     if chain.weight < weight_threshold && weight_diff >= (opt.min_seed_len << 1) {
                         log::debug!(
-                            "Chain {} dropped: overlaps with kept chain, weight={} < threshold={} (kept_weight={} * drop_ratio={})",
+                            "      Chain {} dropped due to drop_ratio: weight={} < threshold={} (kept_weight={} * drop_ratio={}) AND diff={} >= (2*min_seed_len={})",
                             i,
                             chain.weight,
                             weight_threshold,
                             kept_chain.weight,
-                            opt.drop_ratio
+                            opt.drop_ratio,
+                            weight_diff,
+                            opt.min_seed_len << 1
                         );
                         should_discard = true;
                         break;
+                    } else {
+                        log::debug!("      Chain {} is shadowed by kept chain {} but NOT dropped by drop_ratio.", i, kept_idx);
                     }
                     break;
+                } else {
+                    log::debug!("      Overlap is not significant: overlap={} < (min_len={} * mask_level={})", overlap, min_len, opt.mask_level);
                 }
+            } else {
+                log::debug!("    No query overlap for Chain {} vs Kept Chain {}", i, kept_idx);
             }
         }
 
         // Skip discarded chains
         if should_discard {
+            log::debug!("  filter_chains: Chain {} (score {}) discarded.", i, chain.score);
             continue;
         }
 
         // Non-overlapping chains are always kept (C++ line 588: kept = large_ovlp? 2 : 3)
         if !overlaps {
             chain_copy.kept = 3; // Primary chain (no overlap)
+            log::debug!("  filter_chains: Chain {} (score {}) kept as primary (non-overlapping).", i, chain.score);
+        } else {
+            chain_copy.kept = 1; // Shadowed
+            log::debug!("  filter_chains: Chain {} (score {}) kept as shadowed (overlapping).", i, chain.score);
         }
 
         kept_chains.push(chain_copy);

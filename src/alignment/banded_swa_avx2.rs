@@ -8,7 +8,7 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::banded_swa::OutScore;
+use crate::alignment::banded_swa::OutScore;
 use crate::simd_abstraction::SimdEngine256 as Engine;
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 32 alignments

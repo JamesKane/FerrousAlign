@@ -454,6 +454,23 @@ pub fn get_bwt(bwa_idx: &BwaIndex, pos: u64) -> Option<u64> {
     Some(bwa_idx.bwt.cumulative_count[base as usize] + get_occ(bwa_idx, pos as i64, base) as u64)
 }
 
+pub fn get_sa_entries(
+    bwa_idx: &BwaIndex,
+    bwt_interval_start: u64,
+    interval_size: u64,
+    max_occurrences: u32,
+) -> Vec<u64> {
+    let mut ref_positions = Vec::new();
+    let num_to_retrieve = (interval_size as u32).min(max_occurrences) as u64;
+
+    for i in 0..num_to_retrieve {
+        let sa_index = bwt_interval_start + i;
+        let ref_pos = get_sa_entry(bwa_idx, sa_index);
+        ref_positions.push(ref_pos);
+    }
+    ref_positions
+}
+
 pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     let original_pos = pos;
     let mut count = 0;

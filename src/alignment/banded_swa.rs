@@ -1245,7 +1245,7 @@ impl BandedPairWiseSW {
                 // Use AVX2 kernel (32-way parallelism)
                 // Implementation in src/banded_swa_avx2.rs
                 unsafe {
-                    crate::banded_swa_avx2::simd_banded_swa_batch32(
+                    crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
                         batch, self.o_del, self.e_del, self.o_ins, self.e_ins, self.zdrop,
                         &self.mat, self.m,
                     )
@@ -2174,7 +2174,7 @@ mod tests {
 
             // Run with AVX2 (batch32) - directly call AVX2 kernel
             let avx2_results = unsafe {
-                crate::banded_swa_avx2::simd_banded_swa_batch32(
+                crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
                     &batch32, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                     bsw.m,
                 )
@@ -2362,7 +2362,7 @@ mod tests {
             }
 
             let avx2_results = unsafe {
-                crate::banded_swa_avx2::simd_banded_swa_batch32(
+                crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
                     &avx2_batch,
                     bsw.o_del,
                     bsw.e_del,
@@ -2478,7 +2478,7 @@ mod tests {
             }
 
             let avx2_results = unsafe {
-                crate::banded_swa_avx2::simd_banded_swa_batch32(
+                crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
                     &batch32, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                     bsw.m,
                 )

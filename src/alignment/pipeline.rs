@@ -15,7 +15,7 @@ use crate::alignment::finalization::sam_flags;
 use crate::alignment::seeding::SMEM;
 use crate::alignment::seeding::Seed;
 use crate::alignment::seeding::generate_smems_for_strand;
-use crate::alignment::seeding::get_sa_entry;
+use crate::alignment::seeding::get_sa_entries;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::index::BwaIndex;
@@ -242,15 +242,24 @@ fn find_seeds(
 
     let mut seeds = Vec::new();
     for smem in sorted_smems.iter() {
-        let ref_pos = get_sa_entry(bwa_idx, smem.bwt_interval_start);
-        let seed = Seed {
-            query_pos: smem.query_start,
-            ref_pos,
-            len: smem.query_end - smem.query_start,
-            is_rev: smem.is_reverse_complement,
-            interval_size: smem.interval_size,
-        };
-        seeds.push(seed);
+        // Use the new get_sa_entries function to get multiple reference positions
+        let ref_positions = crate::alignment::seeding::get_sa_entries(
+            bwa_idx,
+            smem.bwt_interval_start,
+            smem.interval_size,
+            opt.max_occ as u32,
+        );
+
+        for ref_pos in ref_positions {
+            let seed = Seed {
+                query_pos: smem.query_start,
+                ref_pos,
+                len: smem.query_end - smem.query_start,
+                is_rev: smem.is_reverse_complement,
+                interval_size: smem.interval_size,
+            };
+            seeds.push(seed);
+        }
     }
 
     if max_smem_count > query_len {
