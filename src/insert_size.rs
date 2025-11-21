@@ -1,3 +1,6 @@
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::sam_flags;
+
 // Insert size statistics module
 //
 // This module handles paired-end insert size distribution analysis:
@@ -5,8 +8,6 @@
 // - Statistical analysis (mean, std, outlier removal)
 // - Bootstrap estimation from first batch
 // - Proper pair bounds calculation
-
-use crate::align;
 
 // Paired-end insert size constants (from C++ bwamem_pair.cpp)
 const MIN_DIR_CNT: usize = 10; // Minimum pairs for orientation
@@ -244,7 +245,7 @@ pub fn calculate_insert_size_stats(
 /// Bootstrap insert size statistics from first batch only
 /// This allows streaming subsequent batches without buffering all alignments
 pub fn bootstrap_insert_size_stats(
-    first_batch_alignments: &[(Vec<align::Alignment>, Vec<align::Alignment>)],
+    first_batch_alignments: &[(Vec<Alignment>, Vec<Alignment>)],
     l_pac: i64,
 ) -> [InsertSizeStats; 4] {
     log::info!(
@@ -262,8 +263,8 @@ pub fn bootstrap_insert_size_stats(
             if aln1.ref_name == aln2.ref_name {
                 // Convert positions to bidirectional coordinate space [0, 2*l_pac)
                 // Forward strand: [0, l_pac), Reverse strand: [l_pac, 2*l_pac)
-                let is_rev1 = (aln1.flag & align::sam_flags::REVERSE) != 0;
-                let is_rev2 = (aln2.flag & align::sam_flags::REVERSE) != 0;
+                let is_rev1 = (aln1.flag & sam_flags::REVERSE) != 0;
+                let is_rev2 = (aln2.flag & sam_flags::REVERSE) != 0;
 
                 let pos1 = if is_rev1 {
                     (l_pac << 1) - 1 - (aln1.pos as i64)

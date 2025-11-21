@@ -5,7 +5,8 @@
 // - Normal distribution scoring
 // - Best pair selection with tie-breaking
 
-use crate::align;
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::sam_flags;
 use crate::insert_size::InsertSizeStats;
 use crate::insert_size::erfc_fn as erfc;
 use crate::utils::hash_64;
@@ -30,8 +31,8 @@ struct PairScore {
 /// Returns: Option<(best_idx1, best_idx2, pair_score, sub_score)>
 pub fn mem_pair(
     stats: &[InsertSizeStats; 4],
-    alns1: &[align::Alignment],
-    alns2: &[align::Alignment],
+    alns1: &[Alignment],
+    alns2: &[Alignment],
     match_score: i32, // opt->a (match score for log-likelihood calculation)
     pair_id: u64,
 ) -> Option<(usize, usize, i32, i32)> {
@@ -45,7 +46,7 @@ pub fn mem_pair(
     // Add alignments from read1
     for (i, aln) in alns1.iter().enumerate() {
         // Use forward-strand position directly (aln.pos is always on forward strand)
-        let is_rev = (aln.flag & align::sam_flags::REVERSE) != 0;
+        let is_rev = (aln.flag & sam_flags::REVERSE) != 0;
         let pos = aln.pos as i64;
 
         let pos_key = ((aln.ref_id as u64) << 32) | (pos as u64);
@@ -67,7 +68,7 @@ pub fn mem_pair(
 
     // Add alignments from read2
     for (i, aln) in alns2.iter().enumerate() {
-        let is_rev = (aln.flag & align::sam_flags::REVERSE) != 0;
+        let is_rev = (aln.flag & sam_flags::REVERSE) != 0;
         let pos = aln.pos as i64;
 
         let pos_key = ((aln.ref_id as u64) << 32) | (pos as u64);

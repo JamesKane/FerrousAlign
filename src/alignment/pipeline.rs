@@ -1,3 +1,26 @@
+use crate::alignment::chaining::cal_max_gap;
+use crate::alignment::chaining::chain_seeds;
+use crate::alignment::chaining::filter_chains;
+use crate::alignment::extension::AlignmentJob;
+use crate::alignment::extension::execute_adaptive_alignments;
+use crate::alignment::extension::execute_scalar_alignments;
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::generate_sa_tags;
+use crate::alignment::finalization::generate_xa_tags;
+use crate::alignment::finalization::mark_secondary_alignments;
+use crate::alignment::finalization::sam_flags;
+use crate::alignment::seeding::SMEM;
+use crate::alignment::seeding::Seed;
+use crate::alignment::seeding::generate_smems_for_strand;
+use crate::alignment::seeding::get_sa_entry;
+use crate::alignment::utils::base_to_code;
+use crate::alignment::utils::reverse_complement_code;
+use crate::banded_swa::BandedPairWiseSW;
+use crate::banded_swa::merge_cigar_operations;
+use crate::index::BwaIndex;
+use crate::mem_opt::MemOpt;
+use crate::utils::hash_64;
+
 // ============================================================================
 // SEED GENERATION (SMEM EXTRACTION)
 // ============================================================================
@@ -1043,12 +1066,12 @@ fn generate_seeds_with_mode(
 
         // Use the best alignment candidate for this chain
         if let Some((
-                        mut cigar_for_alignment,
-                        combined_score,
-                        alignment_start_pos,
-                        query_start_aligned,
-                        query_end_aligned,
-                    )) = best_alignment_data
+            mut cigar_for_alignment,
+            combined_score,
+            alignment_start_pos,
+            query_start_aligned,
+            query_end_aligned,
+        )) = best_alignment_data
         {
             log::debug!(
                 "{}: Chain {} (weight={}, kept={}): BEST score={} from {} candidates",
@@ -1339,4 +1362,62 @@ fn generate_seeds_with_mode(
     }
 
     alignments
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::alignment::pipeline::sam_flags;
+    use crate::index::BwaIndex;
+
+    #[test]
+    fn test_generate_seeds_basic() {
+        use crate::mem_opt::MemOpt;
+        use std::path::Path;
+
+        let prefix = Path::new("test_data/test_ref.fa");
+        if !prefix.exists() {
+            eprintln!("Skipping test_generate_seeds_basic - test data not found");
+            return;
+        }
+
+        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+            Ok(idx) => idx,
+            Err(_) => {
+                eprintln!("Skipping test_generate_seeds_basic - could not load index");
+                return;
+            }
+        };
+
+        let mut opt = MemOpt::default();
+        opt.min_seed_len = 10; // Ensure our seed is long enough
+
+        let query_name = "test_query";
+        let query_seq = b"ACGTACGTACGT"; // 12bp
+        let query_qual = "IIIIIIIIIIII";
+
+        // Test doesn't need real MD tags, use empty pac_data
+        let pac_data: &[u8] = &[];
+        let alignments =
+            super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt);
+
+        assert!(
+            !alignments.is_empty(),
+            "Expected at least one alignment for a matching query"
+        );
+
+        let primary_alignment = alignments
+            .iter()
+            .find(|a| a.flag & sam_flags::SECONDARY == 0);
+        assert!(primary_alignment.is_some(), "Expected a primary alignment");
+
+        let pa = primary_alignment.unwrap();
+        assert_eq!(pa.ref_name, "test_sequence");
+        assert!(
+            pa.score > 0,
+            "Expected a positive score for a good match, got {}",
+            pa.score
+        );
+        assert!(pa.pos < 60, "Position should be within reference length");
+        assert_eq!(pa.cigar_string(), "12M", "Expected a perfect match CIGAR");
+    }
 }

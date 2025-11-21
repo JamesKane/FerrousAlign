@@ -2,6 +2,8 @@
 // Alignment Job Structure and Divergence Estimation
 // ----------------------------------------------------------------------------
 
+use crate::banded_swa::BandedPairWiseSW;
+
 // Structure to hold alignment job for batching
 #[derive(Clone)]
 #[cfg_attr(test, derive(Debug))]
@@ -518,4 +520,88 @@ pub(crate) fn execute_batched_alignments(
     }
 
     all_results
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::alignment::utils::DEFAULT_SCORING_MATRIX;
+
+    #[test]
+    fn test_batched_alignment_infrastructure() {
+        // Test that the batched alignment infrastructure works correctly
+        use crate::banded_swa::BandedPairWiseSW;
+
+        let sw_params =
+            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, 5, 5, DEFAULT_SCORING_MATRIX, 2, -4);
+
+        // Create test alignment jobs
+        let query1 = vec![0u8, 1, 2, 3]; // ACGT
+        let target1 = vec![0u8, 1, 2, 3]; // ACGT (perfect match)
+
+        let query2 = vec![0u8, 0, 1, 1]; // AACC
+        let target2 = vec![0u8, 0, 1, 1]; // AACC (perfect match)
+
+        let jobs = vec![
+            super::AlignmentJob {
+                seed_idx: 0,
+                query: query1.clone(),
+                target: target1.clone(),
+                band_width: 10,
+                query_offset: 0, // Test: align from start
+                direction: None, // Legacy test mode
+                seed_len: 4,     // Actual sequence length (4bp queries)
+            },
+            super::AlignmentJob {
+                seed_idx: 1,
+                query: query2.clone(),
+                target: target2.clone(),
+                band_width: 10,
+                query_offset: 0, // Test: align from start
+                direction: None, // Legacy test mode
+                seed_len: 4,     // Actual sequence length (4bp queries)
+            },
+        ];
+
+        // Test scalar execution
+        let scalar_results = super::execute_scalar_alignments(&sw_params, &jobs);
+        assert_eq!(
+            scalar_results.len(),
+            2,
+            "Should return 2 results for 2 jobs"
+        );
+        assert!(
+            !scalar_results[0].1.is_empty(),
+            "First CIGAR should not be empty"
+        );
+        assert!(
+            !scalar_results[1].1.is_empty(),
+            "Second CIGAR should not be empty"
+        );
+
+        // Test batched execution
+        let batched_results = super::execute_batched_alignments(&sw_params, &jobs);
+        assert_eq!(
+            batched_results.len(),
+            2,
+            "Should return 2 results for 2 jobs"
+        );
+
+        // Results should be identical (CIGARs and scores)
+        assert_eq!(
+            scalar_results[0].0, batched_results[0].0,
+            "Scores should match"
+        );
+        assert_eq!(
+            scalar_results[0].1, batched_results[0].1,
+            "CIGARs should match"
+        );
+        assert_eq!(
+            scalar_results[1].0, batched_results[1].0,
+            "Scores should match"
+        );
+        assert_eq!(
+            scalar_results[1].1, batched_results[1].1,
+            "CIGARs should match"
+        );
+    }
 }

@@ -5,7 +5,9 @@
 // - Parallel alignment using Rayon
 // - SAM output formatting
 
-use crate::align;
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::sam_flags;
+use crate::alignment::pipeline::generate_seeds;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
@@ -98,20 +100,13 @@ pub fn process_single_end(
             let bwa_idx_clone = Arc::clone(&bwa_idx);
             let pac_data_clone = Arc::clone(&pac_data);
             let opt_clone = Arc::clone(&opt);
-            let alignments: Vec<Vec<align::Alignment>> = batch
+            let alignments: Vec<Vec<Alignment>> = batch
                 .names
                 .par_iter()
                 .zip(batch.seqs.par_iter())
                 .zip(batch.quals.par_iter())
                 .map(|((name, seq), qual)| {
-                    align::generate_seeds(
-                        &bwa_idx_clone,
-                        &pac_data_clone,
-                        name,
-                        seq,
-                        qual,
-                        &opt_clone,
-                    )
+                    generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone)
                 })
                 .collect();
 
@@ -135,7 +130,7 @@ pub fn process_single_end(
                 // CRITICAL FIX: Check if best alignment score is below threshold (matching bwa-mem2 behavior)
                 // If so, output an unmapped record instead of the low-scoring alignment
                 let best_alignment = &alignment_vec[best_idx];
-                let best_is_unmapped = best_alignment.flag & align::sam_flags::UNMAPPED != 0;
+                let best_is_unmapped = best_alignment.flag & sam_flags::UNMAPPED != 0;
                 let all_below_threshold = !best_is_unmapped && best_alignment.score < opt.t;
 
                 if all_below_threshold {
@@ -149,9 +144,9 @@ pub fn process_single_end(
                     );
 
                     // Create unmapped alignment for single-end read
-                    let unmapped = align::Alignment {
+                    let unmapped = Alignment {
                         query_name: best_alignment.query_name.clone(),
-                        flag: align::sam_flags::UNMAPPED, // sam_flags::UNMAPPED
+                        flag: sam_flags::UNMAPPED, // sam_flags::UNMAPPED
                         ref_name: "*".to_string(),
                         ref_id: 0,
                         pos: 0,
@@ -191,7 +186,7 @@ pub fn process_single_end(
                 }
 
                 for (idx, mut alignment) in alignment_vec.into_iter().enumerate() {
-                    let is_unmapped = alignment.flag & align::sam_flags::UNMAPPED != 0;
+                    let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
                     let is_primary = idx == best_idx;
 
                     // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
@@ -209,10 +204,10 @@ pub fn process_single_end(
                     // Clear or set secondary flag based on whether this is the primary alignment
                     if is_primary {
                         // This is the best alignment - ensure it's PRIMARY (clear secondary flag)
-                        alignment.flag &= !align::sam_flags::SECONDARY;
+                        alignment.flag &= !sam_flags::SECONDARY;
                     } else if !is_unmapped {
                         // Non-best alignment - mark as secondary
-                        alignment.flag |= align::sam_flags::SECONDARY;
+                        alignment.flag |= sam_flags::SECONDARY;
                     }
 
                     // Add RG tag if read group is specified

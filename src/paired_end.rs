@@ -7,8 +7,10 @@
 // - Paired alignment scoring
 // - SAM output with proper pair flags
 
-use crate::align;
-use crate::align::sam_flags;
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::sam_flags;
+use crate::alignment::pipeline::generate_seeds;
+use crate::alignment::utils::encode_sequence;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
@@ -239,11 +241,10 @@ pub fn process_paired_end(
     let pac_clone = &pac; // Borrow pac for this scope
     let opt_clone = Arc::clone(&opt);
 
-    let mut first_batch_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = (0
-        ..num_pairs)
+    let mut first_batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
         .into_par_iter()
         .map(|i| {
-            let aln1 = align::generate_seeds(
+            let aln1 = generate_seeds(
                 &bwa_idx_clone,
                 pac_clone,
                 &first_batch1.names[i],
@@ -251,7 +252,7 @@ pub fn process_paired_end(
                 &first_batch1.quals[i],
                 &opt_clone,
             );
-            let aln2 = align::generate_seeds(
+            let aln2 = generate_seeds(
                 &bwa_idx_clone,
                 pac_clone,
                 &first_batch2.names[i],
@@ -410,11 +411,10 @@ pub fn process_paired_end(
         let pac_clone = &pac; // Borrow pac for this scope
         let opt_clone = Arc::clone(&opt);
 
-        let mut batch_alignments: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)> = (0
-            ..num_pairs)
+        let mut batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
             .into_par_iter()
             .map(|i| {
-                let aln1 = align::generate_seeds(
+                let aln1 = generate_seeds(
                     &bwa_idx_clone,
                     pac_clone,
                     &batch1.names[i],
@@ -422,7 +422,7 @@ pub fn process_paired_end(
                     &batch1.quals[i],
                     &opt_clone,
                 );
-                let aln2 = align::generate_seeds(
+                let aln2 = generate_seeds(
                     &bwa_idx_clone,
                     pac_clone,
                     &batch2.names[i],
@@ -517,7 +517,7 @@ pub fn process_paired_end(
 // Perform mate rescue on a single batch
 // Returns number of pairs rescued
 fn mate_rescue_batch(
-    batch_pairs: &mut [(Vec<align::Alignment>, Vec<align::Alignment>)],
+    batch_pairs: &mut [(Vec<Alignment>, Vec<Alignment>)],
     batch_seqs1: &[(&str, &[u8], &str)], // (name, seq, qual) for read1
     batch_seqs2: &[(&str, &[u8], &str)], // (name, seq, qual) for read2
     pac: &[u8],
@@ -527,7 +527,7 @@ fn mate_rescue_batch(
     let mut rescued = 0;
 
     // Encode sequence helper
-    // Use align::encode_sequence instead of lambda
+    // Use encode_sequence instead of lambda
     for (i, (alns1, alns2)) in batch_pairs.iter_mut().enumerate() {
         let (name1, seq1, qual1) = batch_seqs1[i];
         let (name2, seq2, qual2) = batch_seqs2[i];
@@ -544,7 +544,7 @@ fn mate_rescue_batch(
 
         // Try to rescue read2 if read1 has good alignments but read2 doesn't
         if !alns1.is_empty() && alns2.is_empty() && !pac.is_empty() {
-            let mate_seq = align::encode_sequence(seq2);
+            let mate_seq = encode_sequence(seq2);
             let n = mem_matesw(
                 bwa_idx, pac, stats, &alns1[0], // Use best alignment as anchor
                 &mate_seq, qual2, name2, alns2,
@@ -556,7 +556,7 @@ fn mate_rescue_batch(
 
         // Try to rescue read1 if read2 has good alignments but read1 doesn't
         if !alns2.is_empty() && alns1.is_empty() && !pac.is_empty() {
-            let mate_seq = align::encode_sequence(seq1);
+            let mate_seq = encode_sequence(seq1);
             let n = mem_matesw(
                 bwa_idx, pac, stats, &alns2[0], // Use best alignment as anchor
                 &mate_seq, qual1, name1, alns1,
@@ -573,7 +573,7 @@ fn mate_rescue_batch(
 // Output a batch of paired-end alignments with proper flags and flushing
 // Returns number of records written
 fn output_batch_paired(
-    batch_pairs: Vec<(Vec<align::Alignment>, Vec<align::Alignment>)>,
+    batch_pairs: Vec<(Vec<Alignment>, Vec<Alignment>)>,
     batch_seqs1: &[(String, Vec<u8>, String)], // (name, seq, qual) for read1
     batch_seqs2: &[(String, Vec<u8>, String)], // (name, seq, qual) for read2
     stats: &[InsertSizeStats; 4],
@@ -617,7 +617,7 @@ fn output_batch_paired(
                 "{}: All alignments filtered by score threshold, creating unmapped",
                 name1
             );
-            alignments1.push(align::Alignment {
+            alignments1.push(Alignment {
                 query_name: name1.to_string(),
                 flag: sam_flags::UNMAPPED, // Unmapped (paired flags will be set later)
                 ref_name: "*".to_string(),
@@ -645,7 +645,7 @@ fn output_batch_paired(
                 "{}: All alignments filtered by score threshold, creating unmapped",
                 name2
             );
-            alignments2.push(align::Alignment {
+            alignments2.push(Alignment {
                 query_name: name2.to_string(),
                 flag: sam_flags::UNMAPPED, // Unmapped (paired flags will be set later)
                 ref_name: "*".to_string(),
@@ -751,7 +751,7 @@ fn output_batch_paired(
 
         // Handle unmapped reads - create dummy alignments
         if alignments1.is_empty() {
-            let unmapped = align::Alignment::create_unmapped(
+            let unmapped = Alignment::create_unmapped(
                 name1.clone(),
                 seq1,
                 qual1.clone(),
@@ -764,7 +764,7 @@ fn output_batch_paired(
         }
 
         if alignments2.is_empty() {
-            let unmapped = align::Alignment::create_unmapped(
+            let unmapped = Alignment::create_unmapped(
                 name2.clone(),
                 seq2,
                 qual2.clone(),

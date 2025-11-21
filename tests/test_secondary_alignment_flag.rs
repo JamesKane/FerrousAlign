@@ -1,3 +1,5 @@
+use ferrous_align::alignment::finalization::sam_flags;
+
 /// Critical regression test for secondary alignment flag bug (Session 36)
 ///
 /// Bug: 36% of reads (7,264/20,000) were incorrectly marked as secondary
@@ -9,7 +11,6 @@
 /// 1. Primary alignments never have SECONDARY flag (sam_flags::SECONDARY)
 /// 2. Non-primary alignments are marked as secondary
 /// 3. Paired-end logic correctly overrides single-read secondary marking
-use ferrous_align::align::sam_flags;
 
 /// Test that primary alignments don't have secondary flag set
 #[test]

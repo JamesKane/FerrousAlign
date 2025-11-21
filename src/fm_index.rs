@@ -5,7 +5,7 @@
 // - Backward and forward extension for BWT search
 // - Checkpoint data structures for efficient occurrence queries
 
-use crate::align::SMEM;
+use crate::alignment::seeding::SMEM;
 use crate::index::BwaIndex;
 
 // Constants from FMI_search.h
@@ -309,4 +309,31 @@ pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_popcount64_neon() {
+        // Test the hardware-optimized popcount implementation
+        // This ensures our NEON implementation matches the software version
+
+        // Test basic cases
+        assert_eq!(popcount64(0), 0);
+        assert_eq!(popcount64(1), 1);
+        assert_eq!(popcount64(0xFFFFFFFFFFFFFFFF), 64);
+        assert_eq!(popcount64(0x8000000000000000), 1);
+
+        // Test various bit patterns
+        assert_eq!(popcount64(0b1010101010101010), 8);
+        assert_eq!(popcount64(0b11111111), 8);
+        assert_eq!(popcount64(0xFF00FF00FF00FF00), 32);
+        assert_eq!(popcount64(0x0F0F0F0F0F0F0F0F), 32);
+
+        // Test random patterns that match expected popcount
+        assert_eq!(popcount64(0x123456789ABCDEF0), 32);
+        assert_eq!(popcount64(0xAAAAAAAAAAAAAAAA), 32); // Alternating bits
+        assert_eq!(popcount64(0x5555555555555555), 32); // Alternating bits (complement)
+    }
 }

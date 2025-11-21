@@ -2,7 +2,7 @@
 #![cfg_attr(feature = "avx512", feature(stdarch_x86_avx512))]
 #![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
 
-pub mod align;
+pub mod alignment;
 pub mod banded_swa;
 pub mod bntseq;
 pub mod bwa_index;

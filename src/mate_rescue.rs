@@ -5,7 +5,9 @@
 // - Banded Smith-Waterman alignment
 // - Rescued alignment creation
 
-use crate::align;
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::sam_flags;
+use crate::alignment::utils::DEFAULT_SCORING_MATRIX;
 use crate::index::BwaIndex;
 use crate::insert_size::{InsertSizeStats, infer_orientation};
 
@@ -16,11 +18,11 @@ pub fn mem_matesw(
     bwa_idx: &BwaIndex,
     pac: &[u8], // Pre-loaded PAC data (passed once, not loaded per call)
     stats: &[InsertSizeStats; 4],
-    anchor: &align::Alignment,
+    anchor: &Alignment,
     mate_seq: &[u8],
     mate_qual: &str,
     mate_name: &str,
-    rescued_alignments: &mut Vec<align::Alignment>,
+    rescued_alignments: &mut Vec<Alignment>,
 ) -> usize {
     use crate::banded_swa::BandedPairWiseSW;
 
@@ -62,7 +64,7 @@ pub fn mem_matesw(
         0,   // end_bonus
         5,   // pen_clip5 (5' clipping penalty, default=5)
         5,   // pen_clip3 (3' clipping penalty, default=5)
-        align::DEFAULT_SCORING_MATRIX,
+        DEFAULT_SCORING_MATRIX,
         2,  // w_match
         -4, // w_mismatch
     );
@@ -180,10 +182,10 @@ pub fn mem_matesw(
         // Create alignment structure
         let mut flag = 0u16;
         if is_rev {
-            flag |= align::sam_flags::REVERSE; // Reverse complement
+            flag |= sam_flags::REVERSE; // Reverse complement
         }
 
-        let rescued_aln = align::Alignment {
+        let rescued_aln = Alignment {
             query_name: mate_name.to_string(),
             flag,
             ref_name: anchor.ref_name.clone(),

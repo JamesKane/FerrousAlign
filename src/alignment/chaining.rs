@@ -1,3 +1,6 @@
+use crate::alignment::seeding::Seed;
+use crate::mem_opt::MemOpt;
+
 #[derive(Debug, Clone)]
 pub struct Chain {
     pub score: i32,
@@ -200,7 +203,7 @@ pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>
 /// 3. Filter by min_chain_weight
 /// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
 /// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
-fn filter_chains(
+pub fn filter_chains(
     chains: &mut Vec<Chain>,
     seeds: &[Seed],
     opt: &MemOpt,
@@ -323,7 +326,7 @@ fn filter_chains(
 ///
 /// Weight = minimum of query coverage and reference coverage
 /// This accounts for non-overlapping seed lengths in the chain
-fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, i32) {
+pub fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, i32) {
     if chain.seeds.is_empty() {
         return (0, 0);
     }
@@ -376,7 +379,7 @@ fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, 
 /// Calculate maximum gap size for a given query length
 /// Matches C++ bwamem.cpp:66 cal_max_gap()
 #[inline]
-fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
+pub fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
     let l_del = ((qlen * opt.a as i32 - opt.o_del as i32) as f64 / opt.e_del as f64 + 1.0) as i32;
     let l_ins = ((qlen * opt.a as i32 - opt.o_ins as i32) as f64 / opt.e_ins as f64 + 1.0) as i32;
 

@@ -4,7 +4,8 @@ use crate::paired_end::process_paired_end;
 use crate::single_end::process_single_end;
 use anyhow::Result;
 use std::fs::File;
-use std::io::{self, Write}; // Added import for BwaIndex
+use std::io::{self, Write};
+// Added import for BwaIndex
 
 pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // Detect and display SIMD capabilities

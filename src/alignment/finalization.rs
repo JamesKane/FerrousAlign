@@ -1,3 +1,5 @@
+use crate::mem_opt::MemOpt;
+
 /// SAM flag bit masks (SAM specification v1.6)
 /// Used for setting and querying alignment flags in SAM/BAM format
 pub mod sam_flags {
@@ -577,7 +579,7 @@ impl Alignment {
 /// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
 /// 3. If overlap >= mask_level, mark as secondary (set sam_flags::SECONDARY flag)
 /// 4. Calculate MAPQ based on score difference and overlap count
-fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
+pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     if alignments.is_empty() {
         return;
     }
@@ -755,8 +757,8 @@ fn calculate_mapq(
     // identity = 1 - (l * a - score) / (a + b) / l
     let identity = 1.0
         - ((l * match_score - score) as f64)
-        / ((match_score + mismatch_penalty) as f64)
-        / (l as f64);
+            / ((match_score + mismatch_penalty) as f64)
+            / (l as f64);
 
     if score == 0 {
         return 0;
@@ -821,7 +823,7 @@ fn calculate_mapq(
 /// 4. Format as XA:Z:chr1,+100,50M,2;chr2,-200,48M1D2M,3;
 ///
 /// Returns: HashMap<read_name, XA_tag_string>
-fn generate_xa_tags(
+pub fn generate_xa_tags(
     alignments: &[Alignment],
     opt: &MemOpt,
 ) -> std::collections::HashMap<String, String> {
@@ -909,7 +911,7 @@ fn generate_xa_tags(
 /// 3. Skip if only one non-secondary alignment exists (no supplementary)
 ///
 /// Returns: HashMap<read_name, SA_tag_string>
-fn generate_sa_tags(alignments: &[Alignment]) -> std::collections::HashMap<String, String> {
+pub fn generate_sa_tags(alignments: &[Alignment]) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
 
     let mut all_sa_tags: HashMap<String, String> = HashMap::new();
@@ -994,4 +996,108 @@ fn generate_sa_tags(alignments: &[Alignment]) -> std::collections::HashMap<Strin
     );
 
     all_sa_tags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hard_clipping_for_supplementary() {
+        // Test that soft clips (S) are converted to hard clips (H) for supplementary alignments
+        // Per bwa-mem2 behavior (bwamem.cpp:1585-1586)
+
+        // Create a primary alignment with soft clips
+        let primary = Alignment {
+            query_name: "read1".to_string(),
+            flag: 0, // Primary alignment
+            ref_name: "chr1".to_string(),
+            ref_id: 0,
+            pos: 100,
+            mapq: 60,
+            score: 100,
+            cigar: vec![(b'S', 5), (b'M', 50), (b'S', 10)],
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat(65),
+            qual: "I".repeat(65),
+            tags: vec![],
+            query_start: 0,
+            query_end: 65,
+            seed_coverage: 50,
+            hash: 0,
+            frac_rep: 0.0,
+        };
+
+        // Create a supplementary alignment with soft clips
+        let supplementary = Alignment {
+            query_name: "read1".to_string(),
+            flag: sam_flags::SUPPLEMENTARY,
+            ref_name: "chr2".to_string(),
+            ref_id: 1,
+            pos: 200,
+            mapq: 30,
+            score: 80,
+            cigar: vec![(b'S', 5), (b'M', 50), (b'S', 10)],
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat(65),
+            qual: "I".repeat(65),
+            tags: vec![],
+            query_start: 0,
+            query_end: 65,
+            seed_coverage: 50,
+            hash: 0,
+            frac_rep: 0.0,
+        };
+
+        // Create a secondary alignment with soft clips
+        let secondary = Alignment {
+            query_name: "read1".to_string(),
+            flag: sam_flags::SECONDARY,
+            ref_name: "chr3".to_string(),
+            ref_id: 2,
+            pos: 300,
+            mapq: 0,
+            score: 70,
+            cigar: vec![(b'S', 5), (b'M', 50), (b'S', 10)],
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat(65),
+            qual: "I".repeat(65),
+            tags: vec![],
+            query_start: 0,
+            query_end: 65,
+            seed_coverage: 50,
+            hash: 0,
+            frac_rep: 0.0,
+        };
+
+        // Verify CIGAR strings
+        assert_eq!(
+            primary.cigar_string(),
+            "5S50M10S",
+            "Primary alignment should keep soft clips (S)"
+        );
+
+        assert_eq!(
+            supplementary.cigar_string(),
+            "5H50M10H",
+            "Supplementary alignment should convert S to H"
+        );
+
+        assert_eq!(
+            secondary.cigar_string(),
+            "5S50M10S",
+            "Secondary alignment should keep soft clips (S)"
+        );
+
+        println!("✅ Hard clipping test passed!");
+        println!("   Primary:       {}", primary.cigar_string());
+        println!("   Supplementary: {}", supplementary.cigar_string());
+        println!("   Secondary:     {}", secondary.cigar_string());
+    }
 }
