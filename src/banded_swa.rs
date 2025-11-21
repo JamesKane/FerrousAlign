@@ -1235,7 +1235,7 @@ impl BandedPairWiseSW {
         &self,
         batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
     ) -> Vec<OutScore> {
-        use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
+        use crate::simd::{SimdEngineType, detect_optimal_simd_engine};
 
         let engine = detect_optimal_simd_engine();
 
@@ -1283,7 +1283,7 @@ impl BandedPairWiseSW {
             Option<ExtensionDirection>,
         )],
     ) -> Vec<AlignmentResult> {
-        use crate::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
+        use crate::simd::{SimdEngineType, detect_optimal_simd_engine};
 
         let engine = detect_optimal_simd_engine();
 
@@ -2302,7 +2302,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_all_engines_batch_correctness() {
-        use crate::simd_abstraction::detect_optimal_simd_engine;
+        use crate::simd::detect_optimal_simd_engine;
 
         let engine = detect_optimal_simd_engine();
         println!("Detected optimal SIMD engine: {:?}", engine);

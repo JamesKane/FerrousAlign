@@ -18,7 +18,7 @@ pub fn main_mem(
     opt: &MemOpt,
 ) {
     // Detect and display SIMD capabilities
-    use crate::simd_abstraction::{detect_optimal_simd_engine, simd_engine_description};
+use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     let simd_engine = detect_optimal_simd_engine();
     let simd_desc = simd_engine_description(simd_engine);
     log::info!("Using SIMD engine: {}", simd_desc);
