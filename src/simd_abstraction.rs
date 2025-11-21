@@ -1657,7 +1657,6 @@ mod tests {
         }
     }
 
-
     /// Test that all engines can handle the same data pattern correctly
     #[cfg(target_arch = "x86_64")]
     #[test]

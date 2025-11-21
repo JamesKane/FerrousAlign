@@ -7,6 +7,7 @@ pub mod banded_swa;
 pub mod bntseq;
 pub mod bwa_index;
 pub mod bwt;
+pub mod defaults;
 pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
 pub mod fm_index; // FM-Index operations (BWT search, occurrence counting)
 pub mod index; // Index management (BwaIndex loading/dumping)
@@ -17,11 +18,10 @@ pub mod mem;
 pub mod mem_opt;
 pub mod paired_end; // Paired-end read processing
 pub mod pairing; // Paired-end alignment scoring
-pub mod simd_abstraction;
 pub mod simd;
+pub mod simd_abstraction;
 pub mod single_end; // Single-end read processing
 pub mod utils;
-pub mod defaults;
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

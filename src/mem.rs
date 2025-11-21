@@ -1,14 +1,14 @@
-use anyhow::Result;
-use crate::mem_opt::{MemOpt, MemCliOptions};
+use crate::index::BwaIndex;
+use crate::mem_opt::{MemCliOptions, MemOpt};
 use crate::paired_end::process_paired_end;
 use crate::single_end::process_single_end;
+use anyhow::Result;
 use std::fs::File;
-use std::io::{self, Write};
-use crate::index::BwaIndex; // Added import for BwaIndex
+use std::io::{self, Write}; // Added import for BwaIndex
 
 pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // Detect and display SIMD capabilities
-use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
+    use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     let simd_engine = detect_optimal_simd_engine();
     let simd_desc = simd_engine_description(simd_engine);
     log::info!("Using SIMD engine: {}", simd_desc);
@@ -35,13 +35,13 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     opt.pen_unpaired = opts.unpaired_penalty;
 
     // Parse gap penalties
-    let (o_del, o_ins) = MemOpt::parse_gap_penalties(&opts.gap_open)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (o_del, o_ins) =
+        MemOpt::parse_gap_penalties(&opts.gap_open).map_err(|e| anyhow::anyhow!("{}", e))?;
     opt.o_del = o_del;
     opt.o_ins = o_ins;
 
-    let (e_del, e_ins) = MemOpt::parse_gap_penalties(&opts.gap_extend)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (e_del, e_ins) =
+        MemOpt::parse_gap_penalties(&opts.gap_extend).map_err(|e| anyhow::anyhow!("{}", e))?;
     opt.e_del = e_del;
     opt.e_ins = e_ins;
 
@@ -130,15 +130,15 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
 
     // Parse custom header lines if provided
     if let Some(ref header_str) = opts.header {
-        opt.header_lines = MemOpt::parse_header_input(header_str)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        opt.header_lines =
+            MemOpt::parse_header_input(header_str).map_err(|e| anyhow::anyhow!("{}", e))?;
     }
 
     // Phase 7: Advanced options
     // Parse insert size override if provided
     if let Some(ref insert_str) = opts.insert_size {
-        opt.insert_size_override = Some(MemOpt::parse_insert_size(insert_str)
-            .map_err(|e| anyhow::anyhow!("{}", e))?);
+        opt.insert_size_override =
+            Some(MemOpt::parse_insert_size(insert_str).map_err(|e| anyhow::anyhow!("{}", e))?);
     }
 
     // Set verbosity level
@@ -151,20 +151,25 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
     opt.output_all_alignments = opts.output_all;
 
     // Load the BWA index
-    let bwa_idx = BwaIndex::bwa_idx_load(&opts.index).map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
+    let bwa_idx = BwaIndex::bwa_idx_load(&opts.index)
+        .map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
 
     // Determine output writer
     let mut writer: Box<dyn Write> = match opts.output {
-        Some(ref file_name) => Box::new(File::create(file_name).map_err(|e| anyhow::anyhow!("Error creating output file {}: {}", file_name.display(), e))?),
+        Some(ref file_name) => Box::new(File::create(file_name).map_err(|e| {
+            anyhow::anyhow!("Error creating output file {}: {}", file_name.display(), e)
+        })?),
         None => Box::new(io::stdout()),
     };
 
     // Write SAM header
-    writeln!(writer, "@HD\tVN:1.0\tSO:unsorted").map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
+    writeln!(writer, "@HD\tVN:1.0\tSO:unsorted")
+        .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
 
     // Write @SQ lines for reference sequences
     for ann in &bwa_idx.bns.annotations {
-        writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length).map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
+        writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length)
+            .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
     }
 
     // Write @PG (program) line
@@ -181,7 +186,8 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
         PKG_NAME,
         PKG_VERSION,
         std::env::args().collect::<Vec<_>>().join(" ")
-    ).map_err(|e| anyhow::anyhow!("Error writing @PG header: {}", e))?;
+    )
+    .map_err(|e| anyhow::anyhow!("Error writing @PG header: {}", e))?;
 
     // Write read group header if provided (-R option)
     if let Some(ref rg_line) = opt.read_group {
@@ -192,12 +198,14 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
             format!("@RG\t{}", rg_line)
         };
 
-        writeln!(writer, "{}", formatted_rg).map_err(|e| anyhow::anyhow!("Error writing read group header: {}", e))?;
+        writeln!(writer, "{}", formatted_rg)
+            .map_err(|e| anyhow::anyhow!("Error writing read group header: {}", e))?;
     }
 
     // Write custom header lines if provided (-H option)
     for header_line in &opt.header_lines {
-        writeln!(writer, "{}", header_line).map_err(|e| anyhow::anyhow!("Error writing custom header: {}", e))?;
+        writeln!(writer, "{}", header_line)
+            .map_err(|e| anyhow::anyhow!("Error writing custom header: {}", e))?;
     }
 
     // Detect paired-end mode: if exactly 2 query files provided
@@ -205,14 +213,19 @@ use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
         // Paired-end mode
         process_paired_end(
             &bwa_idx,
-            opts.reads[0].to_str().ok_or_else(|| anyhow::anyhow!("Invalid read1 file path"))?,
-            opts.reads[1].to_str().ok_or_else(|| anyhow::anyhow!("Invalid read2 file path"))?,
+            opts.reads[0]
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Invalid read1 file path"))?,
+            opts.reads[1]
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Invalid read2 file path"))?,
             &mut writer,
-            &opt
+            &opt,
         );
     } else {
         // Single-end mode (original behavior)
-        let read_files_str: Vec<String> = opts.reads
+        let read_files_str: Vec<String> = opts
+            .reads
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();

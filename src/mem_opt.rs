@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use clap::Args;
+use std::path::PathBuf;
 
 // bwa-mem2-rust/src/mem_opt.rs
 //
@@ -246,8 +246,6 @@ pub struct MemCliOptions {
     #[arg(short = 't', long, value_name = "INT")]
     pub threads: Option<usize>,
 }
-
-
 
 /// Parse XA hits string "INT" or "INT,INT"
 pub fn parse_xa_hits(s: &str) -> Result<(i32, i32), String> {

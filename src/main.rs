@@ -3,8 +3,6 @@ use std::path::PathBuf;
 
 use ferrous_align::{bwa_index, mem, mem_opt::MemCliOptions};
 
-
-
 #[derive(Parser)]
 #[command(name = "ferrous-align")]
 #[command(about = "FerrousAlign - Burrows-Wheeler Aligner for DNA sequences (Rust implementation)", long_about = None)]
@@ -33,8 +31,6 @@ enum Commands {
         options: MemCliOptions,
     },
 }
-
-
 
 fn init_logging(verbosity: u8) {
     let log_level = match verbosity {
