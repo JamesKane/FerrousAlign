@@ -45,7 +45,6 @@ pub struct Chain {
 /// Returns true if the seed was merged into the chain
 fn test_and_merge(
     chain: &mut Chain,
-    chain_seeds: &mut Vec<usize>,
     seed_idx: usize,
     seed: &Seed,
     opt: &MemOpt,
@@ -91,7 +90,7 @@ fn test_and_merge(
         && (y - chain.last_len as i64) < opt.max_chain_gap as i64
     {
         // All constraints passed - merge the seed into the chain
-        chain_seeds.push(seed_idx);
+        chain.seeds.push(seed_idx);
 
         // Update chain bounds
         chain.query_start = chain.query_start.min(seed.query_pos);
@@ -147,7 +146,6 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
     // Key: reference position (chain.pos), Value: index into chains vector
     let mut tree: BTreeMap<u64, usize> = BTreeMap::new();
     let mut chains: Vec<Chain> = Vec::new();
-    let mut chain_seeds_vec: Vec<Vec<usize>> = Vec::new(); // Seeds for each chain
 
     // 3. Process each seed
     for (seed_idx, seed) in seeds.iter().enumerate() {
@@ -161,12 +159,11 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
         // Use range query to find candidates
         if let Some((&chain_pos, &chain_idx)) = tree.range(..=seed_rpos).next_back() {
             let chain = &mut chains[chain_idx];
-            let chain_seeds = &mut chain_seeds_vec[chain_idx];
 
             // Check strand compatibility (same is_rev flag)
             if chain.is_rev == seed.is_rev {
-                // Try to merge
-                if test_and_merge(chain, chain_seeds, seed_idx, seed, opt, l_pac) {
+                // Try to merge (uses chain.seeds directly)
+                if test_and_merge(chain, seed_idx, seed, opt, l_pac) {
                     merged = true;
                     log::trace!(
                         "  Seed {} merged into chain {} (pos={})",
@@ -192,7 +189,7 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
 
             let new_chain = Chain {
                 score: seed.len,
-                seeds: Vec::new(), // Will be set from chain_seeds_vec later
+                seeds: vec![seed_idx], // Initialize with first seed
                 query_start: seed.query_pos,
                 query_end: seed.query_pos + seed.len,
                 ref_start: seed.ref_pos,
@@ -210,7 +207,6 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
             };
 
             chains.push(new_chain);
-            chain_seeds_vec.push(vec![seed_idx]);
 
             // Insert into B-tree
             // Handle collision by using a unique key (add small offset if needed)
@@ -227,12 +223,7 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
         }
     }
 
-    // 4. Finalize chains - copy seed indices into chain structs
-    for (chain_idx, chain) in chains.iter_mut().enumerate() {
-        chain.seeds = chain_seeds_vec[chain_idx].clone();
-    }
-
-    // 5. Filter out chains below minimum weight
+    // 4. Filter out chains below minimum weight
     let filtered_chains: Vec<Chain> = chains
         .into_iter()
         .filter(|c| c.score >= opt.min_chain_weight)
