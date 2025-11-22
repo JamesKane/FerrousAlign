@@ -8,7 +8,7 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::banded_swa::OutScore;
+use crate::alignment::banded_swa::OutScore;
 use crate::simd_abstraction::SimdEngine512 as Engine;
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 32 alignments
@@ -510,6 +510,8 @@ pub unsafe fn simd_banded_swa_batch64(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_simd_banded_swa_batch64_skeleton() {
         // Basic test to ensure the function compiles and runs

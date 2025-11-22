@@ -1301,7 +1301,7 @@ impl BandedPairWiseSW {
                 // Use AVX-512 kernel (64-way parallelism)
                 // Implementation in src/banded_swa_avx512.rs
                 unsafe {
-                    crate::banded_swa_avx512::simd_banded_swa_batch64(
+                    crate::alignment::banded_swa_avx512::simd_banded_swa_batch64(
                         batch, self.o_del, self.e_del, self.o_ins, self.e_ins, self.zdrop,
                         &self.mat, self.m,
                     )
@@ -2311,7 +2311,7 @@ mod tests {
 
             // Run with AVX-512 (batch64) - directly call AVX-512 kernel
             let avx512_results = unsafe {
-                crate::banded_swa_avx512::simd_banded_swa_batch64(
+                crate::alignment::banded_swa_avx512::simd_banded_swa_batch64(
                     &batch64, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                     bsw.m,
                 )
@@ -2449,7 +2449,7 @@ mod tests {
                 }
 
                 let avx512_results = unsafe {
-                    crate::banded_swa_avx512::simd_banded_swa_batch64(
+                    crate::alignment::banded_swa_avx512::simd_banded_swa_batch64(
                         &avx512_batch,
                         bsw.o_del,
                         bsw.e_del,
@@ -2551,7 +2551,7 @@ mod tests {
                 }
 
                 let avx512_results = unsafe {
-                    crate::banded_swa_avx512::simd_banded_swa_batch64(
+                    crate::alignment::banded_swa_avx512::simd_banded_swa_batch64(
                         &batch64, bsw.o_del, bsw.e_del, bsw.o_ins, bsw.e_ins, bsw.zdrop, &bsw.mat,
                         bsw.m,
                     )

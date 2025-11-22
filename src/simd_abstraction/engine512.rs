@@ -24,33 +24,86 @@ use super::types::simd_arch;
 
 // ===== Internal helper macros (AVX-512) =====
 // Deduplicate 0..=15 match tables required for byte-wise variable shifts.
+// Note: AVX-512 uses _mm512_bslli_epi128 / _mm512_bsrli_epi128 for byte shifts
+// within each 128-bit lane (not across the whole register).
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-macro_rules! mm512_match_shift_bytes {
-    ($a:expr, $n:expr, $op:ident) => {{
+macro_rules! mm512_match_shift_bytes_left {
+    ($a:expr, $n:expr) => {{
         match $n {
             0 => $a,
-            1 => simd_arch::$op($a, 1),
-            2 => simd_arch::$op($a, 2),
-            3 => simd_arch::$op($a, 3),
-            4 => simd_arch::$op($a, 4),
-            5 => simd_arch::$op($a, 5),
-            6 => simd_arch::$op($a, 6),
-            7 => simd_arch::$op($a, 7),
-            8 => simd_arch::$op($a, 8),
-            9 => simd_arch::$op($a, 9),
-            10 => simd_arch::$op($a, 10),
-            11 => simd_arch::$op($a, 11),
-            12 => simd_arch::$op($a, 12),
-            13 => simd_arch::$op($a, 13),
-            14 => simd_arch::$op($a, 14),
-            15 => simd_arch::$op($a, 15),
+            1 => simd_arch::_mm512_bslli_epi128($a, 1),
+            2 => simd_arch::_mm512_bslli_epi128($a, 2),
+            3 => simd_arch::_mm512_bslli_epi128($a, 3),
+            4 => simd_arch::_mm512_bslli_epi128($a, 4),
+            5 => simd_arch::_mm512_bslli_epi128($a, 5),
+            6 => simd_arch::_mm512_bslli_epi128($a, 6),
+            7 => simd_arch::_mm512_bslli_epi128($a, 7),
+            8 => simd_arch::_mm512_bslli_epi128($a, 8),
+            9 => simd_arch::_mm512_bslli_epi128($a, 9),
+            10 => simd_arch::_mm512_bslli_epi128($a, 10),
+            11 => simd_arch::_mm512_bslli_epi128($a, 11),
+            12 => simd_arch::_mm512_bslli_epi128($a, 12),
+            13 => simd_arch::_mm512_bslli_epi128($a, 13),
+            14 => simd_arch::_mm512_bslli_epi128($a, 14),
+            15 => simd_arch::_mm512_bslli_epi128($a, 15),
             _ => simd_arch::_mm512_setzero_si512(),
         }
     }};
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+macro_rules! mm512_match_shift_bytes_right {
+    ($a:expr, $n:expr) => {{
+        match $n {
+            0 => $a,
+            1 => simd_arch::_mm512_bsrli_epi128($a, 1),
+            2 => simd_arch::_mm512_bsrli_epi128($a, 2),
+            3 => simd_arch::_mm512_bsrli_epi128($a, 3),
+            4 => simd_arch::_mm512_bsrli_epi128($a, 4),
+            5 => simd_arch::_mm512_bsrli_epi128($a, 5),
+            6 => simd_arch::_mm512_bsrli_epi128($a, 6),
+            7 => simd_arch::_mm512_bsrli_epi128($a, 7),
+            8 => simd_arch::_mm512_bsrli_epi128($a, 8),
+            9 => simd_arch::_mm512_bsrli_epi128($a, 9),
+            10 => simd_arch::_mm512_bsrli_epi128($a, 10),
+            11 => simd_arch::_mm512_bsrli_epi128($a, 11),
+            12 => simd_arch::_mm512_bsrli_epi128($a, 12),
+            13 => simd_arch::_mm512_bsrli_epi128($a, 13),
+            14 => simd_arch::_mm512_bsrli_epi128($a, 14),
+            15 => simd_arch::_mm512_bsrli_epi128($a, 15),
+            _ => simd_arch::_mm512_setzero_si512(),
+        }
+    }};
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+macro_rules! mm512_match_alignr {
+    ($a:expr, $b:expr, $n:expr) => {{
+        match $n {
+            0 => $b,
+            1 => simd_arch::_mm512_alignr_epi8($a, $b, 1),
+            2 => simd_arch::_mm512_alignr_epi8($a, $b, 2),
+            3 => simd_arch::_mm512_alignr_epi8($a, $b, 3),
+            4 => simd_arch::_mm512_alignr_epi8($a, $b, 4),
+            5 => simd_arch::_mm512_alignr_epi8($a, $b, 5),
+            6 => simd_arch::_mm512_alignr_epi8($a, $b, 6),
+            7 => simd_arch::_mm512_alignr_epi8($a, $b, 7),
+            8 => simd_arch::_mm512_alignr_epi8($a, $b, 8),
+            9 => simd_arch::_mm512_alignr_epi8($a, $b, 9),
+            10 => simd_arch::_mm512_alignr_epi8($a, $b, 10),
+            11 => simd_arch::_mm512_alignr_epi8($a, $b, 11),
+            12 => simd_arch::_mm512_alignr_epi8($a, $b, 12),
+            13 => simd_arch::_mm512_alignr_epi8($a, $b, 13),
+            14 => simd_arch::_mm512_alignr_epi8($a, $b, 14),
+            15 => simd_arch::_mm512_alignr_epi8($a, $b, 15),
+            _ => $a, // For num_bytes >= 16, result is just 'a'
+        }
+    }};
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 /// AVX‑512BW SIMD backend implementing `SimdEngine` for 512‑bit vectors.
+#[derive(Clone, Copy)]
 pub struct SimdEngine512;
 
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
@@ -158,13 +211,16 @@ impl SimdEngine for SimdEngine512 {
     #[inline]
     #[target_feature(enable = "avx512bw")]
     unsafe fn movemask_epi8(a: Self::Vec8) -> i32 {
-        simd_arch::_mm512_movemask_epi8(a)
+        // AVX-512 doesn't have movemask_epi8, use movepi8_mask instead
+        // This returns a 64-bit mask, we return the low 32 bits for API compatibility
+        simd_arch::_mm512_movepi8_mask(a) as i32
     }
 
     #[inline]
     #[target_feature(enable = "avx512bw")]
     unsafe fn movemask_epi16(a: Self::Vec16) -> i32 {
-        simd_arch::_mm512_movemask_epi16(a)
+        // AVX-512 doesn't have movemask_epi16, use movepi16_mask instead
+        simd_arch::_mm512_movepi16_mask(a) as i32
     }
 
     // ===== Variable Shift Operations =====
@@ -172,7 +228,8 @@ impl SimdEngine for SimdEngine512 {
     #[inline]
     #[target_feature(enable = "avx512bw")]
     unsafe fn slli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        mm512_match_shift_bytes!(a, num_bytes, _mm512_slli_si512)
+        // AVX-512 uses _mm512_bslli_epi128 for byte shifts within each 128-bit lane
+        mm512_match_shift_bytes_left!(a, num_bytes)
     }
 
     #[inline]
@@ -184,7 +241,8 @@ impl SimdEngine for SimdEngine512 {
     #[inline]
     #[target_feature(enable = "avx512bw")]
     unsafe fn srli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        mm512_match_shift_bytes!(a, num_bytes, _mm512_srli_si512)
+        // AVX-512 uses _mm512_bsrli_epi128 for byte shifts within each 128-bit lane
+        mm512_match_shift_bytes_right!(a, num_bytes)
     }
 
     #[inline]
@@ -196,13 +254,14 @@ impl SimdEngine for SimdEngine512 {
     #[inline]
     #[target_feature(enable = "avx512bw")]
     unsafe fn alignr_bytes(a: Self::Vec8, b: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        simd_arch::_mm512_alignr_epi8(a, b, num_bytes)
+        // _mm512_alignr_epi8 requires const immediate, use match table
+        mm512_match_alignr!(a, b, num_bytes)
     }
 
     #[inline]
     #[target_feature(enable = "avx512bw")]
     unsafe fn alignr_bytes_16(a: Self::Vec16, b: Self::Vec16, num_bytes: i32) -> Self::Vec16 {
-        simd_arch::_mm512_alignr_epi8(a, b, num_bytes)
+        mm512_match_alignr!(a, b, num_bytes)
     }
 
     #[inline]
