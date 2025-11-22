@@ -56,13 +56,13 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(BenchmarkId::new("scalar", seq_len), seq_len, |b, &_size| {
             b.iter(|| {
-                bsw.scalar_banded_swa(
+                bsw.iterative_scalar_banded_swa(
                     black_box(query.len() as i32),
                     black_box(&query),
                     black_box(target.len() as i32),
                     black_box(&target),
-                    black_box(100),
-                    black_box(0),
+                    black_box(100), // initial_w
+                    black_box(0),   // h0
                 )
             })
         });
@@ -116,13 +116,13 @@ fn bench_batch_sizes(c: &mut Criterion) {
     group.bench_function("scalar_128x", |b| {
         b.iter(|| {
             for (query, target) in &alignments {
-                black_box(bsw.scalar_banded_swa(
+                black_box(bsw.iterative_scalar_banded_swa(
                     query.len() as i32,
                     query,
                     target.len() as i32,
                     target,
-                    100,
-                    0,
+                    100, // initial_w
+                    0,   // h0
                 ));
             }
         })
@@ -251,13 +251,13 @@ fn bench_mutation_rates(c: &mut Criterion) {
             mutation_rate,
             |b, &_rate| {
                 b.iter(|| {
-                    bsw.scalar_banded_swa(
+                    bsw.iterative_scalar_banded_swa(
                         black_box(query.len() as i32),
                         black_box(&query),
                         black_box(target.len() as i32),
                         black_box(&target),
-                        black_box(100),
-                        black_box(0),
+                        black_box(100), // initial_w
+                        black_box(0),   // h0
                     )
                 })
             },

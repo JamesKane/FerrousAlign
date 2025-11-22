@@ -1,9 +1,9 @@
 use crate::alignment::banded_swa::BandedPairWiseSW;
 use crate::alignment::banded_swa::merge_cigar_operations;
+use crate::alignment::chaining::Chain;
 use crate::alignment::chaining::cal_max_gap;
 use crate::alignment::chaining::chain_seeds;
 use crate::alignment::chaining::filter_chains;
-use crate::alignment::chaining::Chain;
 use crate::alignment::extension::AlignmentJob;
 use crate::alignment::extension::execute_adaptive_alignments;
 use crate::alignment::extension::execute_scalar_alignments;
@@ -42,17 +42,9 @@ pub fn generate_seeds(
 ) -> Vec<Alignment> {
     // Call the new refactored pipeline
     align_read(
-        bwa_idx,
-        pac_data,
-        query_name,
-        query_seq,
-        query_qual,
-        opt,
-        true, // use_batched_simd
+        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, true, // use_batched_simd
     )
 }
-
-
 
 // ============================================================================
 // REFACTORED PIPELINE
@@ -81,7 +73,6 @@ struct ExtensionResult {
     encoded_query: Vec<u8>,
     encoded_query_rc: Vec<u8>,
 }
-
 
 /// A new, top-level function that clearly shows the alignment pipeline.
 /// This is the refactored `generate_seeds`.
@@ -229,7 +220,7 @@ fn find_seeds(
             prev_smem = current_smem;
         }
     }
-    
+
     log::debug!(
         "{}: Generated {} SMEMs, filtered to {} unique",
         query_name,
@@ -282,10 +273,7 @@ fn build_and_filter_chains(
 ) -> (Vec<Chain>, Vec<Seed>) {
     // Chain seeds together and then filter them
     let (mut chained_results, sorted_seeds) = chain_seeds(seeds, opt);
-    log::debug!(
-        "Chaining produced {} chains",
-        chained_results.len()
-    );
+    log::debug!("Chaining produced {} chains", chained_results.len());
 
     let filtered_chains = filter_chains(&mut chained_results, &sorted_seeds, opt, query_len as i32);
     log::debug!(
@@ -309,8 +297,17 @@ fn extend_chains_to_alignments(
     use_batched_simd: bool,
 ) -> ExtensionResult {
     let sw_params = BandedPairWiseSW::new(
-        opt.o_del, opt.e_del, opt.o_ins, opt.e_ins, opt.zdrop, 5,
-        opt.pen_clip5, opt.pen_clip3, opt.mat, opt.a as i8, -(opt.b as i8),
+        opt.o_del,
+        opt.e_del,
+        opt.o_ins,
+        opt.e_ins,
+        opt.zdrop,
+        5,
+        opt.pen_clip5,
+        opt.pen_clip3,
+        opt.mat,
+        opt.a as i8,
+        -(opt.b as i8),
     );
 
     let mut alignment_jobs = Vec::new();
@@ -318,11 +315,17 @@ fn extend_chains_to_alignments(
 
     for (chain_idx, chain) in chains.iter().enumerate() {
         if chain.seeds.is_empty() {
-            chain_to_job_map.push(ChainJobMapping { seed_jobs: Vec::new() });
+            chain_to_job_map.push(ChainJobMapping {
+                seed_jobs: Vec::new(),
+            });
             continue;
         }
 
-        let full_query = if chain.is_rev { &encoded_query_rc } else { &encoded_query };
+        let full_query = if chain.is_rev {
+            &encoded_query_rc
+        } else {
+            &encoded_query
+        };
         let query_len = full_query.len() as i32;
 
         let l_pac = bwa_idx.bns.packed_sequence_length;
@@ -340,13 +343,19 @@ fn extend_chains_to_alignments(
         }
         rmax_1 = rmax_1.min(l_pac << 1);
         if rmax_0 < l_pac && l_pac < rmax_1 {
-            if seeds[chain.seeds[0]].ref_pos < l_pac { rmax_1 = l_pac; } else { rmax_0 = l_pac; }
+            if seeds[chain.seeds[0]].ref_pos < l_pac {
+                rmax_1 = l_pac;
+            } else {
+                rmax_0 = l_pac;
+            }
         }
 
         let rseq = match bwa_idx.bns.get_reference_segment(rmax_0, rmax_1 - rmax_0) {
             Ok(seq) => seq,
             Err(_) => {
-                chain_to_job_map.push(ChainJobMapping { seed_jobs: Vec::new() });
+                chain_to_job_map.push(ChainJobMapping {
+                    seed_jobs: Vec::new(),
+                });
                 continue;
             }
         };
@@ -389,16 +398,25 @@ fn extend_chains_to_alignments(
                     });
                 }
             }
-            seed_job_mappings.push(SeedJobMapping { seed_idx: seed_chain_idx, left_job_idx, right_job_idx });
+            seed_job_mappings.push(SeedJobMapping {
+                seed_idx: seed_chain_idx,
+                left_job_idx,
+                right_job_idx,
+            });
         }
-        chain_to_job_map.push(ChainJobMapping { seed_jobs: seed_job_mappings });
+        chain_to_job_map.push(ChainJobMapping {
+            seed_jobs: seed_job_mappings,
+        });
     }
 
     let extended_cigars: Vec<RawAlignment> = if use_batched_simd && alignment_jobs.len() >= 8 {
         execute_adaptive_alignments(&sw_params, &alignment_jobs)
     } else {
         execute_scalar_alignments(&sw_params, &alignment_jobs)
-    }.into_iter().map(|(s, c, ra, qa)| (s, c, ra, qa)).collect();
+    }
+    .into_iter()
+    .map(|(s, c, ra, qa)| (s, c, ra, qa))
+    .collect();
 
     ExtensionResult {
         extended_cigars,
@@ -429,16 +447,28 @@ fn finalize_alignments(
         encoded_query_rc,
     } = extension_result;
 
-    let alignment_scores: Vec<i32> = extended_cigars.iter().map(|(score, _, _, _)| *score).collect();
-    let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars.iter().map(|(_, cigar, _, _)| cigar.clone()).collect();
+    let alignment_scores: Vec<i32> = extended_cigars
+        .iter()
+        .map(|(score, _, _, _)| *score)
+        .collect();
+    let alignment_cigars: Vec<Vec<(u8, i32)>> = extended_cigars
+        .iter()
+        .map(|(_, cigar, _, _)| cigar.clone())
+        .collect();
 
     let mut alignments = Vec::new();
 
     for (chain_idx, chain) in filtered_chains.iter().enumerate() {
-        if chain.seeds.is_empty() { continue; }
+        if chain.seeds.is_empty() {
+            continue;
+        }
 
         let mapping = &chain_to_job_map[chain_idx];
-        let full_query = if chain.is_rev { &encoded_query_rc } else { &encoded_query };
+        let full_query = if chain.is_rev {
+            &encoded_query_rc
+        } else {
+            &encoded_query
+        };
         let query_len = full_query.len() as i32;
 
         let mut best_score = 0;
@@ -455,7 +485,16 @@ fn finalize_alignments(
                 let left_cigar = &alignment_cigars[left_idx];
                 combined_cigar.extend(left_cigar.iter().cloned());
                 combined_score += alignment_scores[left_idx];
-                let left_ref_len: i32 = left_cigar.iter().filter_map(|&(op, len)| if op == b'M' || op == b'D' { Some(len) } else { None }).sum();
+                let left_ref_len: i32 = left_cigar
+                    .iter()
+                    .filter_map(|&(op, len)| {
+                        if op == b'M' || op == b'D' {
+                            Some(len)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
                 alignment_start_pos = alignment_start_pos.saturating_sub(left_ref_len as u64);
             } else if seed.query_pos > 0 {
                 combined_cigar.push((b'S', seed.query_pos));
@@ -477,33 +516,78 @@ fn finalize_alignments(
             let cigar_for_candidate = merge_cigar_operations(combined_cigar);
             if combined_score > best_score {
                 best_score = combined_score;
-                best_alignment_data = Some((cigar_for_candidate, combined_score, alignment_start_pos, query_start_aligned, query_end_aligned));
+                best_alignment_data = Some((
+                    cigar_for_candidate,
+                    combined_score,
+                    alignment_start_pos,
+                    query_start_aligned,
+                    query_end_aligned,
+                ));
             }
         }
 
         if let Some((mut cigar, score, start_pos, q_start, q_end)) = best_alignment_data {
-            let cigar_len: i32 = cigar.iter().filter_map(|&(op, len)| if matches!(op as char, 'M' | 'I' | 'S' | '=' | 'X') { Some(len) } else { None }).sum();
+            let cigar_len: i32 = cigar
+                .iter()
+                .filter_map(|&(op, len)| {
+                    if matches!(op as char, 'M' | 'I' | 'S' | '=' | 'X') {
+                        Some(len)
+                    } else {
+                        None
+                    }
+                })
+                .sum();
             if cigar_len != query_len {
-                if let Some(op) = cigar.iter_mut().rev().find(|op| matches!(op.0 as char, 'S' | 'M')) {
+                if let Some(op) = cigar
+                    .iter_mut()
+                    .rev()
+                    .find(|op| matches!(op.0 as char, 'S' | 'M'))
+                {
                     op.1 += query_len - cigar_len;
                 }
             }
 
             let (pos_f, _) = bwa_idx.bns.bns_depos(start_pos as i64);
             let rid = bwa_idx.bns.bns_pos2rid(pos_f);
-            let (ref_name, ref_id, chr_pos) = if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
-                let ann = &bwa_idx.bns.annotations[rid as usize];
-                (ann.name.clone(), rid as usize, (pos_f - ann.offset as i64) as u64)
-            } else {
-                ("unknown_ref".to_string(), 0, 0)
-            };
-            
+            let (ref_name, ref_id, chr_pos) =
+                if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
+                    let ann = &bwa_idx.bns.annotations[rid as usize];
+                    (
+                        ann.name.clone(),
+                        rid as usize,
+                        (pos_f - ann.offset as i64) as u64,
+                    )
+                } else {
+                    ("unknown_ref".to_string(), 0, 0)
+                };
+
             let md_tag = if !pac_data.is_empty() {
-                let ref_len: i32 = cigar.iter().filter_map(|&(op, len)| if matches!(op as char, 'M' | 'D') { Some(len) } else { None }).sum();
-                let ref_aligned = bwa_idx.bns.bns_get_seq(pac_data, start_pos as i64, start_pos as i64 + ref_len as i64);
-                Alignment::generate_md_tag(&ref_aligned, &full_query[q_start as usize..q_end as usize], &cigar)
+                let ref_len: i32 = cigar
+                    .iter()
+                    .filter_map(|&(op, len)| {
+                        if matches!(op as char, 'M' | 'D') {
+                            Some(len)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
+                let ref_aligned = bwa_idx.bns.bns_get_seq(
+                    pac_data,
+                    start_pos as i64,
+                    start_pos as i64 + ref_len as i64,
+                );
+                Alignment::generate_md_tag(
+                    &ref_aligned,
+                    &full_query[q_start as usize..q_end as usize],
+                    &cigar,
+                )
             } else {
-                cigar.iter().filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None }).sum::<i32>().to_string()
+                cigar
+                    .iter()
+                    .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
+                    .sum::<i32>()
+                    .to_string()
             };
 
             let nm = Alignment::calculate_exact_nm(&md_tag, &cigar);
@@ -511,12 +595,24 @@ fn finalize_alignments(
             alignments.push(Alignment {
                 query_name: query_name.to_string(),
                 flag: if chain.is_rev { sam_flags::REVERSE } else { 0 },
-                ref_name, ref_id, pos: chr_pos, mapq: 60, score, cigar,
-                rnext: "*".to_string(), pnext: 0, tlen: 0,
+                ref_name,
+                ref_id,
+                pos: chr_pos,
+                mapq: 60,
+                score,
+                cigar,
+                rnext: "*".to_string(),
+                pnext: 0,
+                tlen: 0,
                 seq: String::from_utf8_lossy(query_seq).to_string(),
                 qual: query_qual.to_string(),
-                tags: vec![("AS".to_string(), format!("i:{}", score)), ("NM".to_string(), format!("i:{}", nm)), ("MD".to_string(), format!("Z:{}", md_tag))],
-                query_start: q_start, query_end: q_end,
+                tags: vec![
+                    ("AS".to_string(), format!("i:{}", score)),
+                    ("NM".to_string(), format!("i:{}", nm)),
+                    ("MD".to_string(), format!("Z:{}", md_tag)),
+                ],
+                query_start: q_start,
+                query_end: q_end,
                 seed_coverage: chain.weight,
                 hash: hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 })),
                 frac_rep: chain.frac_rep,
@@ -544,12 +640,26 @@ fn finalize_alignments(
         alignments.push(Alignment {
             query_name: query_name.to_string(),
             flag: sam_flags::UNMAPPED,
-            ref_name: "*".to_string(), ref_id: 0, pos: 0, mapq: 0, score: 0,
-            cigar: Vec::new(), rnext: "*".to_string(), pnext: 0, tlen: 0,
+            ref_name: "*".to_string(),
+            ref_id: 0,
+            pos: 0,
+            mapq: 0,
+            score: 0,
+            cigar: Vec::new(),
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
             seq: String::from_utf8_lossy(query_seq).to_string(),
             qual: query_qual.to_string(),
-            tags: vec![("AS".to_string(), "i:0".to_string()), ("NM".to_string(), "i:0".to_string())],
-            query_start: 0, query_end: 0, seed_coverage: 0, hash: 0, frac_rep: 0.0,
+            tags: vec![
+                ("AS".to_string(), "i:0".to_string()),
+                ("NM".to_string(), "i:0".to_string()),
+            ],
+            query_start: 0,
+            query_end: 0,
+            seed_coverage: 0,
+            hash: 0,
+            frac_rep: 0.0,
         });
     }
 
