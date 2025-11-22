@@ -172,12 +172,31 @@ pub fn mem_matesw(
         // Calculate alignment position on reference
         let tb = (out_score.target_end_pos - ref_consumed).max(0);
 
-        // Adjust for reverse complement and reference position
-        let pos = if is_rev {
-            ((l_pac << 1) - (adj_rb + out_score.target_end_pos as i64)).max(0) as u64
+        // Calculate bidirectional genome position
+        let genome_pos = if is_rev {
+            ((l_pac << 1) - (adj_rb + out_score.target_end_pos as i64)).max(0)
         } else {
-            (adj_rb + tb as i64).max(0) as u64
+            (adj_rb + tb as i64).max(0)
         };
+
+        // Convert to chromosome-relative position using bns_depos
+        // This is critical: genome_pos is in bidirectional coordinates (0 to 2*l_pac)
+        // but SAM output needs chromosome-relative coordinates
+        let (pos_f, _) = bwa_idx.bns.bns_depos(genome_pos);
+        let rescued_rid = bwa_idx.bns.bns_pos2rid(pos_f);
+
+        // Skip if position is invalid or on different chromosome
+        if rescued_rid < 0 || rescued_rid as usize != anchor.ref_id {
+            log::debug!(
+                "mate_rescue: skipping alignment - rid mismatch: rescued_rid={}, anchor.ref_id={}",
+                rescued_rid,
+                anchor.ref_id
+            );
+            continue;
+        }
+
+        // Get chromosome-relative position
+        let chr_pos = (pos_f - bwa_idx.bns.annotations[rescued_rid as usize].offset as i64) as u64;
 
         // Create alignment structure
         let mut flag = 0u16;
@@ -190,7 +209,7 @@ pub fn mem_matesw(
             flag,
             ref_name: anchor.ref_name.clone(),
             ref_id: anchor.ref_id,
-            pos,
+            pos: chr_pos,
             mapq: 0, // Will be calculated later
             score: out_score.score,
             cigar,

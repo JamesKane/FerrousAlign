@@ -539,19 +539,23 @@ impl BandedPairWiseSW {
                 qlen - query_end
             );
         } else if query_end < qlen {
-            // Use global alignment: do NOT soft-clip the 3' end
-            // Global score indicates extending to query end is worthwhile
-            // The DP already reached qlen (at position _max_ie), so we use that alignment
+            // BUG FIX: Even when global extension is "preferred", we must account for all query bases
+            // in the CIGAR. The traceback only went to query_end, not to qlen.
+            // We MUST add soft clips for the remaining bases to ensure CIGAR length matches query length.
+            //
+            // The global score indicates the DP reached qlen, but we didn't trace back from there.
+            // To properly use global extension, we'd need a separate traceback from _max_ie to qlen.
+            // For now, always soft-clip to ensure valid CIGAR.
             log::debug!(
-                "3' extension: gscore={} > score={} - pen_clip3={} = {}, NO soft-clip (global extension)",
+                "3' extension: gscore={} > score={} - pen_clip3={} = {}, but adding soft-clip for {} bases (CIGAR completeness)",
                 current_gscore,
                 max_score,
                 self.pen_clip3,
-                max_score - self.pen_clip3
+                max_score - self.pen_clip3,
+                qlen - query_end
             );
-            // IMPORTANT: We do NOT add a soft-clip here
-            // The alignment is considered to extend to qlen via global alignment
-            // The score used should be current_gscore, not max_score
+            // CRITICAL: Always add soft clip to ensure CIGAR covers full query length
+            final_cigar.push((b'S', qlen - query_end));
         }
 
         // Debug logging for problematic CIGARs (all insertions)
