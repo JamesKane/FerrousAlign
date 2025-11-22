@@ -143,7 +143,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     }
 
     // Set verbosity level
-    opt.verbosity = verbosity;
+    opt.verbosity = verbosity as i32;
 
     // Advanced flags
     opt.smart_pairing = opts.smart_pairing;

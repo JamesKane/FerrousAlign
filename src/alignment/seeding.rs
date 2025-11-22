@@ -400,6 +400,130 @@ pub fn generate_smems_for_strand(
     }
 }
 
+/// Generate SMEMs from a single starting position with custom min_intv
+/// This is used for re-seeding long unique MEMs to find split alignments
+pub fn generate_smems_from_position(
+    bwa_idx: &BwaIndex,
+    query_name: &str,
+    query_len: usize,
+    encoded_query: &[u8],
+    is_reverse_complement: bool,
+    min_seed_len: i32,
+    min_intv: u64,
+    start_pos: usize,
+    all_smems: &mut Vec<SMEM>,
+) {
+    if start_pos >= query_len {
+        return;
+    }
+
+    let a = encoded_query[start_pos];
+    if a >= 4 {
+        return; // Skip if starting on 'N' base
+    }
+
+    // Initialize SMEM at start_pos
+    let mut smem = SMEM {
+        read_id: 0,
+        query_start: start_pos as i32,
+        query_end: start_pos as i32,
+        bwt_interval_start: bwa_idx.bwt.cumulative_count[a as usize],
+        bwt_interval_end: bwa_idx.bwt.cumulative_count[(3 - a) as usize],
+        interval_size: bwa_idx.bwt.cumulative_count[(a + 1) as usize]
+            - bwa_idx.bwt.cumulative_count[a as usize],
+        is_reverse_complement,
+    };
+
+    // Phase 1: Forward extension
+    let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    let mut next_x = start_pos + 1;
+
+    for j in (start_pos + 1)..query_len {
+        let a = encoded_query[j];
+        next_x = j + 1;
+
+        if a >= 4 {
+            next_x = j;
+            break;
+        }
+
+        let new_smem = forward_ext(bwa_idx, smem, a);
+
+        if new_smem.interval_size != smem.interval_size {
+            prev_array_buf.push(smem);
+        }
+
+        if new_smem.interval_size < min_intv {
+            break;
+        }
+
+        smem = new_smem;
+        smem.query_end = j as i32;
+    }
+
+    if smem.interval_size >= min_intv {
+        prev_array_buf.push(smem);
+    }
+
+    // Phase 2: Backward search
+    let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+
+    for j in (0..start_pos).rev() {
+        let a = encoded_query[j];
+        if a >= 4 {
+            break;
+        }
+
+        curr_array_buf.clear();
+        let curr_array = &mut curr_array_buf;
+        let mut curr_s = None;
+
+        for smem in prev_array_buf.iter().rev() {
+            let mut new_smem = backward_ext(bwa_idx, *smem, a);
+            new_smem.query_start = j as i32;
+
+            if new_smem.interval_size < min_intv
+                && (smem.query_end - smem.query_start + 1) >= min_seed_len
+            {
+                // Output this SMEM - it's the longest extension that meets threshold
+                all_smems.push(*smem);
+                break;
+            }
+
+            if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
+                curr_s = Some(new_smem.interval_size);
+                curr_array.push(new_smem);
+                break;
+            }
+        }
+
+        for smem in prev_array_buf.iter().rev().skip(1) {
+            let mut new_smem = backward_ext(bwa_idx, *smem, a);
+            new_smem.query_start = j as i32;
+
+            if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
+                curr_s = Some(new_smem.interval_size);
+                curr_array.push(new_smem);
+            }
+        }
+
+        std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
+
+        if prev_array_buf.is_empty() {
+            break;
+        }
+    }
+
+    // Output any remaining SMEMs at the end of backward search
+    if !prev_array_buf.is_empty() {
+        let smem = prev_array_buf[prev_array_buf.len() - 1];
+        let len = smem.query_end - smem.query_start + 1;
+        if len >= min_seed_len {
+            all_smems.push(smem);
+        }
+    }
+}
+
 // ============================================================================
 // BWT AND SUFFIX ARRAY HELPER FUNCTIONS
 // ============================================================================

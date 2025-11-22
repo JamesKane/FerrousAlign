@@ -15,6 +15,7 @@ use crate::alignment::finalization::sam_flags;
 use crate::alignment::seeding::SMEM;
 use crate::alignment::seeding::Seed;
 use crate::alignment::seeding::generate_smems_for_strand;
+use crate::alignment::seeding::generate_smems_from_position;
 use crate::alignment::seeding::get_sa_entries;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
@@ -185,6 +186,69 @@ fn find_seeds(
         &mut all_smems,
         &mut max_smem_count,
     );
+
+    // Re-seeding pass: For long unique SMEMs, re-seed from middle to find split alignments
+    // This matches C++ bwamem.cpp:695-714
+    let split_len = (opt.min_seed_len as f32 * opt.split_factor) as i32;
+    let split_width = opt.split_width as u64;
+
+    // Collect re-seeding candidates from initial SMEMs
+    let mut reseed_candidates: Vec<(usize, u64, bool)> = Vec::new(); // (middle_pos, min_intv, is_rc)
+
+    for smem in all_smems.iter() {
+        let smem_len = smem.query_end - smem.query_start + 1;
+        // Re-seed if: length >= split_len AND interval_size <= split_width
+        if smem_len >= split_len && smem.interval_size <= split_width {
+            // Calculate middle position: (start + end + 1) >> 1 to match C++
+            let middle_pos = ((smem.query_start + smem.query_end + 1) >> 1) as usize;
+            let new_min_intv = smem.interval_size + 1;
+
+            log::debug!(
+                "{}: Re-seed candidate: smem m={}, n={}, len={}, s={}, middle_pos={}, new_min_intv={}, is_rc={}",
+                query_name,
+                smem.query_start,
+                smem.query_end,
+                smem_len,
+                smem.interval_size,
+                middle_pos,
+                new_min_intv,
+                smem.is_reverse_complement
+            );
+
+            reseed_candidates.push((middle_pos, new_min_intv, smem.is_reverse_complement));
+        }
+    }
+
+    // Execute re-seeding for each candidate
+    let initial_smem_count = all_smems.len();
+    for (middle_pos, new_min_intv, is_rc) in reseed_candidates {
+        let encoded = if is_rc {
+            &encoded_query_rc
+        } else {
+            &encoded_query
+        };
+
+        generate_smems_from_position(
+            bwa_idx,
+            query_name,
+            query_len,
+            encoded,
+            is_rc,
+            min_seed_len,
+            new_min_intv,
+            middle_pos,
+            &mut all_smems,
+        );
+    }
+
+    if all_smems.len() > initial_smem_count {
+        log::debug!(
+            "{}: Re-seeding added {} new SMEMs (total: {})",
+            query_name,
+            all_smems.len() - initial_smem_count,
+            all_smems.len()
+        );
+    }
 
     // Filter SMEMs
     let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
@@ -483,6 +547,10 @@ fn finalize_alignments(
             let mut alignment_start_pos = seed.ref_pos;
             let (mut query_start_aligned, mut query_end_aligned) = (0, query_len);
 
+            // Track which extensions exist for proper score calculation
+            let has_left = seed_job.left_job_idx.is_some();
+            let has_right = seed_job.right_job_idx.is_some();
+
             if let Some(left_idx) = seed_job.left_job_idx {
                 let left_cigar = &alignment_cigars[left_idx];
                 combined_cigar.extend(left_cigar.iter().cloned());
@@ -504,7 +572,18 @@ fn finalize_alignments(
             }
 
             combined_cigar.push((b'M', seed.len));
-            combined_score += seed.len;
+
+            // Score calculation: Each extension score includes h0 = seed.len
+            // - Both extensions: left_score + right_score - seed.len (avoid double-counting h0)
+            // - One extension only: score already includes seed via h0
+            // - No extensions: just seed.len
+            if !has_left && !has_right {
+                combined_score += seed.len;
+            } else if has_left && has_right {
+                // Both extensions include h0=seed.len, so subtract one to avoid double-counting
+                combined_score -= seed.len;
+            }
+            // If only one extension exists, h0 is already counted once (correct)
 
             let seed_end = seed.query_pos + seed.len;
             if let Some(right_idx) = seed_job.right_job_idx {
@@ -549,11 +628,50 @@ fn finalize_alignments(
                 }
             }
 
-            let (pos_f, _) = bwa_idx.bns.bns_depos(start_pos as i64);
+            // Calculate actual query bounds from CIGAR
+            // query_start = sum of leading S/H operations
+            // query_end = query_len - sum of trailing S/H operations
+            let mut actual_query_start = 0i32;
+            let mut actual_query_end = query_len;
+
+            // Sum leading clips
+            for &(op, len) in cigar.iter() {
+                if op == b'S' || op == b'H' {
+                    actual_query_start += len;
+                } else {
+                    break;
+                }
+            }
+
+            // Sum trailing clips
+            for &(op, len) in cigar.iter().rev() {
+                if op == b'S' || op == b'H' {
+                    actual_query_end -= len;
+                } else {
+                    break;
+                }
+            }
+
+            // Update query bounds
+            let q_start = actual_query_start;
+            let q_end = actual_query_end;
+
+            let (pos_f, is_rev) = bwa_idx.bns.bns_depos(start_pos as i64);
             let rid = bwa_idx.bns.bns_pos2rid(pos_f);
+
+            // DEBUG: Trace coordinate conversion
+            log::debug!(
+                "{}: COORD_TRACE: start_pos={}, l_pac={}, pos_f={}, is_rev={}, rid={}",
+                query_name, start_pos, bwa_idx.bns.packed_sequence_length, pos_f, is_rev, rid
+            );
+
             let (ref_name, ref_id, chr_pos) =
                 if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
                     let ann = &bwa_idx.bns.annotations[rid as usize];
+                    log::debug!(
+                        "{}: COORD_TRACE: rid={}, ann.name={}, ann.offset={}, chr_pos={}",
+                        query_name, rid, ann.name, ann.offset, pos_f - ann.offset as i64
+                    );
                     (
                         ann.name.clone(),
                         rid as usize,
@@ -623,6 +741,20 @@ fn finalize_alignments(
     }
 
     if !alignments.is_empty() {
+        // Filter alignments by minimum score threshold (matches C++ bwamem.cpp:1538)
+        let before_filter = alignments.len();
+        alignments.retain(|a| a.score >= opt.t);
+        if before_filter != alignments.len() {
+            log::debug!(
+                "{}: Filtered {} alignments below score threshold {} (before: {}, after: {})",
+                query_name,
+                before_filter - alignments.len(),
+                opt.t,
+                before_filter,
+                alignments.len()
+            );
+        }
+
         alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
         mark_secondary_alignments(&mut alignments, opt);
 

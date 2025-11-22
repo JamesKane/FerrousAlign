@@ -94,7 +94,7 @@ impl Alignment {
 
         // Handle reverse complement for SEQ and QUAL if flag sam_flags::REVERSE (reverse strand) is set
         // Matching bwa-mem2 mem_aln2sam() behavior (bwamem.cpp:1706-1716)
-        let (output_seq, output_qual) = if self.flag & sam_flags::REVERSE != 0 {
+        let (mut output_seq, mut output_qual) = if self.flag & sam_flags::REVERSE != 0 {
             // Reverse strand: reverse complement the sequence and reverse the quality
             let rev_comp_seq: String = self
                 .seq
@@ -115,6 +115,56 @@ impl Alignment {
             // Forward strand: use sequence and quality as-is
             (self.seq.clone(), self.qual.clone())
         };
+
+        // Handle hard clips (H) - trim SEQ and QUAL to match CIGAR
+        // For hard-clipped alignments, the clipped portions are not in SEQ/QUAL
+        //
+        // IMPORTANT: For supplementary alignments, soft clips (S) are converted to
+        // hard clips (H) in the output CIGAR (see cigar_string()). However, the
+        // internal CIGAR still stores them as 'S'. So for supplementary alignments,
+        // we need to treat 'S' as a clip that requires SEQ trimming.
+        let is_supplementary = (self.flag & sam_flags::SUPPLEMENTARY) != 0;
+
+        let mut leading_clip = 0usize;
+        let mut trailing_clip = 0usize;
+
+        // Sum leading clips (H always, S only for supplementary)
+        for &(op, len) in self.cigar.iter() {
+            if op == b'H' || (is_supplementary && op == b'S') {
+                leading_clip += len as usize;
+            } else {
+                break;
+            }
+        }
+
+        // Sum trailing clips (H always, S only for supplementary)
+        for &(op, len) in self.cigar.iter().rev() {
+            if op == b'H' || (is_supplementary && op == b'S') {
+                trailing_clip += len as usize;
+            } else {
+                break;
+            }
+        }
+
+        // Trim SEQ and QUAL if there are clips that require removal
+        if leading_clip > 0 || trailing_clip > 0 {
+            let seq_len = output_seq.len();
+            let start = leading_clip.min(seq_len);
+            let end = seq_len.saturating_sub(trailing_clip);
+            log::debug!(
+                "Clip trim: is_supp={}, leading={}, trailing={}, seq_len={}, start={}, end={}",
+                is_supplementary,
+                leading_clip,
+                trailing_clip,
+                seq_len,
+                start,
+                end
+            );
+            if start < end {
+                output_seq = output_seq[start..end].to_string();
+                output_qual = output_qual[start..end.min(output_qual.len())].to_string();
+            }
+        }
 
         // Format mandatory SAM fields
         let mut sam_line = format!(
@@ -584,6 +634,24 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
         return;
     }
 
+    // Debug: Log query bounds of first few alignments
+    log::debug!(
+        "mark_secondary_alignments: {} alignments, mask_level={}",
+        alignments.len(),
+        opt.mask_level
+    );
+    for (i, aln) in alignments.iter().take(10).enumerate() {
+        log::debug!(
+            "  Alignment[{}]: {}:{}, score={}, query_start={}, query_end={}",
+            i,
+            aln.ref_name,
+            aln.pos,
+            aln.score,
+            aln.query_start,
+            aln.query_end
+        );
+    }
+
     let mask_level = opt.mask_level;
 
     // Calculate score gap threshold for sub_count
@@ -625,9 +693,23 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
 
         // If no overlap with any primary, add as new primary
         if !is_secondary {
+            log::debug!(
+                "  Non-overlapping alignment[{}]: {}:{}, query_bounds=[{}, {}]",
+                i,
+                alignments[i].ref_name,
+                alignments[i].pos,
+                alignments[i].query_start,
+                alignments[i].query_end
+            );
             primary_indices.push(i);
         }
     }
+
+    log::debug!(
+        "  Total primary_indices: {} (will mark {} as supplementary)",
+        primary_indices.len(),
+        primary_indices.len().saturating_sub(1)
+    );
 
     // Mark non-overlapping alignments after the first as SUPPLEMENTARY
     // Implements C++ bwa-mem2 logic (bwamem.cpp:1551-1552)

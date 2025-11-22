@@ -200,7 +200,7 @@ pub struct MemCliOptions {
 
     /// Verbose level: 1=error, 2=warning, 3=message, 4+=debugging
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
-    pub verbosity: i32,
+    pub verbosity: u8,
 
     /// Minimum score to output
     #[arg(short = 'T', long, value_name = "INT", default_value_t = 30)]
