@@ -17,6 +17,7 @@ pub mod mem;
 pub mod mem_opt;
 pub mod paired_end; // Paired-end read processing
 pub mod pairing; // Paired-end alignment scoring
+pub mod sam_output; // SAM output formatting and flag management
 pub mod simd;
 pub mod simd_abstraction;
 pub mod single_end; // Single-end read processing

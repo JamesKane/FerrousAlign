@@ -1,11 +1,16 @@
 // Paired-end read processing module
 //
 // This module handles paired-end FASTQ file processing, including:
-// - Reader thread for pipeline parallelism
+// - Reader thread for pipeline parallelism (Stage 0)
 // - Insert size statistics bootstrapping
 // - Mate rescue using Smith-Waterman
 // - Paired alignment scoring
-// - SAM output with proper pair flags
+// - SAM output with proper pair flags (Stage 2)
+//
+// The pipeline is cleanly separated using sam_output module:
+// - Computation: generate_seeds() returns Vec<Alignment>
+// - Pairing: mem_pair() scores paired alignments
+// - Output: sam_output functions handle flag setting and formatting
 
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
@@ -17,6 +22,11 @@ use crate::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
 use crate::mate_rescue::mem_matesw;
 use crate::mem_opt::MemOpt;
 use crate::pairing::mem_pair;
+use crate::sam_output::{
+    PairedFlagContext, create_unmapped_paired,
+    prepare_paired_alignment_read1, prepare_paired_alignment_read2,
+    write_sam_record,
+};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rayon::prelude::*;
 use std::io::Write;
@@ -570,6 +580,90 @@ fn mate_rescue_batch(
     rescued
 }
 
+// ============================================================================
+// PAIRED-END OUTPUT HELPERS
+// ============================================================================
+
+/// Filter alignments by score threshold, creating unmapped if all filtered
+fn filter_alignments_by_threshold(
+    alignments: &mut Vec<Alignment>,
+    name: &str,
+    seq: &[u8],
+    is_first_in_pair: bool,
+    threshold: i32,
+) {
+    alignments.retain(|a| a.score >= threshold);
+
+    if alignments.is_empty() {
+        log::debug!(
+            "{}: All alignments filtered by score threshold, creating unmapped",
+            name
+        );
+        alignments.push(create_unmapped_paired(name, seq, is_first_in_pair));
+    }
+}
+
+/// Select best pair indices and determine if properly paired
+fn select_best_pair(
+    alignments1: &[Alignment],
+    alignments2: &[Alignment],
+    stats: &[InsertSizeStats; 4],
+    pair_id: u64,
+) -> (usize, usize, bool) {
+    if alignments1.is_empty() || alignments2.is_empty() {
+        return (0, 0, false);
+    }
+
+    let pair_result = mem_pair(stats, alignments1, alignments2, 2, pair_id);
+
+    if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
+        log::trace!(
+            "mem_pair selected best_idx1={}, best_idx2={}",
+            idx1, idx2
+        );
+        (idx1, idx2, true)
+    } else {
+        log::trace!("No valid pair found, using (0,0)");
+        (0, 0, false)
+    }
+}
+
+/// Extract mate information for flag context
+fn get_mate_info(alignments: &[Alignment], best_idx: usize) -> (String, u64, u16, i32) {
+    if let Some(aln) = alignments.get(best_idx) {
+        let ref_len = aln.reference_length();
+        (aln.ref_name.clone(), aln.pos, aln.flag, ref_len)
+    } else {
+        ("*".to_string(), 0, 0, 0)
+    }
+}
+
+/// Select which alignments to output for a paired read
+fn select_output_indices(
+    alignments: &[Alignment],
+    best_idx: usize,
+    output_all: bool,
+    threshold: i32,
+) -> Vec<usize> {
+    let mut indices = Vec::new();
+    for (idx, alignment) in alignments.iter().enumerate() {
+        let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
+        let is_primary = idx == best_idx;
+        let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
+
+        let should_output = if output_all {
+            is_unmapped || alignment.score >= threshold
+        } else {
+            is_primary || is_supplementary
+        };
+
+        if should_output {
+            indices.push(idx);
+        }
+    }
+    indices
+}
+
 // Output a batch of paired-end alignments with proper flags and flushing
 // Returns number of records written
 fn output_batch_paired(
@@ -594,393 +688,67 @@ fn output_batch_paired(
         let (name2, seq2, qual2) = &batch_seqs2[pair_idx];
         let pair_id = starting_pair_id + pair_idx as u64;
 
-        // DEBUG: Log pair processing for diagnostic purposes
         log::debug!(
             "Processing pair {}: {} ({} alns), {} ({} alns)",
-            pair_id,
-            name1,
-            alignments1.len(),
-            name2,
-            alignments2.len()
+            pair_id, name1, alignments1.len(), name2, alignments2.len()
         );
 
-        // ===  SCORE THRESHOLD FILTERING (matching C++ bwa-mem2 behavior) ===
-        // Filter alignments by score threshold. If ALL alignments filtered,
-        // create one unmapped alignment to ensure read is output.
-        // This matches C++ bwa-mem2: if (aa.n == 0) { create unmapped record }
-        alignments1.retain(|a| a.score >= opt.t);
-        alignments2.retain(|a| a.score >= opt.t);
+        // Stage 1: Filter by score threshold
+        filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, opt.t);
+        filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, opt.t);
 
-        // If all alignments filtered, create unmapped alignment
-        if alignments1.is_empty() {
-            log::debug!(
-                "{}: All alignments filtered by score threshold, creating unmapped",
-                name1
-            );
-            alignments1.push(Alignment {
-                query_name: name1.to_string(),
-                flag: sam_flags::UNMAPPED, // Unmapped (paired flags will be set later)
-                ref_name: "*".to_string(),
-                ref_id: 0,
-                pos: 0,
-                mapq: 0,
-                score: 0,
-                cigar: Vec::new(),
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                seq: "".to_string(),
-                qual: "".to_string(),
-                tags: Vec::new(),
-                query_start: 0,
-                query_end: 0,
-                seed_coverage: 0,
-                hash: 0,
-                frac_rep: 0.0,
-            });
-        }
-
-        if alignments2.is_empty() {
-            log::debug!(
-                "{}: All alignments filtered by score threshold, creating unmapped",
-                name2
-            );
-            alignments2.push(Alignment {
-                query_name: name2.to_string(),
-                flag: sam_flags::UNMAPPED, // Unmapped (paired flags will be set later)
-                ref_name: "*".to_string(),
-                ref_id: 0,
-                pos: 0,
-                mapq: 0,
-                score: 0,
-                cigar: Vec::new(),
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                // Don't store seq/qual - they're passed at output time
-                seq: String::new(),
-                qual: String::new(),
-                tags: Vec::new(),
-                query_start: 0,
-                query_end: 0,
-                seed_coverage: 0,
-                hash: 0,
-                frac_rep: 0.0,
-            });
-        }
-
-        // Use mem_pair to score paired alignments
-        let pair_result = if !alignments1.is_empty() && !alignments2.is_empty() {
-            let result = mem_pair(stats, &alignments1, &alignments2, 2, pair_id);
-
-            // DEBUG: Log mem_pair results
-            if pair_id < 10 {
-                if result.is_some() {
-                    log::debug!("mem_pair SUCCESS for pair {}", pair_id);
-                } else {
-                    log::debug!(
-                        "mem_pair FAIL for pair {}. alns1={}, alns2={}, stats[FR]: low={}, high={}, failed={}",
-                        pair_id,
-                        alignments1.len(),
-                        alignments2.len(),
-                        stats[1].low,
-                        stats[1].high,
-                        stats[1].failed
-                    );
-                }
-            }
-
-            result
-        } else {
-            None
-        };
-
-        // Determine best paired alignment indices and check if properly paired
+        // Stage 2: Select best pair
         let (best_idx1, best_idx2, is_properly_paired) =
-            if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
-                // If mem_pair returned a valid pair, it's properly paired
-                // mem_pair already verified: same chromosome, insert size within bounds, valid orientation
-                log::trace!(
-                    "{}/{}: mem_pair selected best_idx1={}, best_idx2={}, n_aln1={}, n_aln2={}",
-                    name1,
-                    name2,
-                    idx1,
-                    idx2,
-                    alignments1.len(),
-                    alignments2.len()
-                );
-                (idx1, idx2, true)
-            } else if !alignments1.is_empty() && !alignments2.is_empty() {
-                // mem_pair returned None - no valid pair found
-                // Use first alignments but NOT properly paired
-                // (insert size out of bounds, or wrong orientation)
-                log::trace!(
-                    "{}/{}: No valid pair found, using (0,0), n_aln1={}, n_aln2={}",
-                    name1,
-                    name2,
-                    alignments1.len(),
-                    alignments2.len()
-                );
-                (0, 0, false)
-            } else {
-                // One or both reads unmapped
-                log::trace!(
-                    "{}/{}: One or both unmapped, n_aln1={}, n_aln2={}",
-                    name1,
-                    name2,
-                    alignments1.len(),
-                    alignments2.len()
-                );
-                (0, 0, false)
-            };
+            select_best_pair(&alignments1, &alignments2, stats, pair_id);
 
-        // Extract mate info from best alignments BEFORE creating dummies
-        // (needed to populate dummy alignments with mate's position)
-        let (mate2_ref_initial, mate2_pos_initial, mate2_flag_initial) =
-            if let Some(aln2) = alignments2.get(best_idx2) {
-                (aln2.ref_name.clone(), aln2.pos, aln2.flag)
-            } else {
-                ("*".to_string(), 0, 0)
-            };
+        // Stage 3: Build mate contexts for flag setting
+        let (mate2_ref, mate2_pos, mate2_flag, mate2_ref_len) = get_mate_info(&alignments2, best_idx2);
+        let (mate1_ref, mate1_pos, mate1_flag, mate1_ref_len) = get_mate_info(&alignments1, best_idx1);
 
-        let (mate1_ref_initial, mate1_pos_initial, mate1_flag_initial) =
-            if let Some(aln1) = alignments1.get(best_idx1) {
-                (aln1.ref_name.clone(), aln1.pos, aln1.flag)
-            } else {
-                ("*".to_string(), 0, 0)
-            };
+        let mate2_cigar = alignments2.get(best_idx2)
+            .map(|a| a.cigar_string())
+            .unwrap_or_else(|| "*".to_string());
+        let mate1_cigar = alignments1.get(best_idx1)
+            .map(|a| a.cigar_string())
+            .unwrap_or_else(|| "*".to_string());
 
-        // Handle unmapped reads - create dummy alignments
-        if alignments1.is_empty() {
-            let unmapped = Alignment::create_unmapped(
-                name1.clone(),
-                seq1,
-                qual1.clone(),
-                true, // is_first_in_pair
-                &mate2_ref_initial,
-                mate2_pos_initial,
-                mate2_flag_initial & sam_flags::REVERSE != 0, // mate_is_reverse
-            );
-            alignments1.push(unmapped);
-        }
-
-        if alignments2.is_empty() {
-            let unmapped = Alignment::create_unmapped(
-                name2.clone(),
-                seq2,
-                qual2.clone(),
-                false, // is_first_in_pair (this is read2)
-                &mate1_ref_initial,
-                mate1_pos_initial,
-                mate1_flag_initial & sam_flags::REVERSE != 0, // mate_is_reverse
-            );
-            alignments2.push(unmapped);
-        }
-
-        // Re-extract mate info AFTER creating dummy alignments
-        // This ensures mapped reads get correct mate information even when mate is unmapped
-        let (mate2_ref, mate2_pos, mate2_flag) = if let Some(aln2) = alignments2.get(best_idx2) {
-            (aln2.ref_name.clone(), aln2.pos, aln2.flag)
-        } else {
-            ("*".to_string(), 0, 0)
+        let ctx_for_read1 = PairedFlagContext {
+            mate_ref: mate2_ref,
+            mate_pos: mate2_pos,
+            mate_flag: mate2_flag,
+            mate_cigar: mate2_cigar,
+            mate_ref_len: mate2_ref_len,
+            is_properly_paired,
         };
 
-        let (mate1_ref, mate1_pos, mate1_flag) = if let Some(aln1) = alignments1.get(best_idx1) {
-            (aln1.ref_name.clone(), aln1.pos, aln1.flag)
-        } else {
-            ("*".to_string(), 0, 0)
+        let ctx_for_read2 = PairedFlagContext {
+            mate_ref: mate1_ref,
+            mate_pos: mate1_pos,
+            mate_flag: mate1_flag,
+            mate_cigar: mate1_cigar,
+            mate_ref_len: mate1_ref_len,
+            is_properly_paired,
         };
 
-        // Set flags and mate information for read1
-        for (idx, alignment) in alignments1.iter_mut().enumerate() {
-            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
+        // Stage 4: Select which alignments to output
+        let output_indices1 = select_output_indices(&alignments1, best_idx1, opt.output_all_alignments, opt.t);
+        let output_indices2 = select_output_indices(&alignments2, best_idx2, opt.output_all_alignments, opt.t);
 
-            // ALWAYS set paired flag (sam_flags::PAIRED) - even for unmapped reads
-            alignment.flag |= sam_flags::PAIRED;
-
-            // ALWAYS set first in pair flag (sam_flags::FIRST_IN_PAIR) - even for unmapped reads
-            alignment.flag |= sam_flags::FIRST_IN_PAIR;
-
-            // Only set proper pair flag for mapped reads in proper pairs
-            if !is_unmapped && is_properly_paired && idx == best_idx1 {
-                alignment.flag |= sam_flags::PROPER_PAIR;
-            }
-
-            // Set mate unmapped flag if mate is unmapped
-            if mate2_ref == "*" {
-                alignment.flag |= sam_flags::MATE_UNMAPPED;
-            }
-
-            // Only set mate position and TLEN for mapped reads
-            if !is_unmapped && mate2_ref != "*" {
-                alignment.rnext = if alignment.ref_name == mate2_ref {
-                    "=".to_string()
-                } else {
-                    mate2_ref.clone()
-                };
-                alignment.pnext = mate2_pos + 1;
-
-                if mate2_flag & sam_flags::REVERSE != 0 {
-                    alignment.flag |= sam_flags::MATE_REVERSE;
-                }
-
-                if alignment.ref_name == mate2_ref {
-                    let mate2_len = alignments2
-                        .get(best_idx2)
-                        .map(|a| a.reference_length())
-                        .unwrap_or(0);
-                    alignment.tlen = alignment.calculate_tlen(mate2_pos, mate2_len);
-                }
-            }
-        }
-
-        // Set flags and mate information for read2
-        for (idx, alignment) in alignments2.iter_mut().enumerate() {
-            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
-
-            // ALWAYS set paired flag (sam_flags::PAIRED) - even for unmapped reads
-            alignment.flag |= sam_flags::PAIRED;
-
-            // ALWAYS set second in pair flag (sam_flags::SECOND_IN_PAIR) - even for unmapped reads
-            alignment.flag |= sam_flags::SECOND_IN_PAIR;
-
-            // Only set proper pair flag for mapped reads in proper pairs
-            if !is_unmapped && is_properly_paired && idx == best_idx2 {
-                alignment.flag |= sam_flags::PROPER_PAIR;
-            }
-
-            // Set mate unmapped flag if mate is unmapped
-            if mate1_ref == "*" {
-                alignment.flag |= sam_flags::MATE_UNMAPPED;
-            }
-
-            // Only set mate position and TLEN for mapped reads
-            if !is_unmapped && mate1_ref != "*" {
-                alignment.rnext = if alignment.ref_name == mate1_ref {
-                    "=".to_string()
-                } else {
-                    mate1_ref.clone()
-                };
-                alignment.pnext = mate1_pos + 1;
-
-                if mate1_flag & sam_flags::REVERSE != 0 {
-                    alignment.flag |= sam_flags::MATE_REVERSE;
-                }
-
-                if alignment.ref_name == mate1_ref {
-                    let mate1_len = alignments1
-                        .get(best_idx1)
-                        .map(|a| a.reference_length())
-                        .unwrap_or(0);
-                    alignment.tlen = alignment.calculate_tlen(mate1_pos, mate1_len);
-                }
-            }
-        }
-
-        // Get mate CIGARs for MC tag
-        let mate1_cigar = if !alignments1.is_empty() && best_idx1 < alignments1.len() {
-            alignments1[best_idx1].cigar_string()
-        } else {
-            "*".to_string()
-        };
-
-        let mate2_cigar = if !alignments2.is_empty() && best_idx2 < alignments2.len() {
-            alignments2[best_idx2].cigar_string()
-        } else {
-            "*".to_string()
-        };
-
-        // Write alignments for read1
-        for (idx, mut alignment) in alignments1.into_iter().enumerate() {
-            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
+        // Stage 5: Write alignments for read1
+        let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
+        for idx in output_indices1 {
             let is_primary = idx == best_idx1;
-            let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
-
-            // By default (-a flag not set), output primary and supplementary alignments
-            // With -a flag, output all alignments meeting score threshold
-            let should_output = if opt.output_all_alignments {
-                is_unmapped || alignment.score >= opt.t
-            } else {
-                is_primary || is_supplementary // Output both primary and supplementary
-            };
-
-            if !should_output {
-                continue; // Skip non-primary/non-supplementary alignments (unless -a flag set)
-            }
-
-            // Clear or set secondary flag based on pairing result
-            if is_primary {
-                // This is the best paired alignment - ensure it's PRIMARY
-                // Clear BOTH secondary AND supplementary flags (matching single_end.rs behavior)
-                // The primary alignment for paired-end should never have these flags
-                alignment.flag &= !sam_flags::SECONDARY;
-                alignment.flag &= !sam_flags::SUPPLEMENTARY;
-            } else if !is_unmapped && !is_supplementary {
-                // Non-best alignment that's not supplementary - mark as secondary
-                alignment.flag |= sam_flags::SECONDARY;
-            }
-
-            if let Some(ref rg) = rg_id {
-                alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
-            }
-
-            if !mate2_cigar.is_empty() {
-                alignment
-                    .tags
-                    .push(("MC".to_string(), format!("Z:{}", mate2_cigar)));
-            }
-
-            // Use external seq/qual to avoid storing in Alignment struct
-            let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
-            let sam_record = alignment.to_sam_string_with_seq(seq1_str, qual1);
-            writeln!(writer, "{}", sam_record)?;
+            prepare_paired_alignment_read1(&mut alignments1[idx], is_primary, &ctx_for_read1, rg_id.as_deref());
+            write_sam_record(writer, &alignments1[idx], seq1_str, qual1)?;
             records_written += 1;
         }
 
-        // Write alignments for read2
-        for (idx, mut alignment) in alignments2.into_iter().enumerate() {
-            let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
+        // Stage 6: Write alignments for read2
+        let seq2_str = std::str::from_utf8(seq2).unwrap_or("");
+        for idx in output_indices2 {
             let is_primary = idx == best_idx2;
-            let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
-
-            // By default (-a flag not set), output primary and supplementary alignments
-            // With -a flag, output all alignments meeting score threshold
-            let should_output = if opt.output_all_alignments {
-                is_unmapped || alignment.score >= opt.t
-            } else {
-                is_primary || is_supplementary // Output both primary and supplementary
-            };
-
-            if !should_output {
-                continue; // Skip non-primary/non-supplementary alignments (unless -a flag set)
-            }
-
-            // Clear or set secondary flag based on pairing result
-            if is_primary {
-                // This is the best paired alignment - ensure it's PRIMARY
-                // Clear BOTH secondary AND supplementary flags (matching single_end.rs behavior)
-                // The primary alignment for paired-end should never have these flags
-                alignment.flag &= !sam_flags::SECONDARY;
-                alignment.flag &= !sam_flags::SUPPLEMENTARY;
-            } else if !is_unmapped && !is_supplementary {
-                // Non-best alignment that's not supplementary - mark as secondary
-                alignment.flag |= sam_flags::SECONDARY;
-            }
-
-            if let Some(ref rg) = rg_id {
-                alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
-            }
-
-            if !mate1_cigar.is_empty() {
-                alignment
-                    .tags
-                    .push(("MC".to_string(), format!("Z:{}", mate1_cigar)));
-            }
-
-            // Use external seq/qual to avoid storing in Alignment struct
-            let seq2_str = std::str::from_utf8(seq2).unwrap_or("");
-            let sam_record = alignment.to_sam_string_with_seq(seq2_str, qual2);
-            writeln!(writer, "{}", sam_record)?;
+            prepare_paired_alignment_read2(&mut alignments2[idx], is_primary, &ctx_for_read2, rg_id.as_deref());
+            write_sam_record(writer, &alignments2[idx], seq2_str, qual2)?;
             records_written += 1;
         }
     }

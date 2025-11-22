@@ -857,76 +857,33 @@ fn alignment_ref_length(alignment: &Alignment) -> u64 {
     ref_len
 }
 
-/// Mark secondary alignments and calculate MAPQ values
-/// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
-///
-/// Algorithm:
-/// 1. Sort alignments by score (descending), then by hash
-/// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
-/// 3. If overlap >= mask_level, mark as secondary (set sam_flags::SECONDARY flag)
-/// 4. Calculate MAPQ based on score difference and overlap count
-pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
-    if alignments.is_empty() {
-        return;
-    }
+// ============================================================================
+// SECONDARY/SUPPLEMENTARY MARKING HELPERS
+// ============================================================================
 
-    // Debug: Log query bounds of first few alignments
-    log::debug!(
-        "mark_secondary_alignments: {} alignments, mask_level={}",
-        alignments.len(),
-        opt.mask_level
-    );
-    for (i, aln) in alignments.iter().take(10).enumerate() {
-        log::debug!(
-            "  Alignment[{}]: {}:{}, score={}, query_start={}, query_end={}",
-            i,
-            aln.ref_name,
-            aln.pos,
-            aln.score,
-            aln.query_start,
-            aln.query_end
-        );
-    }
-
-    let mask_level = opt.mask_level;
-
-    // Calculate score gap threshold for sub_count
-    // tmp = max(a+b, o_del+e_del, o_ins+e_ins)
-    let mut tmp = opt.a + opt.b;
-    tmp = tmp.max(opt.o_del + opt.e_del);
-    tmp = tmp.max(opt.o_ins + opt.e_ins);
-
-    // Track which alignments are primary (not marked secondary)
+/// Find primary alignment indices by checking for query overlap
+/// Returns (primary_indices, sub_scores, sub_counts)
+fn find_primary_alignments(
+    alignments: &mut [Alignment],
+    mask_level: f32,
+    score_gap_threshold: i32,
+) -> (Vec<usize>, Vec<i32>, Vec<i32>) {
     let mut primary_indices: Vec<usize> = Vec::new();
-    primary_indices.push(0); // First alignment is always primary
-
-    // Track sub-scores and sub-counts for MAPQ calculation
     let mut sub_scores: Vec<i32> = vec![0; alignments.len()];
     let mut sub_counts: Vec<i32> = vec![0; alignments.len()];
 
-    // Log all alignments for debugging
-    log::debug!(
-        "mark_secondary_alignments: Processing {} alignments for {}",
-        alignments.len(),
-        alignments.first().map(|a| a.query_name.as_str()).unwrap_or("?")
-    );
-    for (i, aln) in alignments.iter().enumerate() {
-        log::debug!(
-            "  [{}] {}:{} score={} query=[{},{}) cigar_len={}",
-            i, aln.ref_name, aln.pos, aln.score, aln.query_start, aln.query_end,
-            aln.cigar.iter().map(|(_, len)| *len as i32).sum::<i32>()
-        );
+    if alignments.is_empty() {
+        return (primary_indices, sub_scores, sub_counts);
     }
+
+    // First alignment is always primary
+    primary_indices.push(0);
 
     // Check each alignment against existing primaries for overlap
     for i in 1..alignments.len() {
         let mut is_secondary = false;
 
         for &j in &primary_indices {
-            log::debug!(
-                "  Checking overlap: aln[{}] vs primary[{}]",
-                i, j
-            );
             if alignments_overlap(&alignments[i], &alignments[j], mask_level) {
                 // Track sub-score for MAPQ calculation
                 if sub_scores[j] == 0 {
@@ -934,7 +891,7 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
                 }
 
                 // Count close suboptimal hits for MAPQ penalty
-                if alignments[j].score - alignments[i].score <= tmp {
+                if alignments[j].score - alignments[i].score <= score_gap_threshold {
                     sub_counts[j] += 1;
                 }
 
@@ -951,61 +908,42 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
 
         // If no overlap with any primary, add as new primary
         if !is_secondary {
-            log::debug!(
-                "  Non-overlapping alignment[{}]: {}:{}, query_bounds=[{}, {}]",
-                i,
-                alignments[i].ref_name,
-                alignments[i].pos,
-                alignments[i].query_start,
-                alignments[i].query_end
-            );
             primary_indices.push(i);
         }
     }
 
-    log::debug!(
-        "  Total primary_indices: {} (will mark {} as supplementary)",
-        primary_indices.len(),
-        primary_indices.len().saturating_sub(1)
-    );
+    (primary_indices, sub_scores, sub_counts)
+}
 
-    // Mark non-overlapping alignments after the first as SUPPLEMENTARY
-    // Implements C++ bwa-mem2 logic (bwamem.cpp:1551-1552)
-    // First non-overlapping alignment = PRIMARY (no flags)
-    // Subsequent non-overlapping alignments = SUPPLEMENTARY (sam_flags::SUPPLEMENTARY)
+/// Mark non-overlapping alignments after the first as SUPPLEMENTARY
+fn apply_supplementary_flags(alignments: &mut [Alignment], primary_indices: &[usize]) {
     for (idx, &i) in primary_indices.iter().enumerate() {
         if idx > 0 {
-            // Not the first non-overlapping alignment
             alignments[i].flag |= sam_flags::SUPPLEMENTARY;
             log::debug!(
                 "Marked alignment {} as SUPPLEMENTARY ({}:{}, score={})",
-                i,
-                alignments[i].ref_name,
-                alignments[i].pos,
-                alignments[i].score
+                i, alignments[i].ref_name, alignments[i].pos, alignments[i].score
             );
         }
     }
 
-    // Ensure the designated primary alignment does not have the SUPPLEMENTARY flag set.
-    // The first alignment in `primary_indices` is considered the primary candidate.
+    // Ensure the primary alignment does not have SUPPLEMENTARY flag
     if !primary_indices.is_empty() {
-        let primary_candidate_idx = primary_indices[0];
-        // Clear the SUPPLEMENTARY flag (sam_flags::SUPPLEMENTARY) for the primary candidate
-        alignments[primary_candidate_idx].flag &= !sam_flags::SUPPLEMENTARY;
-        log::debug!(
-            "Cleared SUPPLEMENTARY flag for primary candidate alignment {} ({}:{}, score={})",
-            primary_candidate_idx,
-            alignments[primary_candidate_idx].ref_name,
-            alignments[primary_candidate_idx].pos,
-            alignments[primary_candidate_idx].score
-        );
+        let primary_idx = primary_indices[0];
+        alignments[primary_idx].flag &= !sam_flags::SUPPLEMENTARY;
     }
+}
 
-    // Calculate MAPQ for all alignments
+/// Calculate MAPQ for all alignments and add XS tags
+fn calculate_all_mapq(
+    alignments: &mut [Alignment],
+    sub_scores: &[i32],
+    sub_counts: &[i32],
+    opt: &MemOpt,
+) {
     for i in 0..alignments.len() {
         if alignments[i].flag & sam_flags::SECONDARY == 0 {
-            // Primary alignment: calculate MAPQ
+            // Primary/supplementary alignment: calculate MAPQ
             alignments[i].mapq = calculate_mapq(
                 alignments[i].score,
                 sub_scores[i],
@@ -1016,56 +954,107 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
                 alignments[i].frac_rep,
                 opt,
             );
+
+            // Add XS tag if there's a suboptimal score
+            if sub_scores[i] > 0 {
+                alignments[i]
+                    .tags
+                    .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
+            }
         } else {
             // Secondary alignment: MAPQ = 0
             alignments[i].mapq = 0;
         }
     }
+}
 
-    // Add XS tags (suboptimal alignment score) to primary alignments
-    // XS should only be present if there's a secondary alignment
+/// Filter supplementary alignments by score relative to primary
+fn filter_supplementary_by_score(
+    alignments: &mut Vec<Alignment>,
+    primary_score: i32,
+    xa_drop_ratio: f32,
+) {
+    let supp_threshold = (primary_score as f32 * xa_drop_ratio) as i32;
+    let before_filter = alignments.len();
+
+    // Mark low-scoring supplementary for removal
+    let mut to_remove: Vec<usize> = Vec::new();
     for i in 0..alignments.len() {
-        if alignments[i].flag & sam_flags::SECONDARY == 0 && sub_scores[i] > 0 {
-            // Primary alignment with a suboptimal score
-            alignments[i]
-                .tags
-                .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
+        if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0
+            && alignments[i].score < supp_threshold
+        {
+            to_remove.push(i);
+            log::debug!(
+                "Filtering supplementary alignment: {}:{} score={} < threshold={}",
+                alignments[i].ref_name, alignments[i].pos,
+                alignments[i].score, supp_threshold
+            );
         }
     }
 
-    // Filter supplementary alignments by score relative to primary
-    // BWA-MEM2 uses xa_drop_ratio to filter secondary/XA alignments
-    // Apply similar filter to supplementary to avoid over-generation
+    // Remove in reverse order to preserve indices
+    for &i in to_remove.iter().rev() {
+        alignments.remove(i);
+    }
+
+    if before_filter != alignments.len() {
+        log::debug!(
+            "Filtered {} supplementary alignments below score threshold {} (xa_drop_ratio={})",
+            before_filter - alignments.len(), supp_threshold, xa_drop_ratio
+        );
+    }
+}
+
+// ============================================================================
+// MAIN SECONDARY MARKING FUNCTION
+// ============================================================================
+
+/// Mark secondary alignments and calculate MAPQ values
+/// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
+///
+/// Algorithm:
+/// 1. Sort alignments by score (descending), then by hash
+/// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
+/// 3. If overlap >= mask_level, mark as secondary (set sam_flags::SECONDARY flag)
+/// 4. Calculate MAPQ based on score difference and overlap count
+pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
+    if alignments.is_empty() {
+        return;
+    }
+
+    // Debug logging
+    log::debug!(
+        "mark_secondary_alignments: {} alignments, mask_level={}",
+        alignments.len(),
+        opt.mask_level
+    );
+
+    // Calculate score gap threshold for sub_count
+    // tmp = max(a+b, o_del+e_del, o_ins+e_ins)
+    let score_gap_threshold = (opt.a + opt.b)
+        .max(opt.o_del + opt.e_del)
+        .max(opt.o_ins + opt.e_ins);
+
+    // Step 1: Find primary alignments and track sub-scores
+    let (primary_indices, sub_scores, sub_counts) =
+        find_primary_alignments(alignments, opt.mask_level, score_gap_threshold);
+
+    log::debug!(
+        "  Total primary_indices: {} (will mark {} as supplementary)",
+        primary_indices.len(),
+        primary_indices.len().saturating_sub(1)
+    );
+
+    // Step 2: Mark non-overlapping alignments after the first as SUPPLEMENTARY
+    apply_supplementary_flags(alignments, &primary_indices);
+
+    // Step 3: Calculate MAPQ for all alignments and add XS tags
+    calculate_all_mapq(alignments, &sub_scores, &sub_counts, opt);
+
+    // Step 4: Filter low-scoring supplementary alignments
     if !primary_indices.is_empty() {
         let primary_score = alignments[primary_indices[0]].score;
-        let supp_threshold = (primary_score as f32 * opt.xa_drop_ratio) as i32;
-        let before_filter = alignments.len();
-
-        // Mark low-scoring supplementary for removal
-        let mut to_remove: Vec<usize> = Vec::new();
-        for i in 0..alignments.len() {
-            if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0
-               && alignments[i].score < supp_threshold {
-                to_remove.push(i);
-                log::debug!(
-                    "Filtering supplementary alignment: {}:{} score={} < threshold={}",
-                    alignments[i].ref_name, alignments[i].pos,
-                    alignments[i].score, supp_threshold
-                );
-            }
-        }
-
-        // Remove in reverse order to preserve indices
-        for &i in to_remove.iter().rev() {
-            alignments.remove(i);
-        }
-
-        if before_filter != alignments.len() {
-            log::debug!(
-                "Filtered {} supplementary alignments below score threshold {} (xa_drop_ratio={})",
-                before_filter - alignments.len(), supp_threshold, opt.xa_drop_ratio
-            );
-        }
+        filter_supplementary_by_score(alignments, primary_score, opt.xa_drop_ratio);
     }
 }
 

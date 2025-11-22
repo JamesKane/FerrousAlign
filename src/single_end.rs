@@ -1,16 +1,24 @@
 // Single-end read processing module
 //
 // This module handles single-end FASTQ file processing, including:
-// - Batched read loading
-// - Parallel alignment using Rayon
-// - SAM output formatting
+// - Batched read loading (Stage 0)
+// - Parallel alignment using Rayon (Stage 1)
+// - SAM output formatting (Stage 2)
+//
+// The pipeline is cleanly separated:
+// - Computation: generate_seeds() returns Vec<Alignment>
+// - Selection: sam_output::select_single_end_alignments() filters output
+// - Output: sam_output::write_sam_record() writes to stream
 
 use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::sam_flags;
 use crate::alignment::pipeline::generate_seeds;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
+use crate::sam_output::{
+    select_single_end_alignments, prepare_single_end_alignment,
+    create_unmapped_single_end, write_sam_record,
+};
 use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;
@@ -111,127 +119,48 @@ pub fn process_single_end(
                 .collect();
 
             // Stage 2: Write output sequentially (matching C++ kt_pipeline step 2)
-            // Filter by minimum score threshold (-T)
-            // Extract read group ID if specified
+            // Uses sam_output module for clean separation of concerns
             let rg_id = opt
                 .read_group
                 .as_ref()
                 .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
 
-            // Zip alignments with original seq/qual from batch for memory-efficient output
-            for (read_idx, alignment_vec) in alignments.into_iter().enumerate() {
-                // Get original seq/qual from batch (used for to_sam_string_with_seq)
+            for (read_idx, mut alignment_vec) in alignments.into_iter().enumerate() {
+                // Get original seq/qual from batch
                 let orig_seq = std::str::from_utf8(&batch.seqs[read_idx]).unwrap_or("");
                 let orig_qual = &batch.quals[read_idx];
-                // Find the best (highest scoring) alignment as primary
-                let best_idx = alignment_vec
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(_, aln)| aln.score)
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(0);
 
-                // CRITICAL FIX: Check if best alignment score is below threshold (matching bwa-mem2 behavior)
-                // If so, output an unmapped record instead of the low-scoring alignment
-                let best_alignment = &alignment_vec[best_idx];
-                let best_is_unmapped = best_alignment.flag & sam_flags::UNMAPPED != 0;
-                let all_below_threshold = !best_is_unmapped && best_alignment.score < opt.t;
+                // Select which alignments to output
+                let selection = select_single_end_alignments(&alignment_vec, &opt);
 
-                if all_below_threshold {
-                    // All alignments are below score threshold - output unmapped record
-                    // (matching C++ bwa-mem2: bwamem.cpp:1561-1565)
-                    log::debug!(
-                        "{}: Best alignment score {} below threshold {}, outputting unmapped record",
-                        best_alignment.query_name,
-                        best_alignment.score,
-                        opt.t
-                    );
+                if selection.output_as_unmapped {
+                    // Output unmapped record
+                    let query_name = alignment_vec
+                        .first()
+                        .map(|a| a.query_name.as_str())
+                        .unwrap_or("unknown");
+                    let mut unmapped = create_unmapped_single_end(query_name, orig_seq.len());
 
-                    // Create unmapped alignment for single-end read
-                    let unmapped = Alignment {
-                        query_name: best_alignment.query_name.clone(),
-                        flag: sam_flags::UNMAPPED, // sam_flags::UNMAPPED
-                        ref_name: "*".to_string(),
-                        ref_id: 0,
-                        pos: 0,
-                        mapq: 0,
-                        score: 0,
-                        cigar: Vec::new(), // Empty CIGAR = "*" in SAM
-                        rnext: "*".to_string(),
-                        pnext: 0,
-                        tlen: 0,
-                        // Don't store seq/qual - they're passed at output time
-                        seq: String::new(),
-                        qual: String::new(),
-                        tags: vec![
-                            ("AS".to_string(), "i:0".to_string()),
-                            ("NM".to_string(), "i:0".to_string()),
-                        ],
-                        query_start: 0,
-                        query_end: 0,
-                        seed_coverage: 0,
-                        hash: 0,
-                        frac_rep: 0.0,
-                    };
-
-                    // Add RG tag if read group is specified
-                    let mut output_alignment = unmapped;
                     if let Some(ref rg) = rg_id {
-                        output_alignment
-                            .tags
-                            .push(("RG".to_string(), format!("Z:{}", rg)));
+                        unmapped.tags.push(("RG".to_string(), format!("Z:{}", rg)));
                     }
 
-                    let sam_record = output_alignment.to_sam_string_with_seq(orig_seq, orig_qual);
-                    if let Err(e) = writeln!(writer, "{}", sam_record) {
+                    if let Err(e) = write_sam_record(writer, &unmapped, orig_seq, orig_qual) {
                         log::error!("Error writing SAM record: {}", e);
                     }
-
-                    continue; // Skip to next read
+                    continue;
                 }
 
-                for (idx, mut alignment) in alignment_vec.into_iter().enumerate() {
-                    let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
-                    let is_secondary = alignment.flag & sam_flags::SECONDARY != 0;
-                    let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
-                    let is_best = idx == best_idx;
+                // Output selected alignments
+                for idx in selection.output_indices {
+                    let is_primary = idx == selection.primary_idx;
+                    prepare_single_end_alignment(
+                        &mut alignment_vec[idx],
+                        is_primary,
+                        rg_id.as_deref(),
+                    );
 
-                    // bwa-mem2 output behavior (mem_reg2sam, bwamem.cpp:1534-1560):
-                    // - Primary alignments: always output (flag without 0x100 or 0x800 for first, 0x800 for subsequent)
-                    // - Supplementary alignments: always output (flag 0x800)
-                    // - Secondary alignments: only output with -a flag (flag 0x100)
-                    //
-                    // The flags were already set correctly by mark_secondary_alignments() in finalization.rs
-                    let should_output = if opt.output_all_alignments {
-                        // -a flag: output all alignments meeting score threshold
-                        is_unmapped || alignment.score >= opt.t
-                    } else {
-                        // Default: output primary and supplementary, not secondary
-                        // Primary = best alignment without SECONDARY flag
-                        // Supplementary = non-overlapping alignments with SUPPLEMENTARY flag
-                        // Secondary = overlapping alignments with SECONDARY flag (skip these)
-                        is_unmapped || (!is_secondary && (is_best || is_supplementary))
-                    };
-
-                    if !should_output {
-                        continue; // Skip secondary alignments (unless -a flag set)
-                    }
-
-                    // Ensure the best alignment doesn't have SECONDARY or SUPPLEMENTARY flags
-                    // (it should be the true primary)
-                    if is_best && !is_unmapped {
-                        alignment.flag &= !sam_flags::SECONDARY;
-                        alignment.flag &= !sam_flags::SUPPLEMENTARY;
-                    }
-
-                    // Add RG tag if read group is specified
-                    if let Some(ref rg) = rg_id {
-                        alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
-                    }
-
-                    // Use external seq/qual to avoid storing in Alignment struct
-                    let sam_record = alignment.to_sam_string_with_seq(orig_seq, orig_qual);
-                    if let Err(e) = writeln!(writer, "{}", sam_record) {
+                    if let Err(e) = write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual) {
                         log::error!("Error writing SAM record: {}", e);
                     }
                 }

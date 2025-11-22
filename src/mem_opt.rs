@@ -89,6 +89,53 @@ pub struct InsertSizeOverride {
     pub min: i32,    // Minimum insert size (default: 0)
 }
 
+// ============================================================================
+// STAGE-SPECIFIC PARAMETER BUNDLES
+// ============================================================================
+
+/// Parameters for the seeding stage (SMEM generation)
+#[derive(Debug, Clone)]
+pub struct SeedingParams {
+    pub min_seed_len: i32,
+    pub split_factor: f32,
+    pub split_width: i32,
+    pub max_occ: i32,
+    pub max_mem_intv: u64,
+}
+
+/// Parameters for the chaining stage (seed grouping)
+#[derive(Debug, Clone)]
+pub struct ChainingParams {
+    pub band_width: i32,
+    pub max_chain_gap: i32,
+    pub drop_ratio: f32,
+    pub min_chain_weight: i32,
+}
+
+/// Parameters for the extension stage (Smith-Waterman alignment)
+#[derive(Debug, Clone)]
+pub struct ExtensionParams {
+    pub band_width: i32,
+    pub zdrop: i32,
+    pub match_score: i32,
+    pub mismatch_penalty: i32,
+    pub gap_open_del: i32,
+    pub gap_extend_del: i32,
+    pub gap_open_ins: i32,
+    pub gap_extend_ins: i32,
+}
+
+/// Parameters for the output/filtering stage
+#[derive(Debug, Clone)]
+pub struct OutputParams {
+    pub score_threshold: i32,
+    pub max_xa_hits: i32,
+    pub max_xa_hits_alt: i32,
+    pub xa_drop_ratio: f32,
+    pub mask_level: f32,
+    pub output_all_alignments: bool,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct MemCliOptions {
     /// Index prefix (built with 'index' command)
@@ -357,6 +404,114 @@ impl Default for MemOpt {
 }
 
 impl MemOpt {
+    // ========================================================================
+    // STAGE-SPECIFIC PARAMETER ACCESSORS
+    // ========================================================================
+
+    /// Get seeding-stage parameters as a bundle
+    pub fn seeding_params(&self) -> SeedingParams {
+        SeedingParams {
+            min_seed_len: self.min_seed_len,
+            split_factor: self.split_factor,
+            split_width: self.split_width,
+            max_occ: self.max_occ,
+            max_mem_intv: self.max_mem_intv,
+        }
+    }
+
+    /// Get chaining-stage parameters as a bundle
+    pub fn chaining_params(&self) -> ChainingParams {
+        ChainingParams {
+            band_width: self.w,
+            max_chain_gap: self.max_chain_gap,
+            drop_ratio: self.drop_ratio,
+            min_chain_weight: self.min_chain_weight,
+        }
+    }
+
+    /// Get extension-stage parameters as a bundle
+    pub fn extension_params(&self) -> ExtensionParams {
+        ExtensionParams {
+            band_width: self.w,
+            zdrop: self.zdrop,
+            match_score: self.a,
+            mismatch_penalty: self.b,
+            gap_open_del: self.o_del,
+            gap_extend_del: self.e_del,
+            gap_open_ins: self.o_ins,
+            gap_extend_ins: self.e_ins,
+        }
+    }
+
+    /// Get output/filtering-stage parameters as a bundle
+    pub fn output_params(&self) -> OutputParams {
+        OutputParams {
+            score_threshold: self.t,
+            max_xa_hits: self.max_xa_hits,
+            max_xa_hits_alt: self.max_xa_hits_alt,
+            xa_drop_ratio: self.xa_drop_ratio,
+            mask_level: self.mask_level,
+            output_all_alignments: self.output_all_alignments,
+        }
+    }
+
+    /// Validate parameters for consistency across stages
+    /// Returns Ok(()) if valid, or Err with description of issues
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        // Seeding validation
+        if self.min_seed_len < 1 {
+            errors.push(format!("min_seed_len must be >= 1, got {}", self.min_seed_len));
+        }
+        if self.split_factor <= 1.0 {
+            errors.push(format!("split_factor must be > 1.0, got {}", self.split_factor));
+        }
+        if self.max_occ < 1 {
+            errors.push(format!("max_occ must be >= 1, got {}", self.max_occ));
+        }
+
+        // Chaining validation
+        if self.w < 1 {
+            errors.push(format!("band_width must be >= 1, got {}", self.w));
+        }
+        if self.max_chain_gap < 1 {
+            errors.push(format!("max_chain_gap must be >= 1, got {}", self.max_chain_gap));
+        }
+        if !(0.0..=1.0).contains(&self.drop_ratio) {
+            errors.push(format!("drop_ratio must be in [0, 1], got {}", self.drop_ratio));
+        }
+
+        // Scoring validation
+        if self.a < 1 {
+            errors.push(format!("match_score must be >= 1, got {}", self.a));
+        }
+        if self.b < 1 {
+            errors.push(format!("mismatch_penalty must be >= 1, got {}", self.b));
+        }
+
+        // Output validation
+        if self.t < 0 {
+            errors.push(format!("score_threshold must be >= 0, got {}", self.t));
+        }
+        if !(0.0..=1.0).contains(&self.xa_drop_ratio) {
+            errors.push(format!("xa_drop_ratio must be in [0, 1], got {}", self.xa_drop_ratio));
+        }
+        if !(0.0..=1.0).contains(&self.mask_level) {
+            errors.push(format!("mask_level must be in [0, 1], got {}", self.mask_level));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    // ========================================================================
+    // SCORING MATRIX
+    // ========================================================================
+
     /// Fill the scoring matrix based on match score (a) and mismatch penalty (b)
     /// Matches C++ bwa_fill_scmat() function
     pub fn fill_scoring_matrix(&mut self) {
@@ -635,5 +790,75 @@ mod tests {
             opt.mapq_coef_fac, 3,
             "mapq_coef_fac should be ln(50) truncated"
         );
+    }
+
+    // ========================================================================
+    // STAGE-SPECIFIC PARAMETER BUNDLE TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_seeding_params() {
+        let opt = MemOpt::default();
+        let params = opt.seeding_params();
+
+        assert_eq!(params.min_seed_len, 19);
+        assert_eq!(params.split_factor, 1.5);
+        assert_eq!(params.max_occ, 500);
+    }
+
+    #[test]
+    fn test_chaining_params() {
+        let opt = MemOpt::default();
+        let params = opt.chaining_params();
+
+        assert_eq!(params.band_width, 100);
+        assert_eq!(params.max_chain_gap, 10000);
+        assert_eq!(params.drop_ratio, 0.50);
+    }
+
+    #[test]
+    fn test_extension_params() {
+        let opt = MemOpt::default();
+        let params = opt.extension_params();
+
+        assert_eq!(params.match_score, 1);
+        assert_eq!(params.mismatch_penalty, 4);
+        assert_eq!(params.gap_open_del, 6);
+        assert_eq!(params.gap_extend_del, 1);
+    }
+
+    #[test]
+    fn test_output_params() {
+        let opt = MemOpt::default();
+        let params = opt.output_params();
+
+        assert_eq!(params.score_threshold, 30);
+        assert_eq!(params.max_xa_hits, 5);
+        assert_eq!(params.xa_drop_ratio, 0.80);
+        assert!(!params.output_all_alignments);
+    }
+
+    #[test]
+    fn test_validate_default_passes() {
+        let opt = MemOpt::default();
+        assert!(opt.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_catches_invalid_params() {
+        let mut opt = MemOpt::default();
+
+        // Invalid min_seed_len
+        opt.min_seed_len = 0;
+        let result = opt.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().iter().any(|e| e.contains("min_seed_len")));
+
+        // Reset and try invalid drop_ratio
+        opt = MemOpt::default();
+        opt.drop_ratio = 1.5;
+        let result = opt.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().iter().any(|e| e.contains("drop_ratio")));
     }
 }
