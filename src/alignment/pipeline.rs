@@ -197,16 +197,18 @@ fn find_seeds(
         )
     });
 
-    let split_len_threshold = (opt.min_seed_len as f32 * opt.split_factor) as i32;
+    // NOTE: split_factor and split_width control RE-SEEDING for chimeric detection,
+    // NOT seed filtering. The basic filter (min_seed_len + max_occ) is sufficient.
+    // The previous "chimeric filter" was incorrectly discarding valid seeds.
+    // See C++ bwamem.cpp:639-695 - split logic is for creating additional sub-seeds,
+    // not for removing seeds that pass the basic quality checks.
 
     if let Some(mut prev_smem) = all_smems.first().cloned() {
         let mut process_smem = |smem: SMEM, _is_first: bool| {
             let seed_len = smem.query_end - smem.query_start + 1;
             let occurrences = smem.interval_size;
-            let mut keep = seed_len >= opt.min_seed_len && occurrences <= opt.max_occ as u64;
-            if seed_len < split_len_threshold || occurrences > opt.split_width as u64 {
-                keep = false;
-            }
+            // Keep seeds that pass basic quality filter (min_seed_len AND max_occ)
+            let keep = seed_len >= opt.min_seed_len && occurrences <= opt.max_occ as u64;
             if keep {
                 unique_filtered_smems.push(smem);
             }

@@ -1,5 +1,6 @@
 use crate::alignment::seeding::Seed;
 use crate::mem_opt::MemOpt;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct Chain {
@@ -13,227 +14,238 @@ pub struct Chain {
     pub weight: i32,   // Chain weight (seed coverage), calculated by mem_chain_weight
     pub kept: i32,     // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
     pub frac_rep: f32, // Fraction of repetitive seeds in this chain
+    pub rid: i32,      // Reference sequence ID (chromosome)
+    pos: u64,          // B-tree key: reference position of first seed
+    // Last seed info for test_and_merge (matching C++ behavior)
+    last_qbeg: i32,    // Last seed's query begin
+    last_rbeg: u64,    // Last seed's reference begin
+    last_len: i32,     // Last seed's length
 }
 
 // ============================================================================
-// SEED CHAINING
+// SEED CHAINING - B-TREE BASED O(n log n) ALGORITHM
 // ============================================================================
 //
-// This section contains the seed chaining algorithm:
-// - Dynamic programming-based chaining
-// - Chain scoring and filtering
-// - Extension of chains into alignments
+// This implementation matches C++ bwa-mem2's mem_chain_seeds() function.
+// Uses a B-tree (BTreeMap) to find the closest chain for each seed in O(log n),
+// giving overall O(n log n) complexity instead of O(n²) DP.
+//
+// Algorithm:
+// 1. Sort seeds by (query_pos, ref_pos)
+// 2. For each seed:
+//    a. Find the chain with closest reference position using BTreeMap
+//    b. Try to merge seed into that chain (test_and_merge)
+//    c. If merge fails, create a new chain
+// 3. Return all chains
 // ============================================================================
 
-pub fn chain_seeds(mut seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>) {
+/// Try to merge a seed into an existing chain
+/// Implements C++ test_and_merge (bwamem.cpp:357-399)
+///
+/// Returns true if the seed was merged into the chain
+fn test_and_merge(
+    chain: &mut Chain,
+    chain_seeds: &mut Vec<usize>,
+    seed_idx: usize,
+    seed: &Seed,
+    opt: &MemOpt,
+    l_pac: u64,
+) -> bool {
+    // C++ bwamem.cpp:361-363 - get last seed's end positions
+    let last_qend = chain.last_qbeg + chain.last_len;
+    let last_rend = chain.last_rbeg + chain.last_len as u64;
+
+    // C++ lines 366-368: Check if seed is fully contained in existing chain
+    // Uses first seed's start and last seed's end
+    if seed.query_pos >= chain.query_start
+        && seed.query_pos + seed.len <= last_qend
+        && seed.ref_pos >= chain.ref_start
+        && seed.ref_pos + seed.len as u64 <= last_rend
+    {
+        // Contained seed - do nothing but report success (seed is "merged" by being ignored)
+        return true;
+    }
+
+    // C++ lines 370-371: Don't chain if on different strands
+    // Seeds on forward strand have rbeg < l_pac, reverse have rbeg >= l_pac
+    let last_on_forward = chain.last_rbeg < l_pac;
+    let first_on_forward = chain.ref_start < l_pac;
+    let seed_on_forward = seed.ref_pos < l_pac;
+    if (last_on_forward || first_on_forward) && !seed_on_forward {
+        return false;
+    }
+
+    // C++ lines 373-374: Calculate x and y from LAST SEED's position
+    let x = seed.query_pos - chain.last_qbeg;           // query distance from last seed
+    let y = seed.ref_pos as i64 - chain.last_rbeg as i64; // reference distance from last seed
+
+    // C++ line 375-377: All conditions for merging
+    // y >= 0: seed is downstream on reference
+    // |x - y| <= w: within diagonal band
+    // x - last->len < max_chain_gap: query gap from last seed end
+    // y - last->len < max_chain_gap: reference gap from last seed end
+    if y >= 0
+        && (x as i64 - y) <= opt.w as i64
+        && (y - x as i64) <= opt.w as i64
+        && (x - chain.last_len) < opt.max_chain_gap
+        && (y - chain.last_len as i64) < opt.max_chain_gap as i64
+    {
+        // All constraints passed - merge the seed into the chain
+        chain_seeds.push(seed_idx);
+
+        // Update chain bounds
+        chain.query_start = chain.query_start.min(seed.query_pos);
+        chain.query_end = chain.query_end.max(seed.query_pos + seed.len);
+        chain.ref_start = chain.ref_start.min(seed.ref_pos);
+        chain.ref_end = chain.ref_end.max(seed.ref_pos + seed.len as u64);
+        chain.score += seed.len;
+
+        // Update last seed info (C++ c->seeds[c->n++] = *p)
+        chain.last_qbeg = seed.query_pos;
+        chain.last_rbeg = seed.ref_pos;
+        chain.last_len = seed.len;
+
+        return true;
+    }
+
+    false // Request to add a new chain
+}
+
+/// B-tree based seed chaining - O(n log n) complexity
+/// Implements C++ mem_chain_seeds (bwamem.cpp:806-974)
+pub fn chain_seeds(seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>) {
+    chain_seeds_with_l_pac(seeds, opt, u64::MAX / 2)
+}
+
+// Safety limits to prevent runaway memory/CPU usage
+const MAX_SEEDS_PER_READ: usize = 100_000;
+const MAX_CHAINS_PER_READ: usize = 10_000;
+
+/// B-tree based seed chaining with explicit l_pac parameter
+/// l_pac is the length of the packed reference (for strand detection)
+pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) -> (Vec<Chain>, Vec<Seed>) {
     if seeds.is_empty() {
         return (Vec::new(), seeds);
     }
-    log::debug!("chain_seeds: Input with {} seeds", seeds.len());
 
-    // 1. Sort seeds: by query_pos, then by ref_pos
+    // Runaway guard: cap seed count to prevent memory explosion
+    if seeds.len() > MAX_SEEDS_PER_READ {
+        log::warn!(
+            "chain_seeds: Seed count {} exceeds limit {}, truncating to prevent runaway",
+            seeds.len(),
+            MAX_SEEDS_PER_READ
+        );
+        seeds.truncate(MAX_SEEDS_PER_READ);
+    }
+
+    log::debug!("chain_seeds: Input with {} seeds (B-tree algorithm)", seeds.len());
+
+    // 1. Sort seeds by (query_pos, ref_pos) - same as C++
     seeds.sort_by_key(|s| (s.query_pos, s.ref_pos));
 
-    log::debug!("chain_seeds: Sorted input seeds:");
-    for (idx, seed) in seeds.iter().enumerate() {
-        log::debug!(
-            "  Seed {}: qpos={}, rpos={}, len={}, is_rev={}, interval_size={}",
-            idx,
-            seed.query_pos,
-            seed.ref_pos,
-            seed.len,
-            seed.is_rev,
-            seed.interval_size
-        );
-    }
+    // 2. Initialize B-tree for chain lookup
+    // Key: reference position (chain.pos), Value: index into chains vector
+    let mut tree: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut chains: Vec<Chain> = Vec::new();
+    let mut chain_seeds_vec: Vec<Vec<usize>> = Vec::new(); // Seeds for each chain
 
-    let num_seeds = seeds.len();
-    let mut dp = vec![0; num_seeds]; // dp[i] stores the max score of a chain ending at seeds[i]
-    let mut prev_seed_idx = vec![None; num_seeds]; // To reconstruct the chain
+    // 3. Process each seed
+    for (seed_idx, seed) in seeds.iter().enumerate() {
+        let seed_rpos = seed.ref_pos;
 
-    // Use max_chain_gap from options for gap penalty calculation
-    let max_gap = opt.max_chain_gap;
+        // Find the chain with the closest reference position <= seed_rpos
+        // This is equivalent to kb_intervalp finding the "lower" chain
+        let mut merged = false;
 
-    // 2. Dynamic Programming
-    for i in 0..num_seeds {
-        dp[i] = seeds[i].len; // Initialize with the seed's own length as score
-        for j in 0..i {
-            // Check for compatibility: seed[j] must end before seed[i] starts in both query and reference
-            // And they must be on the same strand
-            if seeds[j].is_rev == seeds[i].is_rev
-                && seeds[j].query_pos + seeds[j].len < seeds[i].query_pos
-                && seeds[j].ref_pos + (seeds[j].len as u64) < seeds[i].ref_pos
-            {
-                // Calculate distances (matching C++ test_and_merge logic)
-                let x = seeds[i].query_pos - seeds[j].query_pos; // query distance
-                let y = seeds[i].ref_pos as i32 - seeds[j].ref_pos as i32; // reference distance
-                let q_gap = x - seeds[j].len; // gap after seed[j] ends
-                let r_gap = y - seeds[j].len as i32; // gap after seed[j] ends
+        // Look for chains with positions close to this seed
+        // Use range query to find candidates
+        if let Some((&chain_pos, &chain_idx)) = tree.range(..=seed_rpos).next_back() {
+            let chain = &mut chains[chain_idx];
+            let chain_seeds = &mut chain_seeds_vec[chain_idx];
 
-                // C++ constraint 1: y >= 0 (new seed downstream on reference)
-                if y < 0 {
-                    continue;
-                }
-
-                // C++ constraint 2: Diagonal band width check (|x - y| <= w)
-                // This ensures seeds stay within a diagonal band
-                let diagonal_offset = x - y;
-                if diagonal_offset.abs() > opt.w {
-                    continue; // Seeds too far from diagonal
-                }
-
-                // C++ constraint 3 & 4: max_chain_gap check
-                if q_gap > max_gap || r_gap > max_gap {
-                    continue; // Gap too large
-                }
-
-                // Simple gap penalty (average of query and reference gaps)
-                let current_gap_penalty = (q_gap + r_gap.abs()) / 2;
-
-                let potential_score = dp[j] + seeds[i].len - current_gap_penalty;
-
-                if potential_score > dp[i] {
-                    log::debug!(
-                        "  DP: Seed {} (q={}, r={}) extends Seed {} (q={}, r={}). Potential score: {} (dp[j]={}, len[i]={}, gap_pen={})",
-                        i,
-                        seeds[i].query_pos,
-                        seeds[i].ref_pos,
-                        j,
-                        seeds[j].query_pos,
-                        seeds[j].ref_pos,
-                        potential_score,
-                        dp[j],
-                        seeds[i].len,
-                        current_gap_penalty
+            // Check strand compatibility (same is_rev flag)
+            if chain.is_rev == seed.is_rev {
+                // Try to merge
+                if test_and_merge(chain, chain_seeds, seed_idx, seed, opt, l_pac) {
+                    merged = true;
+                    log::trace!(
+                        "  Seed {} merged into chain {} (pos={})",
+                        seed_idx, chain_idx, chain_pos
                     );
-                    dp[i] = potential_score;
-                    prev_seed_idx[i] = Some(j);
                 }
             }
         }
-    }
 
-    // 3. Multi-chain extraction via iterative peak finding
-    // Algorithm:
-    // 1. Find highest-scoring peak in DP array
-    // 2. Backtrack to reconstruct chain
-    // 3. Mark seeds in chain as "used"
-    // 4. Repeat until no more peaks above min_chain_weight
-    // This matches bwa-mem2's approach to multi-chain generation
-
-    let mut chains = Vec::new();
-    let mut used_seeds = vec![false; num_seeds]; // Track which seeds are already in chains
-
-    // Iteratively extract chains by finding peaks
-    loop {
-        // Find the highest unused peak
-        let mut best_chain_score = opt.min_chain_weight; // Only consider chains above minimum
-        let mut best_chain_end_idx: Option<usize> = None;
-
-        for i in 0..num_seeds {
-            if !used_seeds[i] && dp[i] >= best_chain_score {
-                best_chain_score = dp[i];
-                best_chain_end_idx = Some(i);
-                log::debug!(
-                    "  Multi-chain extraction: Found new best peak at index {}, score {}",
-                    i,
-                    best_chain_score
+        // If merge failed, create a new chain
+        if !merged {
+            // Runaway guard: cap chain count
+            if chains.len() >= MAX_CHAINS_PER_READ {
+                log::warn!(
+                    "chain_seeds: Chain count {} exceeds limit {}, skipping remaining seeds",
+                    chains.len(),
+                    MAX_CHAINS_PER_READ
                 );
+                break;
             }
-        }
 
-        // Stop if no more chains above threshold
-        if best_chain_end_idx.is_none() {
-            break;
-        }
+            let new_chain_idx = chains.len();
 
-        // Backtrack to reconstruct this chain
-        let mut current_idx = best_chain_end_idx.unwrap();
-        let mut chain_seeds_indices = Vec::new();
-        let mut current_seed = &seeds[current_idx];
+            let new_chain = Chain {
+                score: seed.len,
+                seeds: Vec::new(), // Will be set from chain_seeds_vec later
+                query_start: seed.query_pos,
+                query_end: seed.query_pos + seed.len,
+                ref_start: seed.ref_pos,
+                ref_end: seed.ref_pos + seed.len as u64,
+                is_rev: seed.is_rev,
+                weight: 0,
+                kept: 0,
+                frac_rep: 0.0,
+                rid: 0, // Will be set by caller if needed
+                pos: seed_rpos,
+                // Initialize last seed info to the first seed
+                last_qbeg: seed.query_pos,
+                last_rbeg: seed.ref_pos,
+                last_len: seed.len,
+            };
 
-        let mut query_start = current_seed.query_pos;
-        let mut query_end = current_seed.query_pos + current_seed.len;
-        let mut ref_start = current_seed.ref_pos;
-        let mut ref_end = current_seed.ref_pos + current_seed.len as u64;
-        let is_rev = current_seed.is_rev;
+            chains.push(new_chain);
+            chain_seeds_vec.push(vec![seed_idx]);
 
-        // Backtrack through the chain
-        loop {
-            chain_seeds_indices.push(current_idx);
-            used_seeds[current_idx] = true; // Mark seed as used
-
-            // Get previous seed in chain
-            if let Some(prev_idx) = prev_seed_idx[current_idx] {
-                current_idx = prev_idx;
-                current_seed = &seeds[current_idx];
-
-                // Update chain bounds
-                query_start = query_start.min(current_seed.query_pos);
-                query_end = query_end.max(current_seed.query_pos + current_seed.len);
-                ref_start = ref_start.min(current_seed.ref_pos);
-                ref_end = ref_end.max(current_seed.ref_pos + current_seed.len as u64);
-            } else {
-                break; // Reached start of chain
+            // Insert into B-tree
+            // Handle collision by using a unique key (add small offset if needed)
+            let mut key = seed_rpos;
+            while tree.contains_key(&key) {
+                key += 1; // Simple collision handling
             }
-        }
+            tree.insert(key, new_chain_idx);
 
-        chain_seeds_indices.reverse(); // Order from start to end
-
-        log::debug!(
-            "Chain extraction: chain_idx={}, num_seeds={}, score={}, query=[{}, {}), ref=[{}, {}), is_rev={}",
-            chains.len(),
-            chain_seeds_indices.len(),
-            best_chain_score,
-            query_start,
-            query_end,
-            ref_start,
-            ref_end,
-            is_rev
-        );
-
-        chains.push(Chain {
-            score: best_chain_score,
-            seeds: chain_seeds_indices,
-            query_start,
-            query_end,
-            ref_start,
-            ref_end,
-            is_rev,
-            weight: 0,     // Will be calculated by filter_chains()
-            kept: 0,       // Will be set by filter_chains()
-            frac_rep: 0.0, // Initial placeholder
-        });
-        log::debug!(
-            "  Pushed chain {}: score={}, q=[{},{}), r=[{},{}), is_rev={}",
-            chains.len() - 1,
-            best_chain_score,
-            query_start,
-            query_end,
-            ref_start,
-            ref_end,
-            is_rev
-        );
-
-        // Safety limit: stop after extracting a reasonable number of chains
-        // This prevents pathological cases from consuming too much memory
-        if chains.len() >= 100 {
-            log::debug!(
-                "Extracted maximum of 100 chains from {} seeds, stopping",
-                num_seeds
+            log::trace!(
+                "  Seed {} created new chain {} (pos={})",
+                seed_idx, new_chain_idx, seed_rpos
             );
-            break;
         }
     }
+
+    // 4. Finalize chains - copy seed indices into chain structs
+    for (chain_idx, chain) in chains.iter_mut().enumerate() {
+        chain.seeds = chain_seeds_vec[chain_idx].clone();
+    }
+
+    // 5. Filter out chains below minimum weight
+    let filtered_chains: Vec<Chain> = chains
+        .into_iter()
+        .filter(|c| c.score >= opt.min_chain_weight)
+        .collect();
 
     log::debug!(
-        "Chain extraction: {} seeds → {} chains (min_weight={})",
-        num_seeds,
-        chains.len(),
+        "chain_seeds: {} seeds → {} chains (B-tree, min_weight={})",
+        seeds.len(),
+        filtered_chains.len(),
         opt.min_chain_weight
     );
 
-    (chains, seeds)
+    (filtered_chains, seeds)
 }
 
 /// Filter chains using drop_ratio and score thresholds
