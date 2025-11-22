@@ -252,6 +252,55 @@ fn find_seeds(
         );
     }
 
+    // 3rd round seeding: For highly repetitive regions where all SMEMs exceed max_occ,
+    // do another pass with min_intv = max_mem_intv to find more specific seeds.
+    // This matches BWA-MEM2's -y parameter (seed_occurrence_3rd).
+    let smems_before_3rd_round = all_smems.len();
+    let all_smems_exceed_max_occ = !all_smems.is_empty() && all_smems.iter().all(|s| s.interval_size > opt.max_occ as u64);
+    let mut used_3rd_round_seeding = false;
+
+    if all_smems_exceed_max_occ && opt.max_mem_intv > 1 {
+        used_3rd_round_seeding = true;
+        log::debug!(
+            "{}: All {} SMEMs exceed max_occ={}, doing 3rd round seeding with min_intv={}",
+            query_name, all_smems.len(), opt.max_occ, opt.max_mem_intv
+        );
+
+        // Do 3rd round seeding from multiple positions along the read
+        let step = (query_len / 4).max(1);
+        for start_pos in (0..query_len).step_by(step) {
+            generate_smems_from_position(
+                bwa_idx,
+                query_name,
+                query_len,
+                &encoded_query,
+                false,
+                min_seed_len,
+                opt.max_mem_intv,
+                start_pos,
+                &mut all_smems,
+            );
+            generate_smems_from_position(
+                bwa_idx,
+                query_name,
+                query_len,
+                &encoded_query_rc,
+                true,
+                min_seed_len,
+                opt.max_mem_intv,
+                start_pos,
+                &mut all_smems,
+            );
+        }
+
+        if all_smems.len() > smems_before_3rd_round {
+            log::debug!(
+                "{}: 3rd round seeding added {} new SMEMs (total: {})",
+                query_name, all_smems.len() - smems_before_3rd_round, all_smems.len()
+            );
+        }
+    }
+
     // Filter SMEMs
     let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
     all_smems.sort_by_key(|smem| {
@@ -269,23 +318,37 @@ fn find_seeds(
     // See C++ bwamem.cpp:639-695 - split logic is for creating additional sub-seeds,
     // not for removing seeds that pass the basic quality checks.
 
+    // For 3rd round seeding: if all SMEMs still exceed max_occ, use a much higher threshold
+    // to allow some seeds through. This is the fallback for highly repetitive regions.
+    // BWA-MEM2 uses seed_occurrence_3rd parameter for this purpose.
+    let effective_max_occ = if used_3rd_round_seeding {
+        // Find the minimum occurrence among all SMEMs and use that as the threshold
+        // This ensures at least some seeds pass through
+        let min_occ = all_smems.iter().map(|s| s.interval_size).min().unwrap_or(opt.max_occ as u64);
+        // Use min_occ + 1 to ensure seeds pass
+        let relaxed_threshold = (min_occ + 1).max(opt.max_occ as u64);
+        log::debug!(
+            "{}: 3rd round seeding used, relaxing max_occ filter from {} to {} (min_occ={})",
+            query_name, opt.max_occ, relaxed_threshold, min_occ
+        );
+        relaxed_threshold
+    } else {
+        opt.max_occ as u64
+    };
+
     if let Some(mut prev_smem) = all_smems.first().cloned() {
-        let mut process_smem = |smem: SMEM, _is_first: bool| {
+        for i in 0..all_smems.len() {
+            let smem = all_smems[i];
+            if i > 0 && smem == prev_smem {
+                continue;
+            }
             let seed_len = smem.query_end - smem.query_start + 1;
             let occurrences = smem.interval_size;
             // Keep seeds that pass basic quality filter (min_seed_len AND max_occ)
-            let keep = seed_len >= opt.min_seed_len && occurrences <= opt.max_occ as u64;
-            if keep {
+            if seed_len >= opt.min_seed_len && occurrences <= effective_max_occ {
                 unique_filtered_smems.push(smem);
             }
-        };
-        process_smem(prev_smem, true);
-        for i in 1..all_smems.len() {
-            let current_smem = all_smems[i];
-            if current_smem != prev_smem {
-                process_smem(current_smem, false);
-            }
-            prev_smem = current_smem;
+            prev_smem = smem;
         }
     }
 
@@ -357,6 +420,12 @@ fn find_seeds(
         );
     }
 
+    log::debug!(
+        "{}: Created {} seeds from {} SMEMs",
+        query_name,
+        seeds.len(),
+        sorted_smems.len()
+    );
     (seeds, encoded_query, encoded_query_rc)
 }
 

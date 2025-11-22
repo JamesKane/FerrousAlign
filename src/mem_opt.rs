@@ -198,8 +198,8 @@ pub struct MemCliOptions {
     #[arg(short = 'K', long, value_name = "INT")]
     pub chunk_size: Option<i64>,
 
-    /// Verbose level: 1=error, 2=warning, 3=message, 4+=debugging
-    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    /// Verbose level: 1=error, 2=warning, 3=message, 4=debug, 5+=trace
+    #[arg(short = 'v', long, value_name = "INT", default_value_t = 3)]
     pub verbosity: u8,
 
     /// Minimum score to output

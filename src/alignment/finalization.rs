@@ -720,22 +720,90 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
             let ref_redundant = ref_overlap as f32 > ref_threshold;
             let query_redundant = query_overlap as f32 > query_threshold;
 
+            // Check for same-region opposite-strand alignments
+            // These are the SAME alignment expressed differently (e.g., hard vs soft clips)
+            // where the query regions are complementary when accounting for strand reversal
+            let same_region_opposite_strand = {
+                let p_is_reverse = (p.flag & sam_flags::REVERSE) != 0;
+                let q_is_reverse = (q.flag & sam_flags::REVERSE) != 0;
+                let on_opposite_strands = p_is_reverse != q_is_reverse;
+
+                if !on_opposite_strands {
+                    false
+                } else {
+                    // Check if reference regions are close (within max_ref_len distance)
+                    let max_ref_len = (p_ref_end - p_ref_start).max(q_ref_end - q_ref_start);
+                    let ref_distance = if p_ref_start > q_ref_end {
+                        p_ref_start - q_ref_end
+                    } else if q_ref_start > p_ref_end {
+                        q_ref_start - p_ref_end
+                    } else {
+                        0 // Overlapping
+                    };
+                    let regions_close = ref_distance <= max_ref_len;
+
+                    // Check if scores are similar (within 20%)
+                    let score_ratio = (p.score.min(q.score) as f32) / (p.score.max(q.score).max(1) as f32);
+                    let scores_similar = score_ratio >= 0.8;
+
+                    // Check if query regions are complementary (same region accounting for strand)
+                    // For a read of length L, if one alignment covers [a, b) on forward,
+                    // and another covers [c, d) on reverse, they're the same if:
+                    // [c, d) = [L - b, L - a) (approximately)
+                    let query_len = (p_qe.max(q_qe)).max(148) as i32; // Estimate query length
+
+                    // Transform reverse strand coordinates to forward
+                    let (p_fwd_start, p_fwd_end) = if p_is_reverse {
+                        (query_len - p_qe, query_len - p_qb)
+                    } else {
+                        (p_qb, p_qe)
+                    };
+                    let (q_fwd_start, q_fwd_end) = if q_is_reverse {
+                        (query_len - q_qe, query_len - q_qb)
+                    } else {
+                        (q_qb, q_qe)
+                    };
+
+                    // Check if the forward-normalized query regions overlap significantly
+                    let fwd_b_max = p_fwd_start.max(q_fwd_start);
+                    let fwd_e_min = p_fwd_end.min(q_fwd_end);
+                    let fwd_overlap = if fwd_e_min > fwd_b_max { fwd_e_min - fwd_b_max } else { 0 };
+                    let fwd_min_len = (p_fwd_end - p_fwd_start).min(q_fwd_end - q_fwd_start);
+                    let query_regions_same = fwd_overlap > 0 && fwd_overlap >= (fwd_min_len as f32 * 0.8) as i32;
+
+                    if regions_close && scores_similar && query_regions_same {
+                        log::debug!(
+                            "same_region_opposite_strand match: {}:{} vs {}:{}, ref_dist={}, score_ratio={:.2}, fwd_overlap={}",
+                            p.ref_name, p.pos, q.ref_name, q.pos, ref_distance, score_ratio, fwd_overlap
+                        );
+                    }
+                    regions_close && scores_similar && query_regions_same
+                }
+            };
+
             if ref_redundant && query_redundant {
+                // Note: same_region_opposite_strand detection disabled - it was
+                // removing legitimate supplementary alignments needed for proper pairing
                 // Remove the lower-scoring one (or the current one if equal)
                 // Matches C++ logic: if p->score < q->score remove p, else remove q
+                let removal_reason = if same_region_opposite_strand {
+                    "same-region-opposite-strand"
+                } else {
+                    "ref+query-overlap"
+                };
                 if p.score < q.score {
                     keep[i] = false;
                     log::debug!(
-                        "Removing redundant alignment[{}]: {}:{} score={} (overlaps with [{}] score={})",
-                        i, p.ref_name, p.pos, p.score, j, q.score
+                        "Removing redundant alignment[{}]: {}:{} score={} ({}, overlaps with [{}] score={})",
+                        i, p.ref_name, p.pos, p.score, removal_reason, j, q.score
                     );
                     break;
                 } else {
                     // p.score >= q.score: remove q (the older/lower-indexed one)
                     keep[j] = false;
                     log::debug!(
-                        "Removing redundant alignment[{}]: {}:{} score={} (overlaps with [{}] score={})",
-                        j, q.ref_name, q.pos, q.score, i, p.score
+                        "Removing redundant alignment[{}]: {}:{} score={} ({}, overlaps with [{}] score={})",
+                        j, q.ref_name, q.pos, q.score, removal_reason, i, p.score
                     );
                 }
             }
@@ -833,11 +901,29 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
     let mut sub_scores: Vec<i32> = vec![0; alignments.len()];
     let mut sub_counts: Vec<i32> = vec![0; alignments.len()];
 
+    // Log all alignments for debugging
+    log::debug!(
+        "mark_secondary_alignments: Processing {} alignments for {}",
+        alignments.len(),
+        alignments.first().map(|a| a.query_name.as_str()).unwrap_or("?")
+    );
+    for (i, aln) in alignments.iter().enumerate() {
+        log::debug!(
+            "  [{}] {}:{} score={} query=[{},{}) cigar_len={}",
+            i, aln.ref_name, aln.pos, aln.score, aln.query_start, aln.query_end,
+            aln.cigar.iter().map(|(_, len)| *len as i32).sum::<i32>()
+        );
+    }
+
     // Check each alignment against existing primaries for overlap
     for i in 1..alignments.len() {
         let mut is_secondary = false;
 
         for &j in &primary_indices {
+            log::debug!(
+                "  Checking overlap: aln[{}] vs primary[{}]",
+                i, j
+            );
             if alignments_overlap(&alignments[i], &alignments[j], mask_level) {
                 // Track sub-score for MAPQ calculation
                 if sub_scores[j] == 0 {
@@ -852,6 +938,10 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
                 // Mark as secondary
                 alignments[i].flag |= sam_flags::SECONDARY;
                 is_secondary = true;
+                log::debug!(
+                    "  -> Marked alignment[{}] as SECONDARY (overlaps with [{}])",
+                    i, j
+                );
                 break;
             }
         }
@@ -939,6 +1029,41 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
                 .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
         }
     }
+
+    // Filter supplementary alignments by score relative to primary
+    // BWA-MEM2 uses xa_drop_ratio to filter secondary/XA alignments
+    // Apply similar filter to supplementary to avoid over-generation
+    if !primary_indices.is_empty() {
+        let primary_score = alignments[primary_indices[0]].score;
+        let supp_threshold = (primary_score as f32 * opt.xa_drop_ratio) as i32;
+        let before_filter = alignments.len();
+
+        // Mark low-scoring supplementary for removal
+        let mut to_remove: Vec<usize> = Vec::new();
+        for i in 0..alignments.len() {
+            if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0
+               && alignments[i].score < supp_threshold {
+                to_remove.push(i);
+                log::debug!(
+                    "Filtering supplementary alignment: {}:{} score={} < threshold={}",
+                    alignments[i].ref_name, alignments[i].pos,
+                    alignments[i].score, supp_threshold
+                );
+            }
+        }
+
+        // Remove in reverse order to preserve indices
+        for &i in to_remove.iter().rev() {
+            alignments.remove(i);
+        }
+
+        if before_filter != alignments.len() {
+            log::debug!(
+                "Filtered {} supplementary alignments below score threshold {} (xa_drop_ratio={})",
+                before_filter - alignments.len(), supp_threshold, opt.xa_drop_ratio
+            );
+        }
+    }
 }
 
 /// Check if two alignments overlap significantly on the query sequence
@@ -956,14 +1081,24 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
     let e_min = a1_qe.min(a2_qe);
 
     if e_min <= b_max {
+        log::debug!(
+            "alignments_overlap: NO OVERLAP - a1[{},{}), a2[{},{}), b_max={}, e_min={}",
+            a1_qb, a1_qe, a2_qb, a2_qe, b_max, e_min
+        );
         return false; // No overlap
     }
 
     let overlap = e_min - b_max;
     let min_len = (a1_qe - a1_qb).min(a2_qe - a2_qb);
+    let threshold = (min_len as f32 * mask_level) as i32;
+    let result = overlap >= threshold;
 
-    // Overlap is significant if >= mask_level * min_length
-    overlap >= (min_len as f32 * mask_level) as i32
+    log::debug!(
+        "alignments_overlap: a1[{},{}), a2[{},{}), overlap={}, min_len={}, threshold={}, result={}",
+        a1_qb, a1_qe, a2_qb, a2_qe, overlap, min_len, threshold, result
+    );
+
+    result
 }
 
 // ----------------------------------------------------------------------------
