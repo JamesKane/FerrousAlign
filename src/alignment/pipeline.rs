@@ -11,6 +11,7 @@ use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::generate_sa_tags;
 use crate::alignment::finalization::generate_xa_tags;
 use crate::alignment::finalization::mark_secondary_alignments;
+use crate::alignment::finalization::remove_redundant_alignments;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::seeding::SMEM;
 use crate::alignment::seeding::Seed;
@@ -189,7 +190,8 @@ fn find_seeds(
 
     // Re-seeding pass: For long unique SMEMs, re-seed from middle to find split alignments
     // This matches C++ bwamem.cpp:695-714
-    let split_len = (opt.min_seed_len as f32 * opt.split_factor) as i32;
+    // C++ uses: (int)(min_seed_len * split_factor + 0.499) which rounds to nearest
+    let split_len = (opt.min_seed_len as f32 * opt.split_factor + 0.499) as i32;
     let split_width = opt.split_width as u64;
 
     // Collect re-seeding candidates from initial SMEMs
@@ -781,6 +783,10 @@ fn finalize_alignments(
                 alignments.len()
             );
         }
+
+        // Remove redundant alignments (>95% overlap on both ref and query)
+        // This matches C++ mem_sort_dedup_patch (bwamem.cpp:292-351)
+        remove_redundant_alignments(&mut alignments, opt);
 
         alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
         mark_secondary_alignments(&mut alignments, opt);

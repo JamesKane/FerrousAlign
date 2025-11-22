@@ -621,6 +621,171 @@ impl Alignment {
     }
 }
 
+/// Remove redundant alignments that overlap significantly on both reference and query
+/// Implements C++ mem_sort_dedup_patch (bwamem.cpp:292-351)
+///
+/// This function removes nearly-identical alignments (>95% overlap on BOTH reference AND query)
+/// BEFORE the secondary/supplementary marking stage. This prevents over-generation of
+/// supplementary alignments from nearly-identical mapping locations.
+///
+/// Algorithm:
+/// 1. Sort alignments by reference end position
+/// 2. For each alignment, check against nearby alignments (same ref, within max_chain_gap)
+/// 3. If overlap > mask_level_redun on BOTH ref AND query: remove lower-scoring one
+/// 4. Remove exact duplicates (same score, same position)
+pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
+    if alignments.len() <= 1 {
+        return;
+    }
+
+    log::debug!(
+        "remove_redundant_alignments: processing {} alignments, mask_level_redun={}",
+        alignments.len(),
+        opt.mask_level_redun
+    );
+
+    let mask_level_redun = opt.mask_level_redun;
+    let max_chain_gap = opt.max_chain_gap as u64;
+
+    // Sort by reference end position (matching C++ ks_introsort(mem_ars2))
+    // We approximate ref_end as pos + aligned_length from CIGAR
+    alignments.sort_by(|a, b| {
+        let a_ref_end = a.pos + alignment_ref_length(a);
+        let b_ref_end = b.pos + alignment_ref_length(b);
+        a.ref_id
+            .cmp(&b.ref_id)
+            .then_with(|| a_ref_end.cmp(&b_ref_end))
+    });
+
+    // Mark alignments for removal (can't remove in-place while iterating)
+    let mut keep = vec![true; alignments.len()];
+
+    for i in 1..alignments.len() {
+        if !keep[i] {
+            continue;
+        }
+
+        let p = &alignments[i];
+        let p_ref_start = p.pos;
+        let p_ref_end = p.pos + alignment_ref_length(p);
+
+        // Check against previous alignments (same ref, within max_chain_gap)
+        for j in (0..i).rev() {
+            if !keep[j] {
+                continue;
+            }
+
+            let q = &alignments[j];
+
+            // Skip if different reference
+            if q.ref_id != p.ref_id {
+                break;
+            }
+
+            let q_ref_end = q.pos + alignment_ref_length(q);
+
+            // Skip if too far apart
+            if p_ref_start >= q_ref_end + max_chain_gap {
+                break;
+            }
+
+            let q_ref_start = q.pos;
+
+            // Calculate reference overlap
+            let ref_overlap = if p_ref_start < q_ref_end && q_ref_start < p_ref_end {
+                (p_ref_end.min(q_ref_end) - p_ref_start.max(q_ref_start)) as i64
+            } else {
+                0
+            };
+
+            // Calculate query overlap
+            let p_qb = p.query_start;
+            let p_qe = p.query_end;
+            let q_qb = q.query_start;
+            let q_qe = q.query_end;
+
+            let query_overlap = if p_qb < q_qe && q_qb < p_qe {
+                p_qe.min(q_qe) - p_qb.max(q_qb)
+            } else {
+                0
+            };
+
+            // Min lengths
+            let min_ref_len = ((p_ref_end - p_ref_start) as i64).min((q_ref_end - q_ref_start) as i64);
+            let min_query_len = (p_qe - p_qb).min(q_qe - q_qb);
+
+            // Check if redundant: overlap > mask_level_redun on BOTH ref AND query
+            let ref_threshold = mask_level_redun * min_ref_len as f32;
+            let query_threshold = mask_level_redun * min_query_len as f32;
+            let ref_redundant = ref_overlap as f32 > ref_threshold;
+            let query_redundant = query_overlap as f32 > query_threshold;
+
+            if ref_redundant && query_redundant {
+                // Remove the lower-scoring one (or the current one if equal)
+                // Matches C++ logic: if p->score < q->score remove p, else remove q
+                if p.score < q.score {
+                    keep[i] = false;
+                    log::debug!(
+                        "Removing redundant alignment[{}]: {}:{} score={} (overlaps with [{}] score={})",
+                        i, p.ref_name, p.pos, p.score, j, q.score
+                    );
+                    break;
+                } else {
+                    // p.score >= q.score: remove q (the older/lower-indexed one)
+                    keep[j] = false;
+                    log::debug!(
+                        "Removing redundant alignment[{}]: {}:{} score={} (overlaps with [{}] score={})",
+                        j, q.ref_name, q.pos, q.score, i, p.score
+                    );
+                }
+            }
+        }
+    }
+
+    // Remove marked alignments
+    let before_count = alignments.len();
+    let mut write_idx = 0;
+    for read_idx in 0..alignments.len() {
+        if keep[read_idx] {
+            if write_idx != read_idx {
+                alignments.swap(write_idx, read_idx);
+            }
+            write_idx += 1;
+        }
+    }
+    alignments.truncate(write_idx);
+
+    // Sort by score for subsequent processing
+    alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
+
+    // Remove exact duplicates (same score, same position, same query bounds)
+    alignments.dedup_by(|a, b| {
+        a.score == b.score && a.pos == b.pos && a.ref_id == b.ref_id
+            && a.query_start == b.query_start && a.query_end == b.query_end
+    });
+
+    if alignments.len() < before_count {
+        log::debug!(
+            "remove_redundant_alignments: removed {} redundant alignments (before: {}, after: {})",
+            before_count - alignments.len(),
+            before_count,
+            alignments.len()
+        );
+    }
+}
+
+/// Calculate approximate reference length from CIGAR
+fn alignment_ref_length(alignment: &Alignment) -> u64 {
+    let mut ref_len = 0u64;
+    for &(op, len) in &alignment.cigar {
+        match op {
+            b'M' | b'D' | b'N' | b'=' | b'X' => ref_len += len as u64,
+            _ => {}
+        }
+    }
+    ref_len
+}
+
 /// Mark secondary alignments and calculate MAPQ values
 /// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
 ///

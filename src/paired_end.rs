@@ -909,9 +909,11 @@ fn output_batch_paired(
 
             // Clear or set secondary flag based on pairing result
             if is_primary {
-                // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
-                // Preserve SUPPLEMENTARY flag (sam_flags::SUPPLEMENTARY) while clearing SECONDARY (sam_flags::SECONDARY)
+                // This is the best paired alignment - ensure it's PRIMARY
+                // Clear BOTH secondary AND supplementary flags (matching single_end.rs behavior)
+                // The primary alignment for paired-end should never have these flags
                 alignment.flag &= !sam_flags::SECONDARY;
+                alignment.flag &= !sam_flags::SUPPLEMENTARY;
             } else if !is_unmapped && !is_supplementary {
                 // Non-best alignment that's not supplementary - mark as secondary
                 alignment.flag |= sam_flags::SECONDARY;
@@ -952,9 +954,11 @@ fn output_batch_paired(
 
             // Clear or set secondary flag based on pairing result
             if is_primary {
-                // This is the best paired alignment - ensure it's PRIMARY (clear secondary flag)
-                // Preserve SUPPLEMENTARY flag (sam_flags::SUPPLEMENTARY) while clearing SECONDARY (sam_flags::SECONDARY)
+                // This is the best paired alignment - ensure it's PRIMARY
+                // Clear BOTH secondary AND supplementary flags (matching single_end.rs behavior)
+                // The primary alignment for paired-end should never have these flags
                 alignment.flag &= !sam_flags::SECONDARY;
+                alignment.flag &= !sam_flags::SUPPLEMENTARY;
             } else if !is_unmapped && !is_supplementary {
                 // Non-best alignment that's not supplementary - mark as secondary
                 alignment.flag |= sam_flags::SECONDARY;
