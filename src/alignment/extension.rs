@@ -2,6 +2,7 @@
 // Alignment Job Structure and Divergence Estimation
 // ----------------------------------------------------------------------------
 use crate::alignment::banded_swa::BandedPairWiseSW;
+use crate::alignment::ksw_affine_gap::{ksw_extend2, KswExtendResult};
 
 // Structure to hold alignment job for batching
 #[derive(Clone)]
@@ -321,23 +322,59 @@ pub(crate) fn execute_scalar_alignments(
                 .map(|(_, count)| count)
                 .sum();
 
-            // Log if CIGAR has excessive indels (likely bug)
-            if total_insertions > 10 || total_deletions > 5 {
-                // ATOMIC LOG: All data in single statement to avoid multi-threaded interleaving
-                log::debug!(
-                    "PATHOLOGICAL_CIGAR_SCALAR|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}|QUERY={:?}|TARGET={:?}",
-                    idx,
-                    qlen,
-                    tlen,
-                    job.band_width,
-                    score,
-                    total_insertions,
-                    total_deletions,
-                    cigar,
-                    job.query,
-                    job.target
-                );
-            }
+            // Check if this is a pathological alignment that might benefit from ksw_extend2
+            let is_pathological = total_insertions > 10 || total_deletions > 5;
+            let is_low_score = score < (qlen / 2); // Score less than half query length
+
+            // Try ksw_extend2 fallback for pathological or low-scoring alignments
+            let (final_score, final_cigar, final_ref_aligned, final_query_aligned) =
+                if is_pathological || is_low_score {
+                    // Log the pathological CIGAR
+                    log::debug!(
+                        "PATHOLOGICAL_CIGAR_SCALAR|idx={}|qlen={}|tlen={}|bw={}|score={}|ins={}|del={}|CIGAR={:?}",
+                        idx, qlen, tlen, job.band_width, score, total_insertions, total_deletions, cigar
+                    );
+
+                    // Try ksw_extend2 fallback
+                    let h0 = job.seed_len.max(1);
+                    if let Some(extend_result) = try_ksw_extend2_fallback(
+                        sw_params,
+                        &job.query,
+                        &job.target,
+                        job.band_width,
+                        h0,
+                        score,
+                    ) {
+                        // ksw_extend2 found a better alignment
+                        let new_score = if extend_result.gscore > 0 {
+                            extend_result.gscore
+                        } else {
+                            extend_result.score
+                        };
+
+                        // Generate CIGAR from the extend result
+                        let (new_cigar, new_ref_aligned, new_query_aligned) =
+                            generate_cigar_from_extend_result(
+                                extend_result.qle,
+                                extend_result.tle,
+                                &job.query,
+                                &job.target,
+                            );
+
+                        log::debug!(
+                            "ksw_extend2 fallback used|idx={}|old_score={}|new_score={}|new_cigar={:?}",
+                            idx, score, new_score, new_cigar
+                        );
+
+                        (new_score, new_cigar, new_ref_aligned, new_query_aligned)
+                    } else {
+                        // Fallback didn't improve, use original result
+                        (score, cigar, ref_aligned, query_aligned)
+                    }
+                } else {
+                    // Not pathological, use original result
+                    (score, cigar, ref_aligned, query_aligned)
+                };
 
             if idx < 3 {
                 // Log first 3 alignments for debugging
@@ -346,13 +383,13 @@ pub(crate) fn execute_scalar_alignments(
                     idx,
                     qlen,
                     tlen,
-                    score,
-                    cigar.len(),
-                    cigar.first().map(|&(op, len)| (op as char, len))
+                    final_score,
+                    final_cigar.len(),
+                    final_cigar.first().map(|&(op, len)| (op as char, len))
                 );
             }
 
-            (score, cigar, ref_aligned, query_aligned)
+            (final_score, final_cigar, final_ref_aligned, final_query_aligned)
         })
         .collect()
 }
@@ -523,6 +560,127 @@ pub(crate) fn execute_batched_alignments(
     all_results
 }
 
+/// Try ksw_extend2 as a fallback for pathological alignments.
+///
+/// This function attempts alignment using the affine-gap Smith-Waterman algorithm
+/// which handles large indels better than the local scalar approach.
+///
+/// Returns `Some((score, extended_result))` if ksw_extend2 found a better alignment,
+/// `None` if the original scalar result should be used.
+fn try_ksw_extend2_fallback(
+    sw_params: &BandedPairWiseSW,
+    query: &[u8],
+    target: &[u8],
+    band_width: i32,
+    h0: i32,
+    original_score: i32,
+) -> Option<KswExtendResult> {
+    let qlen = query.len() as i32;
+    let tlen = target.len() as i32;
+
+    // Skip if sequences are too short
+    if qlen < 10 || tlen < 10 {
+        return None;
+    }
+
+    // Try ksw_extend2 with wider band to handle large indels
+    let wider_band = (band_width * 2).max(50);
+
+    // Get scoring matrix as slice
+    let mat: &[i8] = sw_params.scoring_matrix();
+
+    let result = ksw_extend2(
+        qlen,
+        query,
+        tlen,
+        target,
+        sw_params.alphabet_size(),
+        mat,
+        sw_params.o_del(),
+        sw_params.e_del(),
+        sw_params.o_ins(),
+        sw_params.e_ins(),
+        wider_band,
+        sw_params.end_bonus(),
+        sw_params.zdrop(),
+        h0.max(1), // h0 must be positive
+    );
+
+    // Check if ksw_extend2 found a significantly better alignment
+    // gscore > 0 means it aligned the entire query
+    // score > original_score means it found a better alignment
+    let improvement_threshold = (original_score as f64 * 0.2) as i32; // 20% improvement needed
+    if result.gscore > 0 && result.gscore > original_score + improvement_threshold {
+        log::debug!(
+            "ksw_extend2 fallback improved alignment: original={}, gscore={}, qle={}, tle={}, max_off={}",
+            original_score, result.gscore, result.qle, result.tle, result.max_off
+        );
+        Some(result)
+    } else if result.score > original_score + improvement_threshold {
+        log::debug!(
+            "ksw_extend2 fallback found better local: original={}, score={}, qle={}, tle={}, max_off={}",
+            original_score, result.score, result.qle, result.tle, result.max_off
+        );
+        Some(result)
+    } else {
+        None
+    }
+}
+
+/// Generate a simple CIGAR from ksw_extend2 result positions.
+///
+/// This creates an approximate CIGAR based on the alignment length difference.
+/// For more accurate CIGARs, a full traceback would be needed.
+fn generate_cigar_from_extend_result(
+    qle: i32,
+    tle: i32,
+    query: &[u8],
+    target: &[u8],
+) -> (Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
+    let qlen = qle.min(query.len() as i32);
+    let tlen = tle.min(target.len() as i32);
+
+    let mut cigar = Vec::new();
+    let mut ref_aligned = Vec::new();
+    let mut query_aligned = Vec::new();
+
+    // Simple CIGAR generation based on length difference
+    let len_diff = tlen - qlen;
+
+    if len_diff == 0 {
+        // Sequences are same length - just report matches/mismatches as M
+        cigar.push((b'M', qlen));
+        ref_aligned.extend_from_slice(&target[..tlen as usize]);
+        query_aligned.extend_from_slice(&query[..qlen as usize]);
+    } else if len_diff > 0 {
+        // Target is longer - there are deletions (gaps in query)
+        // Split as: some M, then D, then more M
+        let match_len = qlen;
+        cigar.push((b'M', match_len));
+        cigar.push((b'D', len_diff));
+        ref_aligned.extend_from_slice(&target[..tlen as usize]);
+        query_aligned.extend_from_slice(&query[..qlen as usize]);
+        // Add gap characters for the deletion
+        for _ in 0..len_diff {
+            query_aligned.push(b'-');
+        }
+    } else {
+        // Query is longer - there are insertions (gaps in target)
+        let ins_len = -len_diff;
+        let match_len = tlen;
+        cigar.push((b'M', match_len));
+        cigar.push((b'I', ins_len));
+        ref_aligned.extend_from_slice(&target[..tlen as usize]);
+        // Add gap characters for the insertion
+        for _ in 0..ins_len {
+            ref_aligned.push(b'-');
+        }
+        query_aligned.extend_from_slice(&query[..qlen as usize]);
+    }
+
+    (cigar, ref_aligned, query_aligned)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::alignment::utils::DEFAULT_SCORING_MATRIX;
@@ -604,5 +762,121 @@ mod tests {
             scalar_results[1].1, batched_results[1].1,
             "CIGARs should match"
         );
+    }
+
+    #[test]
+    fn test_ksw_extend2_fallback_helper() {
+        // Test the try_ksw_extend2_fallback function directly
+        use crate::alignment::banded_swa::BandedPairWiseSW;
+
+        let sw_params =
+            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, 5, 5, DEFAULT_SCORING_MATRIX, 2, -4);
+
+        // Create a query and target with large indel
+        // Query: ACGTACGTACGTACGTACGTACGT (24 bases)
+        // Target: ACGTACGT--DELETION--ACGTACGTACGT (24 + 10 = 34 bases with 10bp deleted from query's perspective)
+        let query: Vec<u8> = vec![
+            0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3,
+        ]; // 24bp
+
+        // Target has 10bp gap in the middle (simulating deletion in query)
+        let target: Vec<u8> = vec![
+            0, 1, 2, 3, 0, 1, 2, 3, // 8bp matching
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 10bp different (simulates indel region)
+            0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, // 16bp
+        ]; // 34bp total
+
+        // Try the fallback with a low original score (simulating pathological scalar result)
+        let result = super::try_ksw_extend2_fallback(
+            &sw_params, &query, &target, 10, // band_width
+            12,  // h0 (half the query)
+            5,   // original_score (artificially low)
+        );
+
+        // The fallback should find something (result may or may not be better)
+        // This test verifies the function runs without panic
+        if let Some(extend_result) = result {
+            assert!(
+                extend_result.score > 0 || extend_result.gscore > 0,
+                "Extend result should have positive score"
+            );
+            println!(
+                "ksw_extend2 found: score={}, gscore={}, qle={}, tle={}",
+                extend_result.score, extend_result.gscore, extend_result.qle, extend_result.tle
+            );
+        }
+    }
+
+    #[test]
+    fn test_generate_cigar_from_extend_result() {
+        // Test CIGAR generation from extend result
+        let query = vec![0u8, 1, 2, 3, 0, 1, 2, 3]; // 8bp
+        let target = vec![0u8, 1, 2, 3, 0, 1, 2, 3, 0, 1]; // 10bp
+
+        // Same length
+        let (cigar, ref_al, query_al) = super::generate_cigar_from_extend_result(8, 8, &query, &target);
+        assert_eq!(cigar.len(), 1);
+        assert_eq!(cigar[0], (b'M', 8));
+        assert_eq!(ref_al.len(), 8);
+        assert_eq!(query_al.len(), 8);
+
+        // Target longer (deletion in query)
+        let (cigar, _, _) = super::generate_cigar_from_extend_result(8, 10, &query, &target);
+        assert_eq!(cigar.len(), 2);
+        assert_eq!(cigar[0], (b'M', 8));
+        assert_eq!(cigar[1], (b'D', 2));
+
+        // Query longer (insertion in query)
+        let (cigar, _, _) = super::generate_cigar_from_extend_result(10, 8, &target, &query);
+        assert_eq!(cigar.len(), 2);
+        assert_eq!(cigar[0], (b'M', 8));
+        assert_eq!(cigar[1], (b'I', 2));
+    }
+
+    #[test]
+    fn test_scalar_alignment_with_large_indel() {
+        // Test that scalar alignment with large indel triggers fallback consideration
+        use crate::alignment::banded_swa::BandedPairWiseSW;
+
+        let sw_params =
+            BandedPairWiseSW::new(4, 2, 4, 2, 100, 0, 5, 5, DEFAULT_SCORING_MATRIX, 2, -4);
+
+        // Create sequences with a 10bp insertion in query
+        // Reference: ACGTACGTACGTACGT (16bp)
+        // Query:     ACGTACGT[INSERTION]ACGTACGT (16bp + 10bp = 26bp)
+        let ref_seq: Vec<u8> = vec![
+            0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, // 16bp
+        ];
+        let query_seq: Vec<u8> = vec![
+            0, 1, 2, 3, 0, 1, 2, 3, // 8bp before insertion
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 10bp insertion
+            0, 1, 2, 3, 0, 1, 2, 3, // 8bp after insertion
+        ]; // 26bp total
+
+        let jobs = vec![super::AlignmentJob {
+            seed_idx: 0,
+            query: query_seq.clone(),
+            target: ref_seq.clone(),
+            band_width: 5, // Narrow band to potentially cause issues
+            query_offset: 0,
+            direction: None,
+            seed_len: 8, // Seed covers first 8bp
+        }];
+
+        // Run scalar alignments - this should trigger fallback consideration
+        // due to the large indel potentially causing pathological CIGAR
+        let results = super::execute_scalar_alignments(&sw_params, &jobs);
+        assert_eq!(results.len(), 1, "Should return 1 result");
+
+        // Verify we got some result (score may vary based on whether fallback was used)
+        let (score, cigar, _, _) = &results[0];
+        println!(
+            "Large indel test: score={}, cigar_ops={}",
+            score,
+            cigar.len()
+        );
+
+        // The alignment should complete without panic
+        assert!(*score >= 0, "Score should be non-negative");
     }
 }

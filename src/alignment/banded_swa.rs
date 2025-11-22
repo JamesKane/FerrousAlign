@@ -1166,6 +1166,47 @@ impl BandedPairWiseSW {
             })
             .collect()
     }
+
+    // Getter methods for ksw_affine_gap integration
+    /// Returns the gap open penalty for deletions
+    pub fn o_del(&self) -> i32 {
+        self.o_del
+    }
+
+    /// Returns the gap extension penalty for deletions
+    pub fn e_del(&self) -> i32 {
+        self.e_del
+    }
+
+    /// Returns the gap open penalty for insertions
+    pub fn o_ins(&self) -> i32 {
+        self.o_ins
+    }
+
+    /// Returns the gap extension penalty for insertions
+    pub fn e_ins(&self) -> i32 {
+        self.e_ins
+    }
+
+    /// Returns the Z-drop threshold
+    pub fn zdrop(&self) -> i32 {
+        self.zdrop
+    }
+
+    /// Returns the end bonus
+    pub fn end_bonus(&self) -> i32 {
+        self.end_bonus
+    }
+
+    /// Returns the alphabet size
+    pub fn alphabet_size(&self) -> i32 {
+        self.m
+    }
+
+    /// Returns the scoring matrix
+    pub fn scoring_matrix(&self) -> &[i8; 25] {
+        &self.mat
+    }
 }
 
 // Rust equivalent of dnaOutScore
