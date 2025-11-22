@@ -94,6 +94,57 @@ impl BntSeq {
         }
     }
 
+    /// Convert a reference position interval to chromosome ID (rid)
+    /// Returns -1 if the interval spans multiple chromosomes or is out of bounds
+    /// Matches C++ bns_intv2rid (bntseq.cpp:207-221)
+    pub fn pos_to_rid(&self, pos_start: u64, pos_end: u64) -> i32 {
+        if self.annotations.is_empty() || pos_start >= pos_end {
+            return -1;
+        }
+
+        // Binary search for the start position
+        let l_pac = self.packed_sequence_length;
+
+        // Handle positions on reverse strand (>= l_pac)
+        let (start, end) = if pos_start >= l_pac {
+            // Convert to forward strand coordinates for lookup
+            let fwd_end = (l_pac << 1) - pos_start;
+            let fwd_start = (l_pac << 1) - pos_end;
+            (fwd_start, fwd_end)
+        } else if pos_end > l_pac {
+            // Spans forward-reverse boundary
+            return -1;
+        } else {
+            (pos_start, pos_end)
+        };
+
+        // Binary search for the chromosome containing start
+        let mut lo = 0usize;
+        let mut hi = self.annotations.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if start >= self.annotations[mid].offset + self.annotations[mid].sequence_length as u64 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+
+        if lo >= self.annotations.len() {
+            return -1;
+        }
+
+        let rid = lo as i32;
+
+        // Check if interval is contained within this chromosome
+        let ann = &self.annotations[lo];
+        if start >= ann.offset && end <= ann.offset + ann.sequence_length as u64 {
+            rid
+        } else {
+            -1 // Spans multiple chromosomes
+        }
+    }
+
     pub fn bns_fasta2bntseq<R: Read + 'static>(
         reader: R,
         prefix: &Path,

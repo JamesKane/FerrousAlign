@@ -297,6 +297,9 @@ fn find_seeds(
     let mut sorted_smems = unique_filtered_smems;
     sorted_smems.sort_by_key(|smem| -(smem.query_end - smem.query_start + 1));
 
+    // Match C++ SEEDS_PER_READ limit (see bwa-mem2/src/macro.h)
+    const SEEDS_PER_READ: usize = 500;
+
     let mut seeds = Vec::new();
     for smem in sorted_smems.iter() {
         // Use the new get_sa_entries function to get multiple reference positions
@@ -307,15 +310,39 @@ fn find_seeds(
             opt.max_occ as u32,
         );
 
+        let seed_len = smem.query_end - smem.query_start;
         for ref_pos in ref_positions {
+            // Compute rid (chromosome ID) - skip seeds that span chromosome boundaries
+            // Matches C++ bwamem.cpp:911-914
+            let rid = bwa_idx.bns.pos_to_rid(ref_pos, ref_pos + seed_len as u64);
+            if rid < 0 {
+                // Seed spans multiple chromosomes or forward-reverse boundary - skip
+                continue;
+            }
+
             let seed = Seed {
                 query_pos: smem.query_start,
                 ref_pos,
-                len: smem.query_end - smem.query_start,
+                len: seed_len,
                 is_rev: smem.is_reverse_complement,
                 interval_size: smem.interval_size,
+                rid,
             };
             seeds.push(seed);
+
+            // Hard limit on seeds per read to prevent memory explosion
+            if seeds.len() >= SEEDS_PER_READ {
+                log::debug!(
+                    "{}: Hit SEEDS_PER_READ limit ({}), truncating",
+                    query_name,
+                    SEEDS_PER_READ
+                );
+                break;
+            }
+        }
+
+        if seeds.len() >= SEEDS_PER_READ {
+            break;
         }
     }
 

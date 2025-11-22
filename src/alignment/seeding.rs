@@ -13,6 +13,7 @@ pub struct Seed {
     pub len: i32,           // Length of the seed
     pub is_rev: bool,       // Is it on the reverse strand?
     pub interval_size: u64, // BWT interval size (occurrence count)
+    pub rid: i32,           // Reference sequence ID (chromosome), -1 if spans boundaries
 }
 
 // Define a struct to represent a Super Maximal Exact Match (SMEM)

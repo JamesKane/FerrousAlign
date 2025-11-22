@@ -50,6 +50,11 @@ fn test_and_merge(
     opt: &MemOpt,
     l_pac: u64,
 ) -> bool {
+    // C++ bwamem.cpp:359: Different chromosome - request a new chain
+    if seed.rid != chain.rid {
+        return false;
+    }
+
     // C++ bwamem.cpp:361-363 - get last seed's end positions
     let last_qend = chain.last_qbeg + chain.last_len;
     let last_rend = chain.last_rbeg + chain.last_len as u64;
@@ -198,7 +203,7 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
                 weight: 0,
                 kept: 0,
                 frac_rep: 0.0,
-                rid: 0, // Will be set by caller if needed
+                rid: seed.rid, // Chromosome ID from seed
                 pos: seed_rpos,
                 // Initialize last seed info to the first seed
                 last_qbeg: seed.query_pos,

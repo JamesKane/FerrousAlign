@@ -299,7 +299,7 @@ impl Default for MemOpt {
 
             // Chaining
             min_chain_weight: 0,
-            max_chain_extend: 1 << 30,
+            max_chain_extend: 50, // Limit chains to extend (was 1<<30 which caused memory explosion)
             max_chain_gap: 10000,
 
             // Filtering
