@@ -657,8 +657,9 @@ fn output_batch_paired(
                 rnext: "*".to_string(),
                 pnext: 0,
                 tlen: 0,
-                seq: String::from_utf8_lossy(seq2).to_string(),
-                qual: qual2.to_string(),
+                // Don't store seq/qual - they're passed at output time
+                seq: String::new(),
+                qual: String::new(),
                 tags: Vec::new(),
                 query_start: 0,
                 query_end: 0,
@@ -929,7 +930,9 @@ fn output_batch_paired(
                     .push(("MC".to_string(), format!("Z:{}", mate2_cigar)));
             }
 
-            let sam_record = alignment.to_sam_string();
+            // Use external seq/qual to avoid storing in Alignment struct
+            let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
+            let sam_record = alignment.to_sam_string_with_seq(seq1_str, qual1);
             writeln!(writer, "{}", sam_record)?;
             records_written += 1;
         }
@@ -974,7 +977,9 @@ fn output_batch_paired(
                     .push(("MC".to_string(), format!("Z:{}", mate1_cigar)));
             }
 
-            let sam_record = alignment.to_sam_string();
+            // Use external seq/qual to avoid storing in Alignment struct
+            let seq2_str = std::str::from_utf8(seq2).unwrap_or("");
+            let sam_record = alignment.to_sam_string_with_seq(seq2_str, qual2);
             writeln!(writer, "{}", sam_record)?;
             records_written += 1;
         }

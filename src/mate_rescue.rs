@@ -216,20 +216,9 @@ pub fn mem_matesw(
             rnext: String::from("*"),
             pnext: 0,
             tlen: 0,
-            seq: String::from_utf8(
-                mate_seq
-                    .iter()
-                    .map(|&b| match b {
-                        0 => b'A',
-                        1 => b'C',
-                        2 => b'G',
-                        3 => b'T',
-                        _ => b'N',
-                    })
-                    .collect(),
-            )
-            .unwrap(),
-            qual: mate_qual.to_string(),
+            // Don't store seq/qual - they're passed at output time for memory efficiency
+            seq: String::new(),
+            qual: String::new(),
             tags: Vec::new(),
             // Internal fields for alignment selection
             query_start: out_score.query_end_pos - out_score.query_end_pos, // Full query alignment

@@ -822,8 +822,9 @@ fn finalize_alignments(
                 rnext: "*".to_string(),
                 pnext: 0,
                 tlen: 0,
-                seq: String::from_utf8_lossy(query_seq).to_string(),
-                qual: query_qual.to_string(),
+                // Don't store seq/qual here - they're passed at output time for memory efficiency
+                seq: String::new(),
+                qual: String::new(),
                 tags: vec![
                     ("AS".to_string(), format!("i:{}", score)),
                     ("NM".to_string(), format!("i:{}", nm)),
@@ -885,8 +886,9 @@ fn finalize_alignments(
             rnext: "*".to_string(),
             pnext: 0,
             tlen: 0,
-            seq: String::from_utf8_lossy(query_seq).to_string(),
-            qual: query_qual.to_string(),
+            // Don't store seq/qual here - they're passed at output time for memory efficiency
+            seq: String::new(),
+            qual: String::new(),
             tags: vec![
                 ("AS".to_string(), "i:0".to_string()),
                 ("NM".to_string(), "i:0".to_string()),

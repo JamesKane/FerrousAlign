@@ -83,21 +83,23 @@ impl Alignment {
             .sum()
     }
 
+    /// Convert alignment to SAM format string
+    /// Uses internal seq/qual fields (legacy method, use to_sam_string_with_seq for memory efficiency)
     pub fn to_sam_string(&self) -> String {
+        self.to_sam_string_with_seq(&self.seq, &self.qual)
+    }
+
+    /// Convert alignment to SAM format string with externally provided seq/qual
+    /// This avoids storing seq/qual in the Alignment struct, saving ~300 bytes per alignment
+    pub fn to_sam_string_with_seq(&self, seq: &str, qual: &str) -> String {
         // Convert CIGAR to string format
         let cigar_string = self.cigar_string();
-
-        // TODO: Clipping penalties (opt.pen_clip5, opt.pen_clip3, opt.pen_unpaired)
-        // are used in C++ to adjust alignment scores, not SAM output directly.
-        // They affect score calculation during alignment extension and pair scoring.
-        // This requires deeper integration into the scoring logic in banded_swa.rs
 
         // Handle reverse complement for SEQ and QUAL if flag sam_flags::REVERSE (reverse strand) is set
         // Matching bwa-mem2 mem_aln2sam() behavior (bwamem.cpp:1706-1716)
         let (mut output_seq, mut output_qual) = if self.flag & sam_flags::REVERSE != 0 {
             // Reverse strand: reverse complement the sequence and reverse the quality
-            let rev_comp_seq: String = self
-                .seq
+            let rev_comp_seq: String = seq
                 .chars()
                 .rev()
                 .map(|c| match c {
@@ -109,11 +111,11 @@ impl Alignment {
                     _ => c, // Keep any other characters as-is
                 })
                 .collect();
-            let rev_qual: String = self.qual.chars().rev().collect();
+            let rev_qual: String = qual.chars().rev().collect();
             (rev_comp_seq, rev_qual)
         } else {
             // Forward strand: use sequence and quality as-is
-            (self.seq.clone(), self.qual.clone())
+            (seq.to_string(), qual.to_string())
         };
 
         // Handle hard clips (H) - trim SEQ and QUAL to match CIGAR
@@ -605,8 +607,9 @@ impl Alignment {
             rnext,
             pnext,
             tlen: 0,
-            seq: String::from_utf8_lossy(seq).to_string(),
-            qual,
+            // Don't store seq/qual - they're passed at output time for memory efficiency
+            seq: String::new(),
+            qual: String::new(),
             tags: vec![
                 ("AS".to_string(), "i:0".to_string()),
                 ("NM".to_string(), "i:0".to_string()),

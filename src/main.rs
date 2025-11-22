@@ -1,3 +1,12 @@
+// Use jemalloc for better memory behavior (reduced fragmentation)
+// Enable with: cargo build --release --features jemalloc
+#[cfg(feature = "jemalloc")]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 

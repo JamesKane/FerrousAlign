@@ -118,7 +118,11 @@ pub fn process_single_end(
                 .as_ref()
                 .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
 
-            for alignment_vec in alignments {
+            // Zip alignments with original seq/qual from batch for memory-efficient output
+            for (read_idx, alignment_vec) in alignments.into_iter().enumerate() {
+                // Get original seq/qual from batch (used for to_sam_string_with_seq)
+                let orig_seq = std::str::from_utf8(&batch.seqs[read_idx]).unwrap_or("");
+                let orig_qual = &batch.quals[read_idx];
                 // Find the best (highest scoring) alignment as primary
                 let best_idx = alignment_vec
                     .iter()
@@ -156,8 +160,9 @@ pub fn process_single_end(
                         rnext: "*".to_string(),
                         pnext: 0,
                         tlen: 0,
-                        seq: best_alignment.seq.clone(),
-                        qual: best_alignment.qual.clone(),
+                        // Don't store seq/qual - they're passed at output time
+                        seq: String::new(),
+                        qual: String::new(),
                         tags: vec![
                             ("AS".to_string(), "i:0".to_string()),
                             ("NM".to_string(), "i:0".to_string()),
@@ -177,7 +182,7 @@ pub fn process_single_end(
                             .push(("RG".to_string(), format!("Z:{}", rg)));
                     }
 
-                    let sam_record = output_alignment.to_sam_string();
+                    let sam_record = output_alignment.to_sam_string_with_seq(orig_seq, orig_qual);
                     if let Err(e) = writeln!(writer, "{}", sam_record) {
                         log::error!("Error writing SAM record: {}", e);
                     }
@@ -224,7 +229,8 @@ pub fn process_single_end(
                         alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
                     }
 
-                    let sam_record = alignment.to_sam_string();
+                    // Use external seq/qual to avoid storing in Alignment struct
+                    let sam_record = alignment.to_sam_string_with_seq(orig_seq, orig_qual);
                     if let Err(e) = writeln!(writer, "{}", sam_record) {
                         log::error!("Error writing SAM record: {}", e);
                     }
