@@ -1482,4 +1482,286 @@ mod tests {
         println!("   Supplementary: {}", supplementary.cigar_string());
         println!("   Secondary:     {}", secondary.cigar_string());
     }
+
+    /// Helper to create an alignment for testing
+    fn make_test_alignment(
+        query_name: &str,
+        ref_name: &str,
+        ref_id: usize,
+        pos: u64,
+        score: i32,
+        cigar: Vec<(u8, i32)>,
+        query_start: i32,
+        query_end: i32,
+        flag: u16,
+    ) -> Alignment {
+        Alignment {
+            query_name: query_name.to_string(),
+            flag,
+            ref_name: ref_name.to_string(),
+            ref_id,
+            pos,
+            mapq: 60,
+            score,
+            cigar,
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: "A".repeat((query_end - query_start) as usize),
+            qual: "I".repeat((query_end - query_start) as usize),
+            tags: vec![],
+            query_start,
+            query_end,
+            seed_coverage: score,
+            hash: (pos * 1000 + score as u64) as u64, // Unique hash
+            frac_rep: 0.0,
+        }
+    }
+
+    /// Helper to create default test MemOpt
+    fn default_test_opt() -> MemOpt {
+        let mut opt = MemOpt::default();
+        opt.mask_level = 0.5;
+        opt.mask_level_redun = 0.95;
+        opt.max_chain_gap = 10000;
+        opt.xa_drop_ratio = 0.8;
+        opt
+    }
+
+    // ------------------------------------------------------------------------
+    // remove_redundant_alignments() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_remove_redundant_empty() {
+        let opt = default_test_opt();
+        let mut alignments: Vec<Alignment> = vec![];
+        remove_redundant_alignments(&mut alignments, &opt);
+        assert!(alignments.is_empty());
+    }
+
+    #[test]
+    fn test_remove_redundant_single() {
+        let opt = default_test_opt();
+        let mut alignments = vec![make_test_alignment(
+            "read1", "chr1", 0, 1000, 100,
+            vec![(b'M', 100)], 0, 100, 0,
+        )];
+        remove_redundant_alignments(&mut alignments, &opt);
+        assert_eq!(alignments.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_redundant_no_overlap() {
+        let opt = default_test_opt();
+        let mut alignments = vec![
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 50)], 0, 50, 0),
+            make_test_alignment("read1", "chr1", 0, 5000, 80, vec![(b'M', 50)], 50, 100, 0),
+        ];
+        remove_redundant_alignments(&mut alignments, &opt);
+        // Both should be kept (no overlap)
+        assert_eq!(alignments.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_redundant_high_overlap() {
+        let opt = default_test_opt();
+        let mut alignments = vec![
+            // Two alignments at nearly same position with >95% overlap
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 100)], 0, 100, 0),
+            make_test_alignment("read1", "chr1", 0, 1002, 90, vec![(b'M', 98)], 0, 98, 0),
+        ];
+        remove_redundant_alignments(&mut alignments, &opt);
+        // Lower-scoring one should be removed
+        assert_eq!(alignments.len(), 1);
+        assert_eq!(alignments[0].score, 100);
+    }
+
+    #[test]
+    fn test_remove_redundant_different_chromosomes() {
+        let opt = default_test_opt();
+        let mut alignments = vec![
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 100)], 0, 100, 0),
+            make_test_alignment("read1", "chr2", 1, 1000, 90, vec![(b'M', 100)], 0, 100, 0),
+        ];
+        remove_redundant_alignments(&mut alignments, &opt);
+        // Both should be kept (different chromosomes)
+        assert_eq!(alignments.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_redundant_exact_duplicates() {
+        let opt = default_test_opt();
+        let mut alignments = vec![
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 100)], 0, 100, 0),
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 100)], 0, 100, 0),
+        ];
+        remove_redundant_alignments(&mut alignments, &opt);
+        // Exact duplicates should be removed
+        assert_eq!(alignments.len(), 1);
+    }
+
+    // ------------------------------------------------------------------------
+    // mark_secondary_alignments() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_mark_secondary_empty() {
+        let opt = default_test_opt();
+        let mut alignments: Vec<Alignment> = vec![];
+        mark_secondary_alignments(&mut alignments, &opt);
+        assert!(alignments.is_empty());
+    }
+
+    #[test]
+    fn test_mark_secondary_single() {
+        let opt = default_test_opt();
+        let mut alignments = vec![make_test_alignment(
+            "read1", "chr1", 0, 1000, 100,
+            vec![(b'M', 100)], 0, 100, 0,
+        )];
+        mark_secondary_alignments(&mut alignments, &opt);
+        assert_eq!(alignments.len(), 1);
+        // Single alignment should remain primary
+        assert_eq!(alignments[0].flag & sam_flags::SECONDARY, 0);
+        assert_eq!(alignments[0].flag & sam_flags::SUPPLEMENTARY, 0);
+    }
+
+    #[test]
+    fn test_mark_secondary_overlapping() {
+        let mut opt = default_test_opt();
+        opt.mask_level = 0.5;
+
+        let mut alignments = vec![
+            // High-scoring alignment covering query [0, 80)
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 80)], 0, 80, 0),
+            // Lower-scoring alignment covering query [10, 90) - significant overlap
+            make_test_alignment("read1", "chr1", 0, 2000, 70, vec![(b'M', 80)], 10, 90, 0),
+        ];
+        mark_secondary_alignments(&mut alignments, &opt);
+
+        assert_eq!(alignments.len(), 2);
+        // First (highest score) should be primary
+        assert_eq!(alignments[0].flag & sam_flags::SECONDARY, 0);
+        // Second should be marked secondary due to overlap
+        assert_ne!(alignments[1].flag & sam_flags::SECONDARY, 0);
+    }
+
+    #[test]
+    fn test_mark_secondary_non_overlapping_supplementary() {
+        let mut opt = default_test_opt();
+        opt.mask_level = 0.5;
+
+        let mut alignments = vec![
+            // Alignment covering query [0, 50)
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 50)], 0, 50, 0),
+            // Alignment covering query [60, 100) - non-overlapping
+            make_test_alignment("read1", "chr2", 1, 5000, 80, vec![(b'M', 40)], 60, 100, 0),
+        ];
+        mark_secondary_alignments(&mut alignments, &opt);
+
+        assert_eq!(alignments.len(), 2);
+        // First should be primary
+        assert_eq!(alignments[0].flag & sam_flags::SECONDARY, 0);
+        // Second is non-overlapping, should be supplementary (not secondary)
+        assert_eq!(alignments[1].flag & sam_flags::SECONDARY, 0);
+        assert_ne!(alignments[1].flag & sam_flags::SUPPLEMENTARY, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // alignment_ref_length() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_alignment_ref_length_simple_match() {
+        let alignment = make_test_alignment(
+            "read1", "chr1", 0, 1000, 100,
+            vec![(b'M', 100)], 0, 100, 0,
+        );
+        assert_eq!(alignment_ref_length(&alignment), 100);
+    }
+
+    #[test]
+    fn test_alignment_ref_length_with_insertions() {
+        let alignment = make_test_alignment(
+            "read1", "chr1", 0, 1000, 100,
+            vec![(b'M', 50), (b'I', 5), (b'M', 45)], 0, 100, 0,
+        );
+        // Insertions don't consume reference
+        assert_eq!(alignment_ref_length(&alignment), 95);
+    }
+
+    #[test]
+    fn test_alignment_ref_length_with_deletions() {
+        let alignment = make_test_alignment(
+            "read1", "chr1", 0, 1000, 100,
+            vec![(b'M', 50), (b'D', 10), (b'M', 40)], 0, 90, 0,
+        );
+        // Deletions consume reference
+        assert_eq!(alignment_ref_length(&alignment), 100);
+    }
+
+    #[test]
+    fn test_alignment_ref_length_with_soft_clips() {
+        let alignment = make_test_alignment(
+            "read1", "chr1", 0, 1000, 100,
+            vec![(b'S', 10), (b'M', 80), (b'S', 10)], 0, 100, 0,
+        );
+        // Soft clips don't consume reference
+        assert_eq!(alignment_ref_length(&alignment), 80);
+    }
+
+    // ------------------------------------------------------------------------
+    // generate_md_tag() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_generate_md_tag_perfect_match() {
+        // Perfect match of 50bp
+        // generate_md_tag takes (ref_aligned, query_aligned, cigar)
+        let reference = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAC"; // 50bp
+        let query = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAC"; // 50bp same
+        let cigar = vec![(b'M', 50)];
+        let md = Alignment::generate_md_tag(reference, query, &cigar);
+        assert_eq!(md, "50");
+    }
+
+    #[test]
+    fn test_generate_md_tag_with_mismatch() {
+        // 10M with mismatch at position 5
+        let reference = b"ACGTANGTAC"; // Mismatch at position 5: C -> N
+        let query = b"ACGTACGTAC"; // 10bp
+        let cigar = vec![(b'M', 10)];
+        let md = Alignment::generate_md_tag(reference, query, &cigar);
+        // Format should indicate the mismatch
+        assert!(!md.is_empty());
+    }
+
+    // ------------------------------------------------------------------------
+    // calculate_tlen() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_calculate_tlen_downstream_mate() {
+        let alignment = make_test_alignment(
+            "read1", "chr1", 0, 100, 100,
+            vec![(b'M', 100)], 0, 100, 0,
+        );
+        // Mate at position 300, ref_len 100
+        let tlen = alignment.calculate_tlen(300, 100);
+        // TLEN = mate_end - self_start = 400 - 100 = 300
+        assert_eq!(tlen, 300);
+    }
+
+    #[test]
+    fn test_calculate_tlen_upstream_mate() {
+        let alignment = make_test_alignment(
+            "read1", "chr1", 0, 300, 100,
+            vec![(b'M', 100)], 0, 100, 0,
+        );
+        // Mate at position 100, ref_len 100
+        let tlen = alignment.calculate_tlen(100, 100);
+        // TLEN should be negative (mate is upstream)
+        assert!(tlen < 0);
+    }
 }

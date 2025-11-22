@@ -536,3 +536,532 @@ pub fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
 
     if l < (opt.w << 1) { l } else { opt.w << 1 }
 }
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a seed for testing
+    fn make_seed(query_pos: i32, ref_pos: u64, len: i32, is_rev: bool, rid: i32) -> Seed {
+        Seed {
+            query_pos,
+            ref_pos,
+            len,
+            is_rev,
+            rid,
+            interval_size: 1, // Low occurrence (not repetitive)
+        }
+    }
+
+    /// Helper to create default MemOpt for testing
+    fn default_test_opt() -> MemOpt {
+        let mut opt = MemOpt::default();
+        opt.w = 100;                // Band width
+        opt.max_chain_gap = 10000;  // Max gap in chain
+        opt.min_chain_weight = 0;   // Keep all chains for testing
+        opt.min_seed_len = 19;
+        opt.drop_ratio = 0.5;
+        opt.mask_level = 0.5;
+        opt.max_chain_extend = 50;
+        opt
+    }
+
+    // ------------------------------------------------------------------------
+    // chain_seeds() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_chain_seeds_empty() {
+        let opt = default_test_opt();
+        let seeds: Vec<Seed> = vec![];
+        let (chains, _) = chain_seeds(seeds, &opt);
+        assert!(chains.is_empty());
+    }
+
+    #[test]
+    fn test_chain_seeds_single_seed() {
+        let opt = default_test_opt();
+        let seeds = vec![make_seed(0, 1000, 20, false, 0)];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].seeds.len(), 1);
+        assert_eq!(chains[0].score, 20);
+        assert_eq!(chains[0].query_start, 0);
+        assert_eq!(chains[0].query_end, 20);
+    }
+
+    #[test]
+    fn test_chain_seeds_two_compatible_seeds() {
+        // Two seeds that should chain together (close on both query and ref)
+        let opt = default_test_opt();
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),   // First seed
+            make_seed(25, 1025, 20, false, 0),  // Second seed: 5bp gap on both
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Should merge into one chain
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].seeds.len(), 2);
+        assert_eq!(chains[0].score, 40); // 20 + 20
+        assert_eq!(chains[0].query_start, 0);
+        assert_eq!(chains[0].query_end, 45);
+    }
+
+    #[test]
+    fn test_chain_seeds_incompatible_different_strands() {
+        // Seeds on different strands should not chain
+        let opt = default_test_opt();
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),  // Forward
+            make_seed(25, 1025, 20, true, 0),  // Reverse
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Should create two separate chains
+        assert_eq!(chains.len(), 2);
+    }
+
+    #[test]
+    fn test_chain_seeds_incompatible_large_gap() {
+        // Seeds with large gap should not chain
+        let mut opt = default_test_opt();
+        opt.max_chain_gap = 100; // Small gap limit
+
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),
+            make_seed(200, 1200, 20, false, 0),  // 180bp gap > 100
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Should create two separate chains
+        assert_eq!(chains.len(), 2);
+    }
+
+    #[test]
+    fn test_chain_seeds_different_chromosomes() {
+        // Seeds on different chromosomes should not chain
+        let opt = default_test_opt();
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),   // chr0
+            make_seed(25, 1025, 20, false, 1),  // chr1
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Should create two separate chains
+        assert_eq!(chains.len(), 2);
+        assert_eq!(chains[0].rid, 0);
+        assert_eq!(chains[1].rid, 1);
+    }
+
+    #[test]
+    fn test_chain_seeds_contained_seed_ignored() {
+        // A seed fully contained in existing chain should be merged (ignored)
+        let opt = default_test_opt();
+        let seeds = vec![
+            make_seed(0, 1000, 50, false, 0),   // Large seed
+            make_seed(10, 1010, 10, false, 0),  // Small seed contained in first
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Should have one chain (second seed contained)
+        assert_eq!(chains.len(), 1);
+        // The contained seed counts as merged but doesn't add to score
+        // Actually it returns true but doesn't push the seed_idx
+    }
+
+    #[test]
+    fn test_chain_seeds_multiple_chains() {
+        // Multiple independent chains
+        let opt = default_test_opt();
+        let seeds = vec![
+            // Chain 1: forward strand, chr0
+            make_seed(0, 1000, 20, false, 0),
+            make_seed(25, 1025, 20, false, 0),
+            // Chain 2: reverse strand, chr0
+            make_seed(50, 2000, 20, true, 0),
+            make_seed(75, 2025, 20, true, 0),
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        assert_eq!(chains.len(), 2);
+    }
+
+    #[test]
+    fn test_chain_seeds_min_weight_filter() {
+        let mut opt = default_test_opt();
+        opt.min_chain_weight = 30; // Require score >= 30
+
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),   // Single seed, score=20 < 30
+            make_seed(100, 5000, 40, false, 0), // Single seed, score=40 >= 30
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Only the second chain should pass filter
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].score, 40);
+    }
+
+    // ------------------------------------------------------------------------
+    // filter_chains() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_filter_chains_empty() {
+        let opt = default_test_opt();
+        let seeds: Vec<Seed> = vec![];
+        let mut chains: Vec<Chain> = vec![];
+
+        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_chains_single_chain() {
+        let opt = default_test_opt();
+        let seeds = vec![make_seed(0, 1000, 50, false, 0)];
+
+        let mut chains = vec![Chain {
+            score: 50,
+            seeds: vec![0],
+            query_start: 0,
+            query_end: 50,
+            ref_start: 1000,
+            ref_end: 1050,
+            is_rev: false,
+            weight: 0,
+            kept: 0,
+            frac_rep: 0.0,
+            rid: 0,
+            pos: 1000,
+            last_qbeg: 0,
+            last_rbeg: 1000,
+            last_len: 50,
+        }];
+
+        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].kept, 3); // Primary (non-overlapping)
+    }
+
+    #[test]
+    fn test_filter_chains_overlapping_drop_ratio() {
+        let mut opt = default_test_opt();
+        opt.drop_ratio = 0.5;
+        opt.mask_level = 0.5;
+        opt.min_seed_len = 10;
+
+        let seeds = vec![
+            make_seed(0, 1000, 80, false, 0),  // Seed for chain 1
+            make_seed(10, 2000, 30, false, 0), // Seed for chain 2 (overlaps on query)
+        ];
+
+        let mut chains = vec![
+            Chain {
+                score: 80,
+                seeds: vec![0],
+                query_start: 0,
+                query_end: 80,
+                ref_start: 1000,
+                ref_end: 1080,
+                is_rev: false,
+                weight: 0,
+                kept: 0,
+                frac_rep: 0.0,
+                rid: 0,
+                pos: 1000,
+                last_qbeg: 0,
+                last_rbeg: 1000,
+                last_len: 80,
+            },
+            Chain {
+                score: 30,
+                seeds: vec![1],
+                query_start: 10,
+                query_end: 40,
+                ref_start: 2000,
+                ref_end: 2030,
+                is_rev: false,
+                weight: 0,
+                kept: 0,
+                frac_rep: 0.0,
+                rid: 0,
+                pos: 2000,
+                last_qbeg: 10,
+                last_rbeg: 2000,
+                last_len: 30,
+            },
+        ];
+
+        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
+
+        // First chain should be kept as primary
+        // Second chain overlaps and weight is much lower, may be dropped
+        assert!(!filtered.is_empty());
+        assert_eq!(filtered[0].kept, 3); // Primary
+    }
+
+    #[test]
+    fn test_filter_chains_non_overlapping_kept() {
+        let opt = default_test_opt();
+
+        let seeds = vec![
+            make_seed(0, 1000, 30, false, 0),
+            make_seed(50, 5000, 30, false, 0), // Non-overlapping on query
+        ];
+
+        let mut chains = vec![
+            Chain {
+                score: 30,
+                seeds: vec![0],
+                query_start: 0,
+                query_end: 30,
+                ref_start: 1000,
+                ref_end: 1030,
+                is_rev: false,
+                weight: 0,
+                kept: 0,
+                frac_rep: 0.0,
+                rid: 0,
+                pos: 1000,
+                last_qbeg: 0,
+                last_rbeg: 1000,
+                last_len: 30,
+            },
+            Chain {
+                score: 30,
+                seeds: vec![1],
+                query_start: 50,
+                query_end: 80,
+                ref_start: 5000,
+                ref_end: 5030,
+                is_rev: false,
+                weight: 0,
+                kept: 0,
+                frac_rep: 0.0,
+                rid: 0,
+                pos: 5000,
+                last_qbeg: 50,
+                last_rbeg: 5000,
+                last_len: 30,
+            },
+        ];
+
+        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
+
+        // Both chains should be kept (non-overlapping)
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|c| c.kept == 3));
+    }
+
+    // ------------------------------------------------------------------------
+    // calculate_chain_weight() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_calculate_chain_weight_single_seed() {
+        let opt = default_test_opt();
+        let seeds = vec![make_seed(0, 1000, 50, false, 0)];
+
+        let chain = Chain {
+            score: 50,
+            seeds: vec![0],
+            query_start: 0,
+            query_end: 50,
+            ref_start: 1000,
+            ref_end: 1050,
+            is_rev: false,
+            weight: 0,
+            kept: 0,
+            frac_rep: 0.0,
+            rid: 0,
+            pos: 1000,
+            last_qbeg: 0,
+            last_rbeg: 1000,
+            last_len: 50,
+        };
+
+        let (weight, l_rep) = calculate_chain_weight(&chain, &seeds, &opt);
+        assert_eq!(weight, 50);
+        assert_eq!(l_rep, 0); // Not repetitive
+    }
+
+    #[test]
+    fn test_calculate_chain_weight_non_overlapping_seeds() {
+        let opt = default_test_opt();
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),
+            make_seed(30, 1030, 20, false, 0), // Gap of 10
+        ];
+
+        let chain = Chain {
+            score: 40,
+            seeds: vec![0, 1],
+            query_start: 0,
+            query_end: 50,
+            ref_start: 1000,
+            ref_end: 1050,
+            is_rev: false,
+            weight: 0,
+            kept: 0,
+            frac_rep: 0.0,
+            rid: 0,
+            pos: 1000,
+            last_qbeg: 30,
+            last_rbeg: 1030,
+            last_len: 20,
+        };
+
+        let (weight, _) = calculate_chain_weight(&chain, &seeds, &opt);
+        assert_eq!(weight, 40); // 20 + 20, no overlap
+    }
+
+    #[test]
+    fn test_calculate_chain_weight_overlapping_seeds() {
+        let opt = default_test_opt();
+        let seeds = vec![
+            make_seed(0, 1000, 30, false, 0),
+            make_seed(20, 1020, 30, false, 0), // Overlap of 10
+        ];
+
+        let chain = Chain {
+            score: 60,
+            seeds: vec![0, 1],
+            query_start: 0,
+            query_end: 50,
+            ref_start: 1000,
+            ref_end: 1050,
+            is_rev: false,
+            weight: 0,
+            kept: 0,
+            frac_rep: 0.0,
+            rid: 0,
+            pos: 1000,
+            last_qbeg: 20,
+            last_rbeg: 1020,
+            last_len: 30,
+        };
+
+        let (weight, _) = calculate_chain_weight(&chain, &seeds, &opt);
+        // Query coverage: 30 + (50-30) = 50
+        // Ref coverage: 30 + (1050-1030) = 50
+        assert_eq!(weight, 50);
+    }
+
+    #[test]
+    fn test_calculate_chain_weight_repetitive_seeds() {
+        let mut opt = default_test_opt();
+        opt.max_occ = 100;
+
+        // Create a repetitive seed (interval_size > max_occ)
+        let mut seed = make_seed(0, 1000, 30, false, 0);
+        seed.interval_size = 500; // > max_occ
+        let seeds = vec![seed];
+
+        let chain = Chain {
+            score: 30,
+            seeds: vec![0],
+            query_start: 0,
+            query_end: 30,
+            ref_start: 1000,
+            ref_end: 1030,
+            is_rev: false,
+            weight: 0,
+            kept: 0,
+            frac_rep: 0.0,
+            rid: 0,
+            pos: 1000,
+            last_qbeg: 0,
+            last_rbeg: 1000,
+            last_len: 30,
+        };
+
+        let (weight, l_rep) = calculate_chain_weight(&chain, &seeds, &opt);
+        assert_eq!(weight, 30);
+        assert_eq!(l_rep, 30); // All 30bp are repetitive
+    }
+
+    // ------------------------------------------------------------------------
+    // cal_max_gap() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_cal_max_gap_short_query() {
+        let opt = default_test_opt();
+        let gap = cal_max_gap(&opt, 50);
+        assert!(gap >= 1);
+        assert!(gap <= opt.w << 1);
+    }
+
+    #[test]
+    fn test_cal_max_gap_long_query() {
+        let opt = default_test_opt();
+        let gap = cal_max_gap(&opt, 1000);
+        // For long queries, should be capped at 2*w
+        assert_eq!(gap, opt.w << 1);
+    }
+
+    // ------------------------------------------------------------------------
+    // Runaway guard tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_chain_seeds_runaway_guard_seeds() {
+        let opt = default_test_opt();
+
+        // Create more seeds than MAX_SEEDS_PER_READ
+        let mut seeds = Vec::new();
+        for i in 0..MAX_SEEDS_PER_READ + 100 {
+            seeds.push(make_seed(i as i32, i as u64 * 1000, 20, false, 0));
+        }
+
+        // Should truncate and not panic
+        let (chains, returned_seeds) = chain_seeds(seeds, &opt);
+
+        // Seeds should be truncated
+        assert!(returned_seeds.len() <= MAX_SEEDS_PER_READ);
+        // Chains should be created without panic
+        assert!(!chains.is_empty());
+    }
+
+    // ------------------------------------------------------------------------
+    // Edge cases
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_chain_seeds_diagonal_band() {
+        // Test diagonal band constraint (|x - y| <= w)
+        let mut opt = default_test_opt();
+        opt.w = 10; // Small band
+
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),
+            // Second seed: query advances 30, ref advances 50 -> |30-50| = 20 > w=10
+            make_seed(30, 1050, 20, false, 0),
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Seeds should NOT chain due to band violation
+        assert_eq!(chains.len(), 2);
+    }
+
+    #[test]
+    fn test_chain_seeds_seed_upstream_on_ref() {
+        // Test that seed with y < 0 (upstream on ref) doesn't chain
+        let opt = default_test_opt();
+
+        let seeds = vec![
+            make_seed(0, 1000, 20, false, 0),
+            make_seed(25, 900, 20, false, 0),  // Upstream on ref (y < 0)
+        ];
+        let (chains, _) = chain_seeds(seeds, &opt);
+
+        // Should create two chains (can't chain backwards on ref)
+        assert_eq!(chains.len(), 2);
+    }
+}

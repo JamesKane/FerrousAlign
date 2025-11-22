@@ -326,4 +326,132 @@ AGCT
         cleanup_test_files(&test_dir);
         Ok(())
     }
+
+    // ------------------------------------------------------------------------
+    // pos_to_rid() tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_pos_to_rid_empty_bns() {
+        let bns = BntSeq::new();
+        // Empty BntSeq should return -1
+        assert_eq!(bns.pos_to_rid(0, 100), -1);
+    }
+
+    #[test]
+    fn test_pos_to_rid_invalid_interval() -> io::Result<()> {
+        let test_dir = setup_test_files("pos_to_rid_invalid")?;
+        let prefix = test_dir.join("pos_to_rid_invalid");
+        let reader = Cursor::new(FASTA_CONTENT_SIMPLE.as_bytes());
+        let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
+
+        // Invalid interval (start >= end) should return -1
+        assert_eq!(bns.pos_to_rid(50, 50), -1);
+        assert_eq!(bns.pos_to_rid(100, 50), -1);
+
+        cleanup_test_files(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pos_to_rid_single_chromosome() -> io::Result<()> {
+        let test_dir = setup_test_files("pos_to_rid_single")?;
+        let prefix = test_dir.join("pos_to_rid_single");
+
+        // Create a BntSeq with one chromosome of length 100
+        let fasta = ">chr1\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n";
+        let reader = Cursor::new(fasta.as_bytes());
+        let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
+
+        let l_pac = bns.packed_sequence_length;
+        assert_eq!(l_pac, 100);
+
+        // Position within chr1 should return 0
+        assert_eq!(bns.pos_to_rid(0, 50), 0);
+        assert_eq!(bns.pos_to_rid(10, 90), 0);
+        assert_eq!(bns.pos_to_rid(0, 100), 0);
+
+        // Position beyond valid range (>= 2*l_pac) - test edge case at boundary
+        // For l_pac=100, bidirectional range is [0, 200)
+        // Position exactly at 2*l_pac should return -1
+        let result = bns.pos_to_rid(l_pac * 2 - 10, l_pac * 2);
+        // Either -1 or valid depending on boundary handling
+        assert!(result == -1 || result == 0, "Near-boundary position should be handled");
+
+        cleanup_test_files(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pos_to_rid_multiple_chromosomes() -> io::Result<()> {
+        let test_dir = setup_test_files("pos_to_rid_multi")?;
+        let prefix = test_dir.join("pos_to_rid_multi");
+
+        // Create a BntSeq with multiple chromosomes
+        // chr1: 50bp, chr2: 50bp, chr3: 50bp
+        let fasta = ">chr1\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAC\n>chr2\nTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATG\n>chr3\nGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC\n";
+        let reader = Cursor::new(fasta.as_bytes());
+        let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
+
+        // Verify we have 3 chromosomes
+        assert_eq!(bns.sequence_count, 3);
+
+        // Position in chr1 (offset 0-49)
+        assert_eq!(bns.pos_to_rid(0, 25), 0);
+        assert_eq!(bns.pos_to_rid(25, 50), 0);
+
+        // Position in chr2 (offset 50-99)
+        assert_eq!(bns.pos_to_rid(50, 75), 1);
+        assert_eq!(bns.pos_to_rid(60, 90), 1);
+
+        // Position in chr3 (offset 100-149)
+        assert_eq!(bns.pos_to_rid(100, 125), 2);
+        assert_eq!(bns.pos_to_rid(125, 150), 2);
+
+        cleanup_test_files(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pos_to_rid_spanning_chromosomes() -> io::Result<()> {
+        let test_dir = setup_test_files("pos_to_rid_span")?;
+        let prefix = test_dir.join("pos_to_rid_span");
+
+        // chr1: 50bp, chr2: 50bp
+        let fasta = ">chr1\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAC\n>chr2\nTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATG\n";
+        let reader = Cursor::new(fasta.as_bytes());
+        let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
+
+        // Position spanning chr1 and chr2 boundary should return -1
+        assert_eq!(bns.pos_to_rid(40, 60), -1);
+
+        cleanup_test_files(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pos_to_rid_reverse_strand() -> io::Result<()> {
+        let test_dir = setup_test_files("pos_to_rid_rev")?;
+        let prefix = test_dir.join("pos_to_rid_rev");
+
+        // chr1: 100bp - l_pac = 100
+        let fasta = ">chr1\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n";
+        let reader = Cursor::new(fasta.as_bytes());
+        let bns = BntSeq::bns_fasta2bntseq(reader, &prefix, false)?;
+
+        let l_pac = bns.packed_sequence_length;
+        assert_eq!(l_pac, 100);
+
+        // Reverse strand positions (>= l_pac) should be converted
+        // Position on reverse strand maps back to forward strand for chromosome lookup
+        // Reverse strand position 100 maps to forward position 100 (start of reverse)
+        // Reverse strand position 150 maps to forward position 50
+        assert_eq!(bns.pos_to_rid(l_pac + 10, l_pac + 50), 0);
+
+        // Spanning forward-reverse boundary should return -1
+        assert_eq!(bns.pos_to_rid(90, 110), -1);
+
+        cleanup_test_files(&test_dir);
+        Ok(())
+    }
 }
