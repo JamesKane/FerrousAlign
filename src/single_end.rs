@@ -187,27 +187,36 @@ pub fn process_single_end(
 
                 for (idx, mut alignment) in alignment_vec.into_iter().enumerate() {
                     let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
-                    let is_primary = idx == best_idx;
+                    let is_secondary = alignment.flag & sam_flags::SECONDARY != 0;
+                    let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
+                    let is_best = idx == best_idx;
 
-                    // By default (-a flag not set), only output the primary alignment (matching bwa-mem2 behavior)
-                    // With -a flag, output all alignments meeting score threshold
+                    // bwa-mem2 output behavior (mem_reg2sam, bwamem.cpp:1534-1560):
+                    // - Primary alignments: always output (flag without 0x100 or 0x800 for first, 0x800 for subsequent)
+                    // - Supplementary alignments: always output (flag 0x800)
+                    // - Secondary alignments: only output with -a flag (flag 0x100)
+                    //
+                    // The flags were already set correctly by mark_secondary_alignments() in finalization.rs
                     let should_output = if opt.output_all_alignments {
+                        // -a flag: output all alignments meeting score threshold
                         is_unmapped || alignment.score >= opt.t
                     } else {
-                        is_primary
+                        // Default: output primary and supplementary, not secondary
+                        // Primary = best alignment without SECONDARY flag
+                        // Supplementary = non-overlapping alignments with SUPPLEMENTARY flag
+                        // Secondary = overlapping alignments with SECONDARY flag (skip these)
+                        is_unmapped || (!is_secondary && (is_best || is_supplementary))
                     };
 
                     if !should_output {
-                        continue; // Skip non-primary alignments (unless -a flag set)
+                        continue; // Skip secondary alignments (unless -a flag set)
                     }
 
-                    // Clear or set secondary flag based on whether this is the primary alignment
-                    if is_primary {
-                        // This is the best alignment - ensure it's PRIMARY (clear secondary flag)
+                    // Ensure the best alignment doesn't have SECONDARY or SUPPLEMENTARY flags
+                    // (it should be the true primary)
+                    if is_best && !is_unmapped {
                         alignment.flag &= !sam_flags::SECONDARY;
-                    } else if !is_unmapped {
-                        // Non-best alignment - mark as secondary
-                        alignment.flag |= sam_flags::SECONDARY;
+                        alignment.flag &= !sam_flags::SUPPLEMENTARY;
                     }
 
                     // Add RG tag if read group is specified
