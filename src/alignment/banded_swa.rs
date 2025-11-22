@@ -1,5 +1,9 @@
 // bwa-mem2-rust/src/banded_swa.rs
 
+// Import SIMD intrinsics from the abstraction layer
+use crate::simd_abstraction::portable_intrinsics::*;
+use crate::simd_abstraction::types::__m128i;
+
 // Rust equivalent of dnaSeqPair (C++ bandedSWA.h:90-99)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeqPair {

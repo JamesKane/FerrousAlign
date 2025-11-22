@@ -2,6 +2,7 @@ pub mod banded_swa;
 pub mod chaining;
 pub mod extension;
 pub mod finalization;
+pub mod ksw_affine_gap;
 pub mod pipeline;
 pub mod seeding;
 pub mod utils;

@@ -282,7 +282,7 @@ pub(crate) fn execute_scalar_alignments(
                 );
 
                 log::debug!(
-                    "Directional alignment {}: direction={:?}, local_score={}, global_score={}, should_clip={}",
+                    "Iterative Directional alignment {}: direction={:?}, local_score={}, global_score={}, should_clip={}",
                     idx,
                     direction,
                     ext_result.local_score,
