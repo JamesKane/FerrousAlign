@@ -784,9 +784,11 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                 }
             };
 
-            if ref_redundant && query_redundant {
-                // Note: same_region_opposite_strand detection disabled - it was
-                // removing legitimate supplementary alignments needed for proper pairing
+            // Remove redundant alignments when:
+            // 1. Both ref AND query overlap significantly (standard redundancy check)
+            // 2. OR same genomic region on opposite strands with same query coverage
+            //    (these produce equal scores, causing MAPQ=0 incorrectly)
+            if (ref_redundant && query_redundant) || same_region_opposite_strand {
                 // Remove the lower-scoring one (or the current one if equal)
                 // Matches C++ logic: if p->score < q->score remove p, else remove q
                 let removal_reason = if same_region_opposite_strand {
