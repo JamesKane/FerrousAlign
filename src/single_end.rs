@@ -79,6 +79,7 @@ pub fn process_single_end(
     let start_time = Instant::now();
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
+    let mut reads_processed = 0u64; // Global read counter for deterministic hash tie-breaking
 
     // Calculate optimal batch size based on thread count (matching C++ bwa-mem2)
     // Formula: (CHUNK_SIZE_BASES * n_threads) / AVG_READ_LEN
@@ -132,15 +133,22 @@ pub fn process_single_end(
             let bwa_idx_clone = Arc::clone(&bwa_idx);
             let pac_data_clone = Arc::clone(&pac_data);
             let opt_clone = Arc::clone(&opt);
+            let batch_start_id = reads_processed; // Capture for closure
             let alignments: Vec<Vec<Alignment>> = batch
                 .names
                 .par_iter()
                 .zip(batch.seqs.par_iter())
                 .zip(batch.quals.par_iter())
-                .map(|((name, seq), qual)| {
-                    generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone)
+                .enumerate()
+                .map(|(i, ((name, seq), qual))| {
+                    // Global read ID for deterministic hash tie-breaking (matches C++ bwamem.cpp:1325)
+                    let read_id = batch_start_id + i as u64;
+                    generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone, read_id)
                 })
                 .collect();
+
+            // Update global read counter for next batch
+            reads_processed += batch_size as u64;
 
             // Stage 2: Write output sequentially (matching C++ kt_pipeline step 2)
             // Uses sam_output module for clean separation of concerns

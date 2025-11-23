@@ -198,6 +198,7 @@ pub fn process_paired_end(
     let start_time = Instant::now();
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
+    let mut pairs_processed = 0u64; // Global pair counter for deterministic hash tie-breaking
 
     // Calculate optimal batch size based on thread count (matching C++ bwa-mem2)
     // Formula: (CHUNK_SIZE_BASES * n_threads) / AVG_READ_LEN
@@ -274,10 +275,14 @@ pub fn process_paired_end(
     let bwa_idx_clone = Arc::clone(&bwa_idx);
     let pac_clone = &pac; // Borrow pac for this scope
     let opt_clone = Arc::clone(&opt);
+    let batch_start_id = pairs_processed; // Capture for closure
 
     let mut first_batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
         .into_par_iter()
         .map(|i| {
+            // Global read ID for deterministic hash tie-breaking (matches C++ bwamem_pair.cpp:416-417)
+            // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
+            let pair_id = batch_start_id + i as u64;
             let aln1 = generate_seeds(
                 &bwa_idx_clone,
                 pac_clone,
@@ -285,6 +290,7 @@ pub fn process_paired_end(
                 &first_batch1.seqs[i],
                 &first_batch1.quals[i],
                 &opt_clone,
+                (pair_id << 1) | 0, // Read 1 of pair
             );
             let aln2 = generate_seeds(
                 &bwa_idx_clone,
@@ -293,10 +299,14 @@ pub fn process_paired_end(
                 &first_batch2.seqs[i],
                 &first_batch2.quals[i],
                 &opt_clone,
+                (pair_id << 1) | 1, // Read 2 of pair
             );
             (aln1, aln2)
         })
         .collect();
+
+    // Update global pair counter
+    pairs_processed += num_pairs as u64;
 
     // Bootstrap insert size stats from first batch
     let stats = if let Some(ref is_override) = opt.insert_size_override {
@@ -444,10 +454,14 @@ pub fn process_paired_end(
         let bwa_idx_clone = Arc::clone(&bwa_idx);
         let pac_clone = &pac; // Borrow pac for this scope
         let opt_clone = Arc::clone(&opt);
+        let batch_start_id = pairs_processed; // Capture for closure
 
         let mut batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
             .into_par_iter()
             .map(|i| {
+                // Global read ID for deterministic hash tie-breaking (matches C++ bwamem_pair.cpp:416-417)
+                // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
+                let pair_id = batch_start_id + i as u64;
                 let aln1 = generate_seeds(
                     &bwa_idx_clone,
                     pac_clone,
@@ -455,6 +469,7 @@ pub fn process_paired_end(
                     &batch1.seqs[i],
                     &batch1.quals[i],
                     &opt_clone,
+                    (pair_id << 1) | 0, // Read 1 of pair
                 );
                 let aln2 = generate_seeds(
                     &bwa_idx_clone,
@@ -463,10 +478,14 @@ pub fn process_paired_end(
                     &batch2.seqs[i],
                     &batch2.quals[i],
                     &opt_clone,
+                    (pair_id << 1) | 1, // Read 2 of pair
                 );
                 (aln1, aln2)
             })
             .collect();
+
+        // Update global pair counter
+        pairs_processed += num_pairs as u64;
 
         // Prepare sequences for mate rescue
         let batch_seqs1 = batch1.as_tuple_refs();

@@ -53,12 +53,13 @@ pub fn generate_seeds(
     query_seq: &[u8],
     query_qual: &str,
     opt: &MemOpt,
+    read_id: u64, // Global read ID for deterministic hash tie-breaking (matches C++ bwa-mem2)
 ) -> Vec<Alignment> {
     // Default to CPU SIMD with auto-detected engine
     // TODO: Accept ComputeBackend parameter when full integration is implemented
     let compute_backend = crate::compute::detect_optimal_backend();
     align_read(
-        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, compute_backend,
+        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, compute_backend, read_id,
     )
 }
 
@@ -409,6 +410,7 @@ pub fn align_read(
     query_qual: &str,
     opt: &MemOpt,
     compute_backend: ComputeBackend,
+    read_id: u64, // Global read ID for deterministic hash tie-breaking (matches C++ bwa-mem2)
 ) -> Vec<Alignment> {
     // 1. SEEDING: Find maximal exact matches (SMEMs)
     // NOTE: For NPU integration, this is where ONE-HOT encoding would be applied
@@ -445,6 +447,7 @@ pub fn align_read(
         query_seq,
         query_qual,
         opt,
+        read_id,
     );
 
     final_alignments
@@ -1031,6 +1034,7 @@ fn finalize_alignments(
     query_seq: &[u8],
     query_qual: &str,
     opt: &MemOpt,
+    read_id: u64,
 ) -> Vec<Alignment> {
     // Step 1: Build CandidateAlignment from extension results
     let candidates = build_candidate_alignments(
@@ -1038,6 +1042,7 @@ fn finalize_alignments(
         bwa_idx,
         pac_data,
         query_name,
+        read_id,
     );
 
     // Step 2-5: Convert to Alignments and apply post-processing
@@ -1057,6 +1062,7 @@ fn build_candidate_alignments(
     bwa_idx: &BwaIndex,
     pac_data: &[u8],
     _query_name: &str,
+    read_id: u64,
 ) -> Vec<CandidateAlignment> {
     let ExtensionResult {
         merged_chain_results,
@@ -1121,7 +1127,9 @@ fn build_candidate_alignments(
             query_end: merged.query_end,
             seed_coverage: chain.weight,
             frac_rep: chain.frac_rep,
-            hash: hash_64((merged.chr_pos << 1) | (if chain.is_rev { 1 } else { 0 })),
+            // Hash for deterministic tie-breaking (matches C++ bwa-mem2 bwamem.cpp:1428)
+            // BWA-MEM2 uses hash_64(read_id + alignment_index) for stable ordering
+            hash: hash_64(read_id + candidates.len() as u64),
             md_tag,
             nm,
             chain_id: merged.chain_idx,
@@ -1249,8 +1257,9 @@ mod tests {
 
         // Test doesn't need real MD tags, use empty pac_data
         let pac_data: &[u8] = &[];
+        let read_id = 0u64; // Test read ID
         let alignments =
-            super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt);
+            super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt, read_id);
 
         assert!(
             !alignments.is_empty(),
