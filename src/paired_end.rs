@@ -8,13 +8,14 @@
 // - SAM output with proper pair flags (Stage 2)
 //
 // The pipeline is cleanly separated using sam_output module:
-// - Computation: generate_seeds() returns Vec<Alignment>
+// - Computation: generate_seeds_for_paired() returns Vec<Alignment>
 // - Pairing: mem_pair() scores paired alignments
 // - Output: sam_output functions handle flag setting and formatting
 
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
-use crate::alignment::pipeline::generate_seeds;
+use crate::alignment::finalization::mark_secondary_alignments;
+use crate::alignment::pipeline::generate_seeds_for_paired;
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
@@ -166,10 +167,10 @@ pub(crate) fn reader_thread(
 // The compute_ctx parameter controls which hardware backend is used for
 // alignment computations.
 //
-// Compute flow: process_paired_end() → generate_seeds() → align_read() → extension
+// Compute flow: process_paired_end() → generate_seeds_for_paired() → align_read() → extension
 //
 // To add GPU/NPU acceleration:
-// 1. Pass compute_ctx through to generate_seeds()
+// 1. Pass compute_ctx through to generate_seeds_for_paired()
 // 2. In align_read(), route based on compute_ctx.backend
 // 3. Implement backend-specific alignment kernel
 //
@@ -283,7 +284,7 @@ pub fn process_paired_end(
             // Global read ID for deterministic hash tie-breaking (matches C++ bwamem_pair.cpp:416-417)
             // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
             let pair_id = batch_start_id + i as u64;
-            let aln1 = generate_seeds(
+            let aln1 = generate_seeds_for_paired(
                 &bwa_idx_clone,
                 pac_clone,
                 &first_batch1.names[i],
@@ -292,7 +293,7 @@ pub fn process_paired_end(
                 &opt_clone,
                 (pair_id << 1) | 0, // Read 1 of pair
             );
-            let aln2 = generate_seeds(
+            let aln2 = generate_seeds_for_paired(
                 &bwa_idx_clone,
                 pac_clone,
                 &first_batch2.names[i],
@@ -462,7 +463,7 @@ pub fn process_paired_end(
                 // Global read ID for deterministic hash tie-breaking (matches C++ bwamem_pair.cpp:416-417)
                 // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
                 let pair_id = batch_start_id + i as u64;
-                let aln1 = generate_seeds(
+                let aln1 = generate_seeds_for_paired(
                     &bwa_idx_clone,
                     pac_clone,
                     &batch1.names[i],
@@ -471,7 +472,7 @@ pub fn process_paired_end(
                     &opt_clone,
                     (pair_id << 1) | 0, // Read 1 of pair
                 );
-                let aln2 = generate_seeds(
+                let aln2 = generate_seeds_for_paired(
                     &bwa_idx_clone,
                     pac_clone,
                     &batch2.names[i],
@@ -796,6 +797,20 @@ fn select_output_indices(
     indices
 }
 
+/// Reorder alignments so that the best pair alignment is at index 0
+/// This ensures the pair-selected alignment becomes primary after mark_secondary_alignments
+fn reorder_for_best_pair(alignments: &mut Vec<Alignment>, best_idx: usize) {
+    if best_idx > 0 && best_idx < alignments.len() {
+        // Swap the best pair alignment to position 0
+        alignments.swap(0, best_idx);
+        log::debug!(
+            "Reordered alignment: moved idx {} to position 0 (score: {})",
+            best_idx,
+            alignments[0].score
+        );
+    }
+}
+
 // Output a batch of paired-end alignments with proper flags and flushing
 // Returns number of records written
 fn output_batch_paired(
@@ -829,9 +844,23 @@ fn output_batch_paired(
         filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, opt.t);
         filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, opt.t);
 
-        // Stage 2: Select best pair
+        // Stage 2: Select best pair (using alignments without secondary marking)
         let (best_idx1, best_idx2, is_properly_paired) =
             select_best_pair(&alignments1, &alignments2, stats, pair_id);
+
+        // Stage 2b: Reorder alignments so best pair is at index 0
+        // This ensures pair selection influences which alignment becomes primary
+        reorder_for_best_pair(&mut alignments1, best_idx1);
+        reorder_for_best_pair(&mut alignments2, best_idx2);
+
+        // Stage 2c: Now apply secondary/supplementary marking with correct order
+        // The best pair alignment is now at index 0, so it becomes primary
+        mark_secondary_alignments(&mut alignments1, opt);
+        mark_secondary_alignments(&mut alignments2, opt);
+
+        // After reordering, best indices are now 0
+        let best_idx1 = 0;
+        let best_idx2 = 0;
 
         // Stage 3: Build mate contexts for flag setting
         let (mate2_ref, mate2_pos, mate2_flag, mate2_ref_len) = get_mate_info(&alignments2, best_idx2);

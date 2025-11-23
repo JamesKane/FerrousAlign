@@ -47,6 +47,11 @@ use crate::utils::hash_64;
 // 3. For NPU: Use ONE-HOT encoding in find_seeds() (see compute::encoding)
 //
 // ============================================================================
+/// Generate alignments for a single read
+///
+/// If `skip_secondary_marking` is true, secondary/supplementary marking is skipped.
+/// This is used for paired-end processing where marking is deferred until after
+/// pair selection (matching BWA-MEM2 behavior).
 pub fn generate_seeds(
     bwa_idx: &BwaIndex,
     pac_data: &[u8], // Pre-loaded PAC data for MD tag generation
@@ -56,11 +61,41 @@ pub fn generate_seeds(
     opt: &MemOpt,
     read_id: u64, // Global read ID for deterministic hash tie-breaking (matches C++ bwa-mem2)
 ) -> Vec<Alignment> {
+    generate_seeds_internal(bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, false)
+}
+
+/// Generate alignments for paired-end processing with deferred secondary marking
+///
+/// Returns alignments without secondary/supplementary flags set, allowing
+/// pair selection to influence which alignment becomes primary.
+pub fn generate_seeds_for_paired(
+    bwa_idx: &BwaIndex,
+    pac_data: &[u8],
+    query_name: &str,
+    query_seq: &[u8],
+    query_qual: &str,
+    opt: &MemOpt,
+    read_id: u64,
+) -> Vec<Alignment> {
+    generate_seeds_internal(bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, true)
+}
+
+fn generate_seeds_internal(
+    bwa_idx: &BwaIndex,
+    pac_data: &[u8],
+    query_name: &str,
+    query_seq: &[u8],
+    query_qual: &str,
+    opt: &MemOpt,
+    read_id: u64,
+    skip_secondary_marking: bool,
+) -> Vec<Alignment> {
     // Default to CPU SIMD with auto-detected engine
     // TODO: Accept ComputeBackend parameter when full integration is implemented
     let compute_backend = crate::compute::detect_optimal_backend();
     align_read(
         bwa_idx, pac_data, query_name, query_seq, query_qual, opt, compute_backend, read_id,
+        skip_secondary_marking,
     )
 }
 
@@ -435,6 +470,7 @@ pub fn align_read(
     opt: &MemOpt,
     compute_backend: ComputeBackend,
     read_id: u64, // Global read ID for deterministic hash tie-breaking (matches C++ bwa-mem2)
+    skip_secondary_marking: bool,
 ) -> Vec<Alignment> {
     // 1. SEEDING: Find maximal exact matches (SMEMs)
     // NOTE: For NPU integration, this is where ONE-HOT encoding would be applied
@@ -472,6 +508,7 @@ pub fn align_read(
         query_qual,
         opt,
         read_id,
+        skip_secondary_marking,
     );
 
     final_alignments
@@ -1058,6 +1095,7 @@ fn finalize_alignments(
     query_qual: &str,
     opt: &MemOpt,
     read_id: u64,
+    skip_secondary_marking: bool,
 ) -> Vec<Alignment> {
     // Step 1: Build CandidateAlignment from extension results
     let candidates = build_candidate_alignments(
@@ -1069,7 +1107,7 @@ fn finalize_alignments(
     );
 
     // Step 2-5: Convert to Alignments and apply post-processing
-    finalize_candidates(candidates, query_name, opt)
+    finalize_candidates(candidates, query_name, opt, skip_secondary_marking)
 }
 
 /// Build CandidateAlignment structs from extension results
@@ -1190,10 +1228,15 @@ fn build_candidate_alignments(
 ///
 /// Phase 4 refactoring: XA/SA tag generation is now consolidated into
 /// mark_secondary_alignments(), simplifying this function.
+///
+/// If `skip_secondary_marking` is true, the alignments are returned without
+/// secondary/supplementary marking. This allows paired-end processing to
+/// defer marking until after pair selection (matching BWA-MEM2 behavior).
 fn finalize_candidates(
     candidates: Vec<CandidateAlignment>,
     query_name: &str,
     opt: &MemOpt,
+    skip_secondary_marking: bool,
 ) -> Vec<Alignment> {
     // Convert candidates to alignments
     let mut alignments: Vec<Alignment> = candidates
@@ -1227,10 +1270,15 @@ fn finalize_candidates(
             );
         }
 
+        // Sort by score for consistent ordering
+        alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
+
         // Mark secondary/supplementary, calculate MAPQ, attach XA/SA tags
         // (Phase 4 consolidation: all secondary-related processing in one call)
-        alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
-        mark_secondary_alignments(&mut alignments, opt);
+        // For paired-end, this is deferred until after pair selection
+        if !skip_secondary_marking {
+            mark_secondary_alignments(&mut alignments, opt);
+        }
     }
 
     // If all alignments were filtered/removed, output unmapped record
