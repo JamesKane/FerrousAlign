@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### NOTICE: The C++ reference implementation's behavior and file formats are the technical specification.  Any deviation is a critical bug, which blocks all downstream tasks.  We must match the behavior even if that means rewriting the code.
 
-**Project Status**: v0.5.0 (~60% complete), ~85-95% of C++ bwa-mem2 performance, working single-end and paired-end alignment with complete SAM output. Recent Session 29 achieved major milestone: **Rust-built indices now produce identical results to C++ bwa-mem2** after fixing SMEM generation, index format compatibility, and BWT construction.
+**Project Status**: v0.5.0 (~65% complete), ~85-95% of C++ bwa-mem2 performance, working single-end and paired-end alignment with complete SAM output. Session 29 achieved major milestone: **Rust-built indices now produce identical results to C++ bwa-mem2**. Recent sessions focused on alignment quality (MAPQ, supplementary marking, proper pairing).
 
 ## Build Commands
 
@@ -90,17 +90,39 @@ cargo fmt -- --check
 
 **Library Modules** (`src/lib.rs`):
 ```
-pub mod bwt;              // BWT data structure and FM-Index operations
+pub mod alignment;        // Core alignment pipeline (seeding, chaining, extension, finalization)
 pub mod bntseq;           // Reference sequence handling
-pub mod kseq;             // FASTA parsing (used for reference genomes during indexing)
-pub mod fastq_reader;     // FASTQ parsing using bio::io::fastq (query reads with gzip support)
-pub mod align;            // Core alignment pipeline
-pub mod mem;              // High-level alignment logic (includes logging/stats)
-pub mod banded_swa;       // SIMD Smith-Waterman
-pub mod utils;            // I/O and bit manipulation utilities
 pub mod bwa_index;        // Index building (uses bio crate for suffix array)
-pub mod simd_abstraction; // Cross-platform SIMD layer
+pub mod bwt;              // BWT data structure
+pub mod fastq_reader;     // FASTQ parsing using bio::io::fastq (query reads with gzip support)
+pub mod fm_index;         // FM-Index operations (BWT search, occurrence counting)
+pub mod index;            // Index management (BwaIndex loading/dumping)
+pub mod insert_size;      // Insert size statistics for paired-end
+pub mod kseq;             // FASTA parsing (used for reference genomes during indexing)
+pub mod mate_rescue;      // Mate rescue using Smith-Waterman
+pub mod mem;              // High-level alignment logic (includes logging/stats)
 pub mod mem_opt;          // Command-line options and parameters
+pub mod paired_end;       // Paired-end read processing
+pub mod pairing;          // Paired-end alignment scoring
+pub mod sam_output;       // SAM output formatting and flag management
+pub mod simd;             // SIMD engine detection and dispatch
+pub mod simd_abstraction; // Cross-platform SIMD layer (SSE2/AVX2/AVX-512/NEON)
+pub mod single_end;       // Single-end read processing
+pub mod utils;            // I/O and bit manipulation utilities
+```
+
+**Alignment Submodules** (`src/alignment/`):
+```
+pub mod banded_swa;       // SIMD Smith-Waterman (128-bit baseline)
+pub mod banded_swa_avx2;  // AVX2 256-bit Smith-Waterman (x86_64 only)
+pub mod banded_swa_avx512;// AVX-512 512-bit Smith-Waterman (feature-gated)
+pub mod chaining;         // Seed chaining with O(n²) DP
+pub mod extension;        // Banded alignment extension jobs
+pub mod finalization;     // Alignment selection, MAPQ, secondary marking
+pub mod ksw_affine_gap;   // Affine-gap Smith-Waterman fallback
+pub mod pipeline;         // Main alignment pipeline (generate_seeds -> align_read)
+pub mod seeding;          // SMEM generation from FM-Index
+pub mod utils;            // Base encoding, scoring matrices
 ```
 
 **External Dependencies**:
@@ -110,39 +132,40 @@ pub mod mem_opt;          // Command-line options and parameters
 - `bio`: Bioinformatics utilities (suffix array, FASTQ parsing - Session 27)
 - `flate2`: Gzip compression support for FASTQ files (Session 27)
 
-### Alignment Pipeline (Five-Stage Architecture)
+### Alignment Pipeline (Four-Stage Architecture)
 
-The pipeline implements a multi-kernel design matching the C++ version:
+The pipeline implements a multi-kernel design matching the C++ version. Entry point: `alignment::pipeline::align_read()`.
 
-**Stage 1: Seed Extraction** (`align::generate_seeds()`):
+**Stage 1: Seeding** (`alignment::pipeline::find_seeds()`):
 - Extracts SMEMs (Supermaximal Exact Matches) via FM-Index backward search
 - Searches both forward and reverse-complement strands
+- Re-seeding pass for long unique SMEMs (chimeric detection)
+- 3rd round seeding for highly repetitive regions (`max_mem_intv`)
 - Filters seeds by minimum length and maximum occurrence count
-- Returns `Vec<SMEM>` with BWT intervals [k, l)
+- Converts BWT intervals to reference positions via suffix array
 
-**Stage 2: Suffix Array Reconstruction** (`get_sa_entry()`):
-- Converts BWT positions to reference genome positions
-- Uses sampled suffix array (typically every 8th position)
-- Includes infinite loop detection for safety
-
-**Stage 3: Seed Extension** (`execute_batched_alignments()` or `execute_scalar_alignments()`):
-- Extends seeds using banded Smith-Waterman alignment
-- **Batched SIMD mode**: When ≥16 alignment jobs, uses 8-way or 16-way SIMD parallelism
-- **Scalar mode**: Falls back to non-SIMD for small batches
-- Generates CIGAR strings for aligned regions
-- Returns `Vec<Alignment>` with scores and CIGARs
-
-**Stage 4: Seed Chaining** (`chain_seeds()`):
-- Groups compatible seeds using O(n²) dynamic programming
+**Stage 2: Chaining** (`alignment::pipeline::build_and_filter_chains()`):
+- Groups compatible seeds using O(n²) dynamic programming (`chaining::chain_seeds()`)
 - Scores chains based on seed lengths and gaps
-- Identifies best chain per read
+- Filters chains by score threshold and overlap
 
-**Stage 5: SAM Output**:
-- Formats alignments as SAM records
-- Includes CIGAR strings, flags, mapping quality, and metadata
-- For paired-end: adds insert size, mate information, and MC (mate CIGAR) tag
+**Stage 3: Extension** (`alignment::pipeline::extend_chains_to_alignments()`):
+- Creates alignment jobs for left/right extension around each seed
+- Executes banded Smith-Waterman via adaptive routing:
+  - **SIMD mode**: Routes to 128/256/512-bit engine based on CPU
+  - **Scalar fallback**: For pathological alignments with ksw_extend2
+- Generates CIGAR strings for aligned regions
 
-**Paired-End Extension** (`mem::process_read_pairs()`):
+**Stage 4: Finalization** (`alignment::pipeline::finalize_alignments()`):
+- Merges left/right extension CIGARs with seed
+- Converts FM-index positions to chromosome coordinates
+- Computes MD tag and exact NM (edit distance)
+- Filters by score threshold, removes redundant alignments
+- Marks secondary/supplementary alignments, calculates MAPQ
+- Generates XA/SA tags for alternative alignments
+- Produces unmapped record if no alignments survive
+
+**Paired-End Processing** (`paired_end::process_read_pairs()`):
 1. Insert size estimation from concordant pairs
 2. Mate rescue (re-align using mate's location)
 3. Pair re-scoring based on insert size distribution
@@ -189,52 +212,65 @@ The pipeline implements a multi-kernel design matching the C++ version:
 
 ### Key Data Structures
 
-**FM-Index Tier** (`align.rs`, `bwt.rs`):
+**FM-Index Tier** (`fm_index.rs`, `bwt.rs`):
 ```rust
-pub struct SMEM {
-    m: i32,           // Start position in query
-    n: i32,           // End position in query
-    k: u64,           // Start of BWT interval
-    l: u64,           // End of BWT interval
-    is_rev_comp: bool // Forward or reverse strand
+pub struct SMEM {                        // alignment/seeding.rs
+    pub query_start: i32,                // Start position in query (0-based, inclusive)
+    pub query_end: i32,                  // End position in query (0-based, exclusive)
+    pub bwt_interval_start: u64,         // Start of BWT interval in suffix array
+    pub bwt_interval_end: u64,           // End of BWT interval
+    pub interval_size: u64,              // Occurrence count
+    pub is_reverse_complement: bool,     // Forward or reverse strand
 }
 
-pub struct CpOcc {
-    cp_count: [i64; 4],        // Cumulative base counts at checkpoint
-    one_hot_bwt_str: [u64; 4]  // One-hot encoded BWT for popcount
+pub struct CpOcc {                       // fm_index.rs
+    cp_count: [i64; 4],                  // Cumulative base counts at checkpoint
+    one_hot_bwt_str: [u64; 4],           // One-hot encoded BWT for popcount
 }
 
-pub struct Bwt {
-    bwt_str: Vec<u8>,      // 2-bit packed BWT (4 bases per byte)
-    sa_samples: Vec<u64>,   // Sampled suffix array
-    cp_occ: Vec<CpOcc>,     // Checkpoints every 64 bases
+pub struct Bwt {                         // bwt.rs
+    pub bwt_str: Vec<u8>,                // 2-bit packed BWT (4 bases per byte)
+    pub sa_samples: Vec<u64>,            // Sampled suffix array
+    pub cp_occ: Vec<CpOcc>,              // Checkpoints every 64 bases
+    pub cumulative_count: [u64; 5],      // L2 array for FM-Index
 }
 ```
 
-**Alignment Tier** (`align.rs`, `banded_swa.rs`):
+**Alignment Tier** (`alignment/seeding.rs`, `alignment/chaining.rs`, `alignment/finalization.rs`):
 ```rust
-pub struct Seed {
-    query_pos: i32,  // Position in query sequence
-    ref_pos: u64,    // Position in reference genome
-    len: i32,        // Seed length
-    is_rev: bool     // Strand orientation
+pub struct Seed {                        // alignment/seeding.rs
+    pub query_pos: i32,                  // Position in query sequence
+    pub ref_pos: u64,                    // Position in reference genome
+    pub len: i32,                        // Seed length
+    pub is_rev: bool,                    // Strand orientation
+    pub interval_size: u64,              // BWT interval size
+    pub rid: i32,                        // Reference sequence ID (-1 if spans boundaries)
 }
 
-pub struct Chain {
-    seeds: Vec<Seed>,
-    score: i32,
-    query_start: i32,
-    query_end: i32
+pub struct Chain {                       // alignment/chaining.rs
+    pub seeds: Vec<usize>,               // Indices into sorted seeds array
+    pub score: i32,                      // Chain score
+    pub weight: i32,                     // Sum of seed lengths
+    pub is_rev: bool,                    // Strand orientation
+    pub frac_rep: f32,                   // Fraction of repetitive seeds
 }
 
-pub struct Alignment {
-    ref_pos: u64,
-    query_start: i32,
-    query_end: i32,
-    cigar: String,
-    score: i32,
-    mapq: u8,
-    is_reverse: bool
+pub struct Alignment {                   // alignment/finalization.rs
+    pub query_name: String,
+    pub flag: u16,                       // SAM flag bits
+    pub ref_name: String,
+    pub ref_id: usize,                   // Reference sequence ID
+    pub pos: u64,                        // 0-based leftmost position
+    pub mapq: u8,                        // Mapping quality
+    pub score: i32,                      // Alignment score
+    pub cigar: Vec<(u8, i32)>,           // CIGAR operations
+    pub tags: Vec<(String, String)>,     // SAM tags (AS, NM, MD, XA, SA, etc.)
+    // Internal fields for selection (not in SAM output)
+    pub(crate) query_start: i32,
+    pub(crate) query_end: i32,
+    pub(crate) seed_coverage: i32,
+    pub(crate) hash: u64,
+    pub(crate) frac_rep: f32,
 }
 ```
 
@@ -320,10 +356,11 @@ pub struct BntAnn1 {
 - More memory efficient (single shared index vs per-thread copies)
 
 **Implementation Files**:
-- `src/mem.rs:275-379`: Single-end batched processing (uses FastqReader - Session 27)
-- `src/mem.rs:382-906`: Paired-end batched processing (uses FastqReader - Session 27)
-- `src/main.rs:206-289`: Logger initialization and thread validation
-- `src/fastq_reader.rs`: FASTQ I/O wrapper using bio::io::fastq (Session 27)
+- `src/single_end.rs`: Single-end batched processing with Rayon
+- `src/paired_end.rs`: Paired-end batched processing with Rayon
+- `src/mem.rs`: Entry point (`main_mem()`), dispatches to single/paired-end
+- `src/main.rs`: CLI parsing, logger initialization, thread validation
+- `src/fastq_reader.rs`: FASTQ I/O wrapper using bio::io::fastq with gzip support
 
 ### Logging and Statistics (Session 26)
 
@@ -370,10 +407,9 @@ env_logger::Builder::from_default_env()
   - Mate rescue results
 
 **Implementation Files**:
-- `src/main.rs:206-289`: Logger initialization, verbosity mapping
-- `src/mem.rs:275-379`: Single-end with statistics tracking
-- `src/mem.rs:382-906`: Paired-end with statistics tracking
-- Converted ~35 `eprintln!` statements to structured logging
+- `src/main.rs`: Logger initialization, verbosity mapping
+- `src/single_end.rs`: Single-end with statistics tracking
+- `src/paired_end.rs`: Paired-end with statistics tracking
 
 **Usage Examples**:
 ```bash
@@ -447,15 +483,14 @@ let cigar = result.cigar_string;
 
 ## Testing Architecture
 
-**Unit Tests** (98 tests in source files):
+**Unit Tests** (98+ tests in source files):
 - `bwt_test.rs`: FM-Index backward search, checkpoint calculation, popcount64
 - `kseq_test.rs`: FASTA parsing edge cases (used for reference genomes)
-- `fastq_reader_test.rs`: FASTQ parsing with bio::io::fastq, gzip support (Session 27)
+- `fastq_reader_test.rs`: FASTQ parsing with bio::io::fastq, gzip support
 - `bntseq_test.rs`: Reference loading and ambiguous base handling
-- `utils_test.rs`: Bit manipulation, file I/O
-- `banded_swa` module: Smith-Waterman tests including SIMD batched variants
-- `align` module: Alignment pipeline tests
-- `mem_opt` module: Command-line parameter parsing tests
+- `alignment/banded_swa`: Smith-Waterman tests including SIMD batched variants
+- `alignment/pipeline`: Pipeline stage tests
+- `mem_opt`: Command-line parameter parsing tests
 
 **Integration Tests** (`tests/`):
 - `integration_test.rs`: End-to-end index build + single-end alignment
@@ -463,14 +498,22 @@ let cigar = result.cigar_string;
 - `complex_integration_test.rs`: Multi-reference genomes, edge cases
 - `complex_alignment_tests.rs`: CIGAR validation, strand orientation
 
+**Golden Reads Parity Tests** (`tests/golden_reads/`):
+- 10K read pairs from HG002 WGS for regression testing
+- `baseline_ferrous.sam`: Frozen ferrous-align output (parity target)
+- `baseline_bwamem2.sam`: BWA-MEM2 reference for comparison
+- Used for validating pipeline refactoring (see `dev_notes/PIPELINE_FRONTLOADING_PLAN.md`)
+- Data files excluded from git; regenerate locally with commands in README.md
+
 **Test Data**:
 - Small synthetic references in integration tests
 - Tests gracefully skip if data missing: `if !path.exists() { return; }`
+- Large test data (HG002, etc.) stored in `/home/jkane/Genomics/`
 
 **Benchmarks** (`benches/simd_benchmarks.rs`):
 - Compares scalar vs batched SIMD Smith-Waterman
 - Tests sequence lengths: 50bp, 100bp, 200bp
-- Run with `cargo bench` (requires nightly Rust for criterion)
+- Run with `cargo bench`
 
 ## Compatibility Notes
 
@@ -529,15 +572,7 @@ let cigar = result.cigar_string;
 7. ✅ SMEM generation algorithm (Session 29 - complete rewrite to match C++ bwa-mem2)
 8. ✅ Index building format compatibility (Session 29 - .pac file format, ambiguous bases, BWT construction)
 9. ✅ Adaptive batch sizing and SIMD routing (Session 29 - performance optimizations)
-
-**Recent Critical Fixes (Session 29 - Nov 2025)**:
-- ✅ SMEM duplication bug - now correctly skips ahead after each SMEM
-- ✅ BWT interval calculation in backward_ext() - off-by-one errors fixed
-- ✅ L2 array initialization - added +1 to match C++ count[] array
-- ✅ Ambiguous base handling - now replaces with random bases and includes in l_pac
-- ✅ .pac file format - MSB-first bit order and metadata bytes now correct
-- ✅ Suffix array reconstruction - sentinel handling and position calculations fixed
-- ✅ Index file compatibility - Rust-built indices now match C++ bwa-mem2 format
+10. ✅ Golden reads parity test infrastructure (tests/golden_reads/ - 10K HG002 pairs)
 
 **Remaining Optimizations**:
 1. Faster suffix array reconstruction (cache recent lookups)
@@ -546,7 +581,9 @@ let cigar = result.cigar_string;
 4. Stabilize AVX-512 support (waiting on Rust compiler stabilization)
 
 **Remaining Correctness Issues**:
-- Paired-end insert size distribution may differ slightly from C++ version
+- **Proper pairing rate gap**: 90.28% vs BWA-MEM2's 97.11% on HG002 10K test (6.83% gap)
+  - Root cause: Insert size estimation or pair scoring differences
+  - Tracked in `tests/golden_reads/README.md`
 - Secondary alignment marking not fully matching bwa-mem2 behavior
 - Some edge cases in CIGAR generation for complex indels
 
@@ -563,133 +600,10 @@ let cigar = result.cigar_string;
 - Memory-mapped index loading (reduce startup time)
 - GPU acceleration via Metal (Apple Silicon) or CUDA
 
-## Session 29 Bug Fixes - Detailed Technical Notes
-
-This section documents critical bugs fixed in Session 29 (Nov 2025) and their root causes for future reference.
-
-### 1. Ambiguous Base Handling in Index Building
-
-**Problem**: Rust-built indices had l_pac off by 1, causing ALL suffix array positions to be wrong.
-
-**Root Cause**:
-- C++ bwa-mem2 replaces ambiguous bases (N) with **random bases** (bntseq.cpp:284)
-- C++ includes these random-replaced bases in l_pac and writes them to .pac file
-- Rust was **skipping** ambiguous bases entirely, not writing them to .pac
-- For chrM reference (1 'N' at position 3106): C++ l_pac=16569, Rust l_pac=16568
-
-**Fix** (commit aef85d1):
-- Added `rand` crate with deterministic RNG (seed=11, matching C++)
-- When processing ambiguous base: record in ambs array AND replace with random base (0-3)
-- Write random-replaced base to pac_data and increment packed_base_count
-- Add .pac metadata bytes: `[optional_zero_if_divisible] + [l_pac % 4]`
-
-**Files Changed**: `src/bntseq.rs`, `Cargo.toml`
-
-**Validation**: Rust l_pac now matches C++ exactly, SA values identical
-
-### 2. SMEM Duplication Bug
-
-**Problem**: SMEM generation produced duplicate seeds with overlapping intervals.
-
-**Root Cause**:
-- After finding an SMEM, backward_ext() continued from current position
-- Should skip ahead past the SMEM to avoid re-processing (C++ FMI_search.cpp)
-
-**Fix** (commit 43d5a63):
-- After each SMEM: set `i = x + 1` to skip past the SMEM
-- Prevents overlapping SMEMs and duplicate seed generation
-
-**Files Changed**: `src/align.rs`
-
-**Validation**: SMEM counts now match C++ bwa-mem2
-
-### 3. L2 Array Off-by-One
-
-**Problem**: FM-Index backward search returned wrong intervals.
-
-**Root Cause**:
-- C++ uses `count[]` array with sentinel at index 0 (FMI_search.cpp:182)
-- Rust l2 array was missing the +1 offset for this sentinel position
-- Caused off-by-one errors in occurrence calculations
-
-**Fix** (commit 2ff8e72):
-- Added +1 when initializing l2 array from bwt_occ calculations
-- l2[i] now represents cumulative count BEFORE character i (matching C++)
-
-**Files Changed**: `src/bwa_index.rs`
-
-**Validation**: BWT intervals now match C++ exactly
-
-### 4. .pac File Bit Order
-
-**Problem**: .pac files had reversed bit order within bytes.
-
-**Root Cause**:
-- C++ uses MSB-first bit packing: `((~pos & 3) << 1)` (bntseq.cpp:246)
-- Rust was using LSB-first bit packing
-- Caused incorrect base extraction during alignment
-
-**Fix** (commit 58a3298):
-- Changed bit shift formula to match C++: `shift = ((!(i % 4)) & 3) << 1`
-- Now correctly packs 4 bases per byte in MSB-first order
-
-**Files Changed**: `src/bntseq.rs`
-
-**Validation**: hexdump of .pac files now matches C++ output
-
-### 5. BWT Interval Calculation in backward_ext()
-
-**Problem**: BWT backward search produced wrong intervals for some queries.
-
-**Root Cause**:
-- Using `bwt_occ(k-1)` and `bwt_occ(l-1)` instead of `bwt_occ(k)` and `bwt_occ(l)`
-- Off-by-one error in occurrence counting
-- Caused incorrect SMEM boundaries
-
-**Fix** (commit 1ed3bb7):
-- Changed to `bwt_occ(k, c)` and `bwt_occ(l, c)` (no -1 offset)
-- Matches C++ FMI_search behavior exactly
-
-**Files Changed**: `src/align.rs`
-
-**Validation**: SMEM intervals now match C++ for all test cases
-
-### 6. Bidirectional BWT Construction
-
-**Problem**: BWT was only built for forward strand, not bidirectional.
-
-**Root Cause**:
-- C++ builds BWT on concatenated sequence: forward + reverse_complement (FMI_search.cpp:101-140)
-- Rust was only using forward strand
-- Missing reverse complement prevented reverse-strand alignment
-
-**Fix** (Session 29, multiple commits):
-- Build text_for_sais with capacity `2 * l_pac + 1`
-- Append forward strand bases
-- Append reverse complement strand: `complement = (3 - base) + 1`
-- Total length now matches C++: 33139 for chrM (16569 forward + 16569 RC + 1 sentinel)
-
-**Files Changed**: `src/bwa_index.rs`
-
-**Validation**: BWT length, SA values, and alignment results now match C++
-
-### Debugging Techniques Used
-
-1. **Comparative Logging**: Added parallel debug traces to C++ and Rust codebases
-2. **Binary Diff**: Used hexdump to compare .pac and .bwt files byte-by-byte
-3. **Trace Comparison**: Compared l_pac, SA arrays, BWT values between implementations
-4. **Small Test Case**: Used chrM (16.5 KB) for fast iteration and validation
-5. **Git Bisect**: Reverted changes when fixes made things worse
-
-### Key Learnings
-
-- **"Obvious" design choices may be wrong**: Random base replacement for N seemed odd but is required
-- **File format matters**: Bit order, metadata bytes all critical for compatibility
-- **Off-by-one errors cascade**: l_pac off by 1 → all SA positions wrong → all alignments wrong
-- **Comparative debugging is powerful**: Side-by-side traces quickly revealed l_pac discrepancy
-- **C++ code is the specification**: When in doubt, match C++ behavior exactly, even if it seems suboptimal
-
 ## Development Workflow
+
+**Active Development Plans**:
+- **Pipeline Front-Loading** (`dev_notes/PIPELINE_FRONTLOADING_PLAN.md`): Refactoring to move computations earlier in the alignment pipeline, making finalization thinner. Phase 0 (golden reads parity tests) complete.
 
 **Making Changes**:
 1. Create feature branch from `main`
@@ -699,6 +613,7 @@ This section documents critical bugs fixed in Session 29 (Nov 2025) and their ro
 5. Add integration tests for new pipeline stages
 6. Run `cargo test` to ensure no regressions
 7. Benchmark critical path changes with `cargo bench`
+8. For pipeline changes: verify against `tests/golden_reads/baseline_ferrous.sam`
 
 **Debugging Tips**:
 - Use `cargo test -- --nocapture` to see println! output
