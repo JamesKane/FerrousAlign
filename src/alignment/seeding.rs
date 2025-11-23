@@ -157,6 +157,9 @@ pub fn generate_smems_for_strand(
                         min_intv
                     );
                 }
+                // Match BWA-MEM2: set next_x = j (not j+1) when interval drops below min_intv
+                // This ensures we try position j as a starting point in the next iteration
+                next_x = j;
                 break;
             }
 
@@ -681,6 +684,90 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
         (bwa_idx.bns.packed_sequence_length << 1)
     );
     result
+}
+
+/// Forward-only seed strategy matching BWA-MEM2's bwtSeedStrategyAllPosOneThread
+///
+/// This is a simpler seeding algorithm that:
+/// 1. Iterates through all positions in the query
+/// 2. Does forward extension only (no backward phase)
+/// 3. Outputs seeds when interval drops BELOW max_intv (not above)
+/// 4. Uses min_seed_len + 1 as the minimum seed length
+///
+/// This finds seeds that might be missed by the supermaximal SMEM algorithm,
+/// particularly in reads with many mismatches where seeds are fragmented.
+pub fn forward_only_seed_strategy(
+    bwa_idx: &BwaIndex,
+    query_name: &str,
+    query_len: usize,
+    encoded_query: &[u8],
+    is_reverse_complement: bool,
+    min_seed_len: i32,
+    max_intv: u64,
+    all_smems: &mut Vec<SMEM>,
+) {
+    let min_len = min_seed_len + 1; // BWA-MEM2 uses min_seed_len + 1 for 3rd round
+    let mut x = 0;
+
+    while x < query_len {
+        let a = encoded_query[x];
+        let mut next_x = x + 1;
+
+        if a >= 4 {
+            // Skip 'N' bases
+            x = next_x;
+            continue;
+        }
+
+        // Initialize SMEM at position x
+        let mut smem = SMEM {
+            read_id: 0,
+            query_start: x as i32,
+            query_end: x as i32,
+            bwt_interval_start: bwa_idx.bwt.cumulative_count[a as usize],
+            bwt_interval_end: bwa_idx.bwt.cumulative_count[(3 - a) as usize],
+            interval_size: bwa_idx.bwt.cumulative_count[(a + 1) as usize]
+                - bwa_idx.bwt.cumulative_count[a as usize],
+            is_reverse_complement,
+        };
+
+        // Forward extension only
+        for j in (x + 1)..query_len {
+            next_x = j + 1;
+            let a = encoded_query[j];
+
+            if a >= 4 {
+                // Hit 'N' base - stop extension
+                break;
+            }
+
+            let new_smem = forward_ext(bwa_idx, smem, a);
+            smem = new_smem;
+            smem.query_end = j as i32;
+
+            // Output seed when interval drops BELOW max_intv (specific enough)
+            // AND length meets minimum requirement
+            let len = smem.query_end - smem.query_start + 1;
+            if smem.interval_size < max_intv && len >= min_len {
+                if smem.interval_size > 0 {
+                    log::debug!(
+                        "{}: forward_only_seed: m={}, n={}, len={}, s={} (< max_intv={}), is_rc={}",
+                        query_name,
+                        smem.query_start,
+                        smem.query_end,
+                        len,
+                        smem.interval_size,
+                        max_intv,
+                        is_reverse_complement
+                    );
+                    all_smems.push(smem);
+                }
+                break;
+            }
+        }
+
+        x = next_x;
+    }
 }
 
 #[cfg(test)]

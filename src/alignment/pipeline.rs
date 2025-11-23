@@ -13,6 +13,7 @@ use crate::alignment::finalization::remove_redundant_alignments;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::seeding::SMEM;
 use crate::alignment::seeding::Seed;
+use crate::alignment::seeding::forward_only_seed_strategy;
 use crate::alignment::seeding::generate_smems_for_strand;
 use crate::alignment::seeding::generate_smems_from_position;
 use crate::alignment::seeding::get_sa_entries;
@@ -609,46 +610,45 @@ fn find_seeds(
         );
     }
 
-    // 3rd round seeding: For highly repetitive regions where all SMEMs exceed max_occ,
-    // do another pass with min_intv = max_mem_intv to find more specific seeds.
-    // This matches BWA-MEM2's -y parameter (seed_occurrence_3rd).
+    // 3rd round seeding: Additional seeding pass with forward-only strategy
+    // BWA-MEM2 runs this unconditionally when max_mem_intv > 0 (default 20)
+    // Uses min_seed_len + 1 as minimum length and max_mem_intv as the interval threshold
+    // This finds seeds that might be missed by the supermaximal SMEM algorithm
     let smems_before_3rd_round = all_smems.len();
-    let all_smems_exceed_max_occ = !all_smems.is_empty() && all_smems.iter().all(|s| s.interval_size > opt.max_occ as u64);
     let mut used_3rd_round_seeding = false;
 
-    if all_smems_exceed_max_occ && opt.max_mem_intv > 1 {
+    // Match BWA-MEM2: run 3rd round seeding unconditionally when max_mem_intv > 0
+    // (Previously required all SMEMs to exceed max_occ, which was incorrect)
+    if opt.max_mem_intv > 0 {
         used_3rd_round_seeding = true;
         log::debug!(
-            "{}: All {} SMEMs exceed max_occ={}, doing 3rd round seeding with min_intv={}",
-            query_name, all_smems.len(), opt.max_occ, opt.max_mem_intv
+            "{}: Running 3rd round seeding (max_mem_intv={}) with {} existing SMEMs",
+            query_name, opt.max_mem_intv, all_smems.len()
         );
 
-        // Do 3rd round seeding from multiple positions along the read
-        let step = (query_len / 4).max(1);
-        for start_pos in (0..query_len).step_by(step) {
-            generate_smems_from_position(
-                bwa_idx,
-                query_name,
-                query_len,
-                &encoded_query,
-                false,
-                min_seed_len,
-                opt.max_mem_intv,
-                start_pos,
-                &mut all_smems,
-            );
-            generate_smems_from_position(
-                bwa_idx,
-                query_name,
-                query_len,
-                &encoded_query_rc,
-                true,
-                min_seed_len,
-                opt.max_mem_intv,
-                start_pos,
-                &mut all_smems,
-            );
-        }
+        // Use forward-only seed strategy matching BWA-MEM2's bwtSeedStrategyAllPosOneThread
+        // This iterates through ALL positions, doing forward extension only,
+        // and outputs seeds when interval drops BELOW max_mem_intv
+        forward_only_seed_strategy(
+            bwa_idx,
+            query_name,
+            query_len,
+            &encoded_query,
+            false,
+            min_seed_len,
+            opt.max_mem_intv,
+            &mut all_smems,
+        );
+        forward_only_seed_strategy(
+            bwa_idx,
+            query_name,
+            query_len,
+            &encoded_query_rc,
+            true,
+            min_seed_len,
+            opt.max_mem_intv,
+            &mut all_smems,
+        );
 
         if all_smems.len() > smems_before_3rd_round {
             log::debug!(
