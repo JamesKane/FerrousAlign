@@ -71,6 +71,25 @@ pub fn mem_matesw(
 
     let mut n_rescued = 0;
 
+    // Convert anchor position from SAM to bidirectional coordinates
+    // BWA-MEM2 uses a->rb which is the bidirectional position:
+    // - Forward strand: rb = leftmost position (same as SAM pos)
+    // - Reverse strand: rb = (2*l_pac - 1) - rightmost position
+    let anchor_is_rev = (anchor.flag & sam_flags::REVERSE) != 0;
+    let anchor_ref_len = anchor.reference_length() as i64;
+    let anchor_rb = if anchor_is_rev {
+        // For reverse strand, convert SAM pos to bidirectional
+        let rightmost = anchor.pos as i64 + anchor_ref_len - 1;
+        (l_pac << 1) - 1 - rightmost
+    } else {
+        anchor.pos as i64
+    };
+
+    log::trace!(
+        "mate_rescue: anchor pos={}, is_rev={}, ref_len={}, rb={}",
+        anchor.pos, anchor_is_rev, anchor_ref_len, anchor_rb
+    );
+
     // Try each orientation
     for r in 0..4 {
         if skip[r] {
@@ -92,32 +111,38 @@ pub fn mem_matesw(
             seq = mate_seq.to_vec();
         }
 
-        // Calculate search region
+        // Calculate search region using bidirectional anchor position
+        // This matches BWA-MEM2's mem_matesw which uses a->rb (bidirectional)
         let (rb, re) = if !is_rev {
             let rb = if is_larger {
-                anchor.pos as i64 + stats[r].low as i64
+                anchor_rb + stats[r].low as i64
             } else {
-                anchor.pos as i64 - stats[r].high as i64
+                anchor_rb - stats[r].high as i64
             };
             let re = if is_larger {
-                anchor.pos as i64 + stats[r].high as i64
+                anchor_rb + stats[r].high as i64
             } else {
-                anchor.pos as i64 - stats[r].low as i64
+                anchor_rb - stats[r].low as i64
             } + l_ms as i64;
             (rb.max(0), re.min(l_pac << 1))
         } else {
             let rb = if is_larger {
-                anchor.pos as i64 + stats[r].low as i64
+                anchor_rb + stats[r].low as i64
             } else {
-                anchor.pos as i64 - stats[r].high as i64
+                anchor_rb - stats[r].high as i64
             } - l_ms as i64;
             let re = if is_larger {
-                anchor.pos as i64 + stats[r].high as i64
+                anchor_rb + stats[r].high as i64
             } else {
-                anchor.pos as i64 - stats[r].low as i64
+                anchor_rb - stats[r].low as i64
             };
             (rb.max(0), re.min(l_pac << 1))
         };
+
+        log::trace!(
+            "mate_rescue: orientation {}, is_rev={}, is_larger={}, search region [{}, {})",
+            r, is_rev, is_larger, rb, re
+        );
 
         if rb >= re {
             continue;

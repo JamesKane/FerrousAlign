@@ -361,7 +361,7 @@ pub fn process_paired_end(
     let first_batch_seqs1 = first_batch1.as_tuple_refs();
     let first_batch_seqs2 = first_batch2.as_tuple_refs();
 
-    // Mate rescue on first batch
+    // Mate rescue on first batch (BWA-MEM2: run unconditionally on top alignments)
     let rescued_first = mate_rescue_batch(
         &mut first_batch_alignments,
         &first_batch_seqs1,
@@ -369,6 +369,7 @@ pub fn process_paired_end(
         &pac,
         &stats,
         &bwa_idx,
+        opt.max_matesw as usize,
     );
     log::info!("First batch: {} pairs rescued", rescued_first);
 
@@ -389,6 +390,7 @@ pub fn process_paired_end(
         .collect();
 
     // Output first batch immediately
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
     let first_batch_records = output_batch_paired(
         first_batch_alignments,
         &first_batch_seqs1_owned,
@@ -397,6 +399,7 @@ pub fn process_paired_end(
         writer,
         &opt,
         0,
+        l_pac,
     )
     .unwrap_or_else(|e| {
         log::error!("Error writing first batch: {}", e);
@@ -492,7 +495,7 @@ pub fn process_paired_end(
         let batch_seqs1 = batch1.as_tuple_refs();
         let batch_seqs2 = batch2.as_tuple_refs();
 
-        // Mate rescue on this batch
+        // Mate rescue on this batch (BWA-MEM2: run unconditionally on top alignments)
         let rescued = mate_rescue_batch(
             &mut batch_alignments,
             &batch_seqs1,
@@ -500,6 +503,7 @@ pub fn process_paired_end(
             &pac,
             &stats,
             &bwa_idx,
+            opt.max_matesw as usize,
         );
         total_rescued += rescued;
 
@@ -528,6 +532,7 @@ pub fn process_paired_end(
             writer,
             &opt,
             batch_num * reads_per_batch as u64,
+            l_pac,
         )
         .unwrap_or_else(|e| {
             log::error!("Error writing batch: {}", e);
@@ -568,8 +573,17 @@ pub fn process_paired_end(
     );
 }
 
-// Perform mate rescue on a single batch
-// Returns number of pairs rescued
+/// Perform mate rescue on a single batch.
+///
+/// BWA-MEM2 behavior: Run mate rescue UNCONDITIONALLY on the top alignments from
+/// each read, using them as anchors to find potential mates. This is done even
+/// when both reads have alignments, because the best individual alignments may
+/// not form a concordant pair - mate rescue can find a concordant position.
+///
+/// Parameters:
+/// - max_matesw: Maximum number of alignments to use as anchors (default: 50)
+///
+/// Returns number of pairs where at least one mate was rescued.
 fn mate_rescue_batch(
     batch_pairs: &mut [(Vec<Alignment>, Vec<Alignment>)],
     batch_seqs1: &[(&str, &[u8], &str)], // (name, seq, qual) for read1
@@ -577,16 +591,18 @@ fn mate_rescue_batch(
     pac: &[u8],
     stats: &[InsertSizeStats; 4],
     bwa_idx: &BwaIndex,
+    max_matesw: usize,
 ) -> usize {
     let mut rescued = 0;
 
-    // Encode sequence helper
-    // Use encode_sequence instead of lambda
+    if pac.is_empty() {
+        return 0;
+    }
+
     for (i, (alns1, alns2)) in batch_pairs.iter_mut().enumerate() {
         let (name1, seq1, qual1) = batch_seqs1[i];
         let (name2, seq2, qual2) = batch_seqs2[i];
 
-        // DEBUG: Log alignment counts for diagnostic purposes
         log::debug!(
             "Pair {}: {} has {} alignments, {} has {} alignments",
             i,
@@ -596,28 +612,51 @@ fn mate_rescue_batch(
             alns2.len()
         );
 
-        // Try to rescue read2 if read1 has good alignments but read2 doesn't
-        if !alns1.is_empty() && alns2.is_empty() && !pac.is_empty() {
+        let mut pair_rescued = false;
+
+        // BWA-MEM2 behavior: For each top alignment in read1, try to rescue read2
+        // This runs UNCONDITIONALLY, not just when read2 has no alignments
+        if !alns1.is_empty() {
             let mate_seq = encode_sequence(seq2);
-            let n = mem_matesw(
-                bwa_idx, pac, stats, &alns1[0], // Use best alignment as anchor
-                &mate_seq, qual2, name2, alns2,
-            );
-            if n > 0 {
-                rescued += 1;
+            let num_anchors = alns1.len().min(max_matesw);
+
+            for j in 0..num_anchors {
+                let n = mem_matesw(
+                    bwa_idx, pac, stats, &alns1[j],
+                    &mate_seq, qual2, name2, alns2,
+                );
+                if n > 0 {
+                    pair_rescued = true;
+                    log::debug!(
+                        "Pair {}: Rescued {} alignments for {} using {} anchor {}",
+                        i, n, name2, name1, j
+                    );
+                }
             }
         }
 
-        // Try to rescue read1 if read2 has good alignments but read1 doesn't
-        if !alns2.is_empty() && alns1.is_empty() && !pac.is_empty() {
+        // BWA-MEM2 behavior: For each top alignment in read2, try to rescue read1
+        if !alns2.is_empty() {
             let mate_seq = encode_sequence(seq1);
-            let n = mem_matesw(
-                bwa_idx, pac, stats, &alns2[0], // Use best alignment as anchor
-                &mate_seq, qual1, name1, alns1,
-            );
-            if n > 0 {
-                rescued += 1;
+            let num_anchors = alns2.len().min(max_matesw);
+
+            for j in 0..num_anchors {
+                let n = mem_matesw(
+                    bwa_idx, pac, stats, &alns2[j],
+                    &mate_seq, qual1, name1, alns1,
+                );
+                if n > 0 {
+                    pair_rescued = true;
+                    log::debug!(
+                        "Pair {}: Rescued {} alignments for {} using {} anchor {}",
+                        i, n, name1, name2, j
+                    );
+                }
             }
+        }
+
+        if pair_rescued {
+            rescued += 1;
         }
     }
 
@@ -648,17 +687,25 @@ fn filter_alignments_by_threshold(
 }
 
 /// Select best pair indices and determine if properly paired
+///
+/// # Arguments
+/// * `alignments1` - Alignments for read 1
+/// * `alignments2` - Alignments for read 2
+/// * `stats` - Insert size statistics for each orientation
+/// * `pair_id` - Unique pair identifier for tie-breaking
+/// * `l_pac` - Length of packed reference (for bidirectional coordinate conversion)
 fn select_best_pair(
     alignments1: &[Alignment],
     alignments2: &[Alignment],
     stats: &[InsertSizeStats; 4],
     pair_id: u64,
+    l_pac: i64,
 ) -> (usize, usize, bool) {
     if alignments1.is_empty() || alignments2.is_empty() {
         return (0, 0, false);
     }
 
-    let pair_result = mem_pair(stats, alignments1, alignments2, 2, pair_id);
+    let pair_result = mem_pair(stats, alignments1, alignments2, 2, pair_id, l_pac);
 
     if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
         log::trace!(
@@ -670,7 +717,7 @@ fn select_best_pair(
         // Fallback: even if mem_pair didn't find a valid pair, check if the top hits
         // from both reads constitute a proper pair based on same reference and insert size
         // (Matches bwa-mem2 logic in bwamem_pair.cpp lines 536-540)
-        let is_proper = check_proper_pair_fallback(&alignments1[0], &alignments2[0], stats);
+        let is_proper = check_proper_pair_fallback(&alignments1[0], &alignments2[0], stats, l_pac);
         log::trace!(
             "No valid pair from mem_pair, fallback proper_pair={}",
             is_proper
@@ -680,82 +727,68 @@ fn select_best_pair(
 }
 
 /// Fallback check for proper pairing when mem_pair returns None
-/// Matches bwa-mem2 logic: if top hits are on same reference and within insert size bounds,
-/// mark as properly paired.
+/// Matches bwa-mem2 logic (bwamem_pair.cpp:536-540): if top hits are on same reference
+/// and within insert size bounds, mark as properly paired.
 ///
-/// Uses the same bidirectional coordinate convention as BWA-MEM2:
-/// - Forward strand: position = leftmost coordinate
-/// - Reverse strand: position = (2*l_pac - 1) - rightmost coordinate
-///   (This uses the END of alignment, not beginning, for reverse strand)
+/// Uses the same bidirectional coordinate system as BWA-MEM2's mem_infer_dir():
+/// - Forward strand: bidir_pos = leftmost coordinate
+/// - Reverse strand: bidir_pos = (2*l_pac - 1) - rightmost coordinate
+///
+/// # Arguments
+/// * `aln1` - Best alignment for read 1
+/// * `aln2` - Best alignment for read 2
+/// * `stats` - Insert size statistics for each orientation
+/// * `l_pac` - Length of packed reference (for bidirectional coordinate conversion)
 fn check_proper_pair_fallback(
     aln1: &Alignment,
     aln2: &Alignment,
     stats: &[InsertSizeStats; 4],
+    l_pac: i64,
 ) -> bool {
     // Both must be mapped
     if (aln1.flag & sam_flags::UNMAPPED) != 0 || (aln2.flag & sam_flags::UNMAPPED) != 0 {
         return false;
     }
 
-    // Must be on same reference
+    // Must be on same reference (BWA-MEM2: h[0].rid == h[1].rid)
     if aln1.ref_id != aln2.ref_id {
         return false;
     }
 
-    // Determine orientation based on strand flags
+    // Convert SAM positions to bidirectional coordinates
+    // This matches BWA-MEM2's a[0].a[0].rb and a[1].a[0].rb
     let is_rev1 = (aln1.flag & sam_flags::REVERSE) != 0;
     let is_rev2 = (aln2.flag & sam_flags::REVERSE) != 0;
-
-    // Calculate reference lengths for rightmost position calculation
     let ref_len1 = aln1.reference_length() as i64;
     let ref_len2 = aln2.reference_length() as i64;
 
-    // Calculate "effective" positions matching BWA-MEM2's bidirectional convention
-    // For reverse strand, we need to use the rightmost position of the alignment
-    // This affects the orientation calculation
-    let eff_pos1 = if is_rev1 {
-        aln1.pos as i64 + ref_len1 - 1 // rightmost position
+    // BWA-MEM2 bidirectional coordinate conversion:
+    // - Forward strand: rb = leftmost position
+    // - Reverse strand: rb = (2*l_pac - 1) - rightmost position
+    let bidir_pos1 = if is_rev1 {
+        let rightmost = aln1.pos as i64 + ref_len1 - 1;
+        (l_pac << 1) - 1 - rightmost
     } else {
-        aln1.pos as i64 // leftmost position
+        aln1.pos as i64
     };
 
-    let eff_pos2 = if is_rev2 {
-        aln2.pos as i64 + ref_len2 - 1 // rightmost position
+    let bidir_pos2 = if is_rev2 {
+        let rightmost = aln2.pos as i64 + ref_len2 - 1;
+        (l_pac << 1) - 1 - rightmost
     } else {
-        aln2.pos as i64 // leftmost position
+        aln2.pos as i64
     };
 
-    // For orientation, we compare positions with strand awareness:
-    // - Same strand: compare effective positions directly
-    // - Different strands: after converting to "same strand space"
-    let same_strand = is_rev1 == is_rev2;
-
-    // The position comparison determines FR vs RF for different-strand pairs
-    // For same-strand pairs, it determines which is "first"
-    let pos_compare = if same_strand {
-        // Both on same strand - use effective positions
-        eff_pos2 > eff_pos1
-    } else {
-        // Different strands - for FR, read2 (reverse) should be "downstream" of read1 (forward)
-        // This is equivalent to comparing leftmost positions
-        aln2.pos as i64 > aln1.pos as i64
-    };
-
-    let orientation = match (same_strand, pos_compare) {
-        (true, true) => 0,   // FF: both same strand, "forward" order
-        (true, false) => 3,  // RR: both same strand, "reverse" order
-        (false, true) => 1,  // FR: different strands, typical Illumina orientation
-        (false, false) => 2, // RF: different strands, atypical
-    };
+    // Use infer_orientation which matches BWA-MEM2's mem_infer_dir()
+    use crate::insert_size::infer_orientation;
+    let (orientation, dist) = infer_orientation(l_pac, bidir_pos1, bidir_pos2);
 
     // Check if this orientation has valid statistics
     if stats[orientation].failed {
         return false;
     }
 
-    // Calculate insert size: use the difference between effective positions
-    // This matches the bidirectional coordinate distance calculation
-    let dist = (eff_pos2 - eff_pos1).abs();
+    let dist = dist as i64;
 
     // Check if within bounds
     dist >= stats[orientation].low as i64 && dist <= stats[orientation].high as i64
@@ -813,6 +846,16 @@ fn reorder_for_best_pair(alignments: &mut Vec<Alignment>, best_idx: usize) {
 
 // Output a batch of paired-end alignments with proper flags and flushing
 // Returns number of records written
+//
+// # Arguments
+// * `batch_pairs` - Vec of (read1 alignments, read2 alignments) for each pair
+// * `batch_seqs1` - Sequences for read 1: (name, seq, qual)
+// * `batch_seqs2` - Sequences for read 2: (name, seq, qual)
+// * `stats` - Insert size statistics for each orientation
+// * `writer` - Output writer for SAM records
+// * `opt` - Alignment options
+// * `starting_pair_id` - Base pair ID for this batch
+// * `l_pac` - Length of packed reference (for bidirectional coordinate conversion)
 fn output_batch_paired(
     batch_pairs: Vec<(Vec<Alignment>, Vec<Alignment>)>,
     batch_seqs1: &[(String, Vec<u8>, String)], // (name, seq, qual) for read1
@@ -821,6 +864,7 @@ fn output_batch_paired(
     writer: &mut Box<dyn Write>,
     opt: &MemOpt,
     starting_pair_id: u64,
+    l_pac: i64,
 ) -> std::io::Result<usize> {
     let mut records_written = 0;
 
@@ -846,7 +890,7 @@ fn output_batch_paired(
 
         // Stage 2: Select best pair (using alignments without secondary marking)
         let (best_idx1, best_idx2, is_properly_paired) =
-            select_best_pair(&alignments1, &alignments2, stats, pair_id);
+            select_best_pair(&alignments1, &alignments2, stats, pair_id, l_pac);
 
         // Stage 2b: Reorder alignments so best pair is at index 0
         // This ensures pair selection influences which alignment becomes primary
