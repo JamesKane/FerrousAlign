@@ -262,18 +262,30 @@ pub fn bootstrap_insert_size_stats(
             // Only use pairs on same reference
             if aln1.ref_name == aln2.ref_name {
                 // Convert positions to bidirectional coordinate space [0, 2*l_pac)
-                // Forward strand: [0, l_pac), Reverse strand: [l_pac, 2*l_pac)
+                // This matches BWA-MEM2's convention where:
+                // - Forward strand: rb = leftmost position
+                // - Reverse strand: rb = (2*l_pac) - 1 - (rightmost position)
+                //   (i.e., uses END of alignment, not beginning)
                 let is_rev1 = (aln1.flag & sam_flags::REVERSE) != 0;
                 let is_rev2 = (aln2.flag & sam_flags::REVERSE) != 0;
 
+                // For reverse strand, use rightmost position (end of alignment)
+                // pos + reference_length - 1 = rightmost coordinate
+                let ref_len1 = aln1.reference_length() as i64;
+                let ref_len2 = aln2.reference_length() as i64;
+
                 let pos1 = if is_rev1 {
-                    (l_pac << 1) - 1 - (aln1.pos as i64)
+                    // BWA-MEM2: rb = (l_pac<<1) - (rb + aln.te + 1)
+                    // aln.te is the end position, so rb + aln.te = rightmost position
+                    let rightmost = aln1.pos as i64 + ref_len1 - 1;
+                    (l_pac << 1) - 1 - rightmost
                 } else {
                     aln1.pos as i64
                 };
 
                 let pos2 = if is_rev2 {
-                    (l_pac << 1) - 1 - (aln2.pos as i64)
+                    let rightmost = aln2.pos as i64 + ref_len2 - 1;
+                    (l_pac << 1) - 1 - rightmost
                 } else {
                     aln2.pos as i64
                 };

@@ -99,6 +99,7 @@ struct MergedChainResult {
     ref_id: usize,
     chr_pos: u64,              // 0-based chromosome position
     fm_index_pos: u64,         // Original FM-index position (for MD tag generation)
+    fm_is_rev: bool,           // Whether FM-index pos was in reverse complement region
     // Query bounds (from CIGAR analysis)
     query_start: i32,          // Sum of leading clips
     query_end: i32,            // query_len - sum of trailing clips
@@ -255,12 +256,33 @@ fn merge_cigars_for_chains(
             }
 
             // Coordinate conversion: FM-index position -> chromosome position
-            let (pos_f, _is_rev) = bwa_idx.bns.bns_depos(start_pos as i64);
+            // Matching BWA-MEM2 bwamem.cpp:1770:
+            //   pos = bns_depos(bns, rb < bns->l_pac? rb : re - 1, &is_rev);
+            // For reverse strand (rb >= l_pac), use alignment END position, not START
+            let l_pac = bwa_idx.bns.packed_sequence_length;
+            let ref_len: i64 = cigar
+                .iter()
+                .filter_map(|&(op, len)| {
+                    if matches!(op as char, 'M' | 'D') {
+                        Some(len as i64)
+                    } else {
+                        None
+                    }
+                })
+                .sum();
+
+            // For reverse strand alignments, use end position for bns_depos
+            let depos_input = if start_pos >= l_pac {
+                start_pos + ref_len as u64 - 1  // Alignment end (re - 1)
+            } else {
+                start_pos  // Alignment start (rb)
+            };
+            let (pos_f, fm_is_rev) = bwa_idx.bns.bns_depos(depos_input as i64);
             let rid = bwa_idx.bns.bns_pos2rid(pos_f);
 
             log::debug!(
-                "{}: COORD_TRACE: start_pos={}, l_pac={}, pos_f={}, rid={}",
-                query_name, start_pos, bwa_idx.bns.packed_sequence_length, pos_f, rid
+                "{}: COORD_TRACE: start_pos={}, l_pac={}, depos_input={}, pos_f={}, rid={}, fm_is_rev={}",
+                query_name, start_pos, l_pac, depos_input, pos_f, rid, fm_is_rev
             );
 
             let (ref_name, ref_id, chr_pos) =
@@ -287,6 +309,7 @@ fn merge_cigars_for_chains(
                 ref_id,
                 chr_pos,
                 fm_index_pos: start_pos,
+                fm_is_rev,
                 query_start,
                 query_end,
             });
@@ -1116,24 +1139,45 @@ fn build_candidate_alignments(
 
         let nm = Alignment::calculate_exact_nm(&md_tag, &merged.cigar);
 
+        // Compute final strand: XOR of query strand (is_rev) and FM-index strand (fm_is_rev)
+        // - is_rev=false, fm_is_rev=false: forward query on forward ref → forward alignment
+        // - is_rev=false, fm_is_rev=true: forward query on revcomp ref → reverse alignment
+        // - is_rev=true, fm_is_rev=false: revcomp query on forward ref → reverse alignment
+        // - is_rev=true, fm_is_rev=true: revcomp query on revcomp ref → forward alignment
+        let final_strand_rev = chain.is_rev != merged.fm_is_rev;
+
         candidates.push(CandidateAlignment {
             ref_id: merged.ref_id,
             ref_name: merged.ref_name.clone(),
             pos: merged.chr_pos,
-            strand_rev: chain.is_rev,
+            strand_rev: final_strand_rev,
             cigar: merged.cigar.clone(),
             score: merged.score,
             query_start: merged.query_start,
             query_end: merged.query_end,
             seed_coverage: chain.weight,
             frac_rep: chain.frac_rep,
-            // Hash for deterministic tie-breaking (matches C++ bwa-mem2 bwamem.cpp:1428)
-            // BWA-MEM2 uses hash_64(read_id + alignment_index) for stable ordering
-            hash: hash_64(read_id + candidates.len() as u64),
+            // Hash assigned as 0 initially - will be reassigned after sorting
+            hash: 0,
             md_tag,
             nm,
             chain_id: merged.chain_idx,
         });
+    }
+
+    // BWA-MEM2 sorting behavior (bwamem.cpp:342, alnreg_slt comparator):
+    // Sort by (score DESC, ref_pos ASC, query_pos ASC) BEFORE hash assignment
+    // This ensures that for equal scores, lower-position alignments get lower hashes
+    // and thus become primary (since hash is used as tie-breaker in alnreg_hlt)
+    candidates.sort_by(|a, b| {
+        b.score.cmp(&a.score)  // score descending
+            .then_with(|| a.pos.cmp(&b.pos))  // ref_pos ascending
+            .then_with(|| a.query_start.cmp(&b.query_start))  // query_start ascending
+    });
+
+    // Now assign hash based on sorted order (matching C++ bwamem.cpp:1428)
+    for (i, candidate) in candidates.iter_mut().enumerate() {
+        candidate.hash = hash_64(read_id + i as u64);
     }
 
     candidates

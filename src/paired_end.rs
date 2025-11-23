@@ -666,9 +666,98 @@ fn select_best_pair(
         );
         (idx1, idx2, true)
     } else {
-        log::trace!("No valid pair found, using (0,0)");
-        (0, 0, false)
+        // Fallback: even if mem_pair didn't find a valid pair, check if the top hits
+        // from both reads constitute a proper pair based on same reference and insert size
+        // (Matches bwa-mem2 logic in bwamem_pair.cpp lines 536-540)
+        let is_proper = check_proper_pair_fallback(&alignments1[0], &alignments2[0], stats);
+        log::trace!(
+            "No valid pair from mem_pair, fallback proper_pair={}",
+            is_proper
+        );
+        (0, 0, is_proper)
     }
+}
+
+/// Fallback check for proper pairing when mem_pair returns None
+/// Matches bwa-mem2 logic: if top hits are on same reference and within insert size bounds,
+/// mark as properly paired.
+///
+/// Uses the same bidirectional coordinate convention as BWA-MEM2:
+/// - Forward strand: position = leftmost coordinate
+/// - Reverse strand: position = (2*l_pac - 1) - rightmost coordinate
+///   (This uses the END of alignment, not beginning, for reverse strand)
+fn check_proper_pair_fallback(
+    aln1: &Alignment,
+    aln2: &Alignment,
+    stats: &[InsertSizeStats; 4],
+) -> bool {
+    // Both must be mapped
+    if (aln1.flag & sam_flags::UNMAPPED) != 0 || (aln2.flag & sam_flags::UNMAPPED) != 0 {
+        return false;
+    }
+
+    // Must be on same reference
+    if aln1.ref_id != aln2.ref_id {
+        return false;
+    }
+
+    // Determine orientation based on strand flags
+    let is_rev1 = (aln1.flag & sam_flags::REVERSE) != 0;
+    let is_rev2 = (aln2.flag & sam_flags::REVERSE) != 0;
+
+    // Calculate reference lengths for rightmost position calculation
+    let ref_len1 = aln1.reference_length() as i64;
+    let ref_len2 = aln2.reference_length() as i64;
+
+    // Calculate "effective" positions matching BWA-MEM2's bidirectional convention
+    // For reverse strand, we need to use the rightmost position of the alignment
+    // This affects the orientation calculation
+    let eff_pos1 = if is_rev1 {
+        aln1.pos as i64 + ref_len1 - 1 // rightmost position
+    } else {
+        aln1.pos as i64 // leftmost position
+    };
+
+    let eff_pos2 = if is_rev2 {
+        aln2.pos as i64 + ref_len2 - 1 // rightmost position
+    } else {
+        aln2.pos as i64 // leftmost position
+    };
+
+    // For orientation, we compare positions with strand awareness:
+    // - Same strand: compare effective positions directly
+    // - Different strands: after converting to "same strand space"
+    let same_strand = is_rev1 == is_rev2;
+
+    // The position comparison determines FR vs RF for different-strand pairs
+    // For same-strand pairs, it determines which is "first"
+    let pos_compare = if same_strand {
+        // Both on same strand - use effective positions
+        eff_pos2 > eff_pos1
+    } else {
+        // Different strands - for FR, read2 (reverse) should be "downstream" of read1 (forward)
+        // This is equivalent to comparing leftmost positions
+        aln2.pos as i64 > aln1.pos as i64
+    };
+
+    let orientation = match (same_strand, pos_compare) {
+        (true, true) => 0,   // FF: both same strand, "forward" order
+        (true, false) => 3,  // RR: both same strand, "reverse" order
+        (false, true) => 1,  // FR: different strands, typical Illumina orientation
+        (false, false) => 2, // RF: different strands, atypical
+    };
+
+    // Check if this orientation has valid statistics
+    if stats[orientation].failed {
+        return false;
+    }
+
+    // Calculate insert size: use the difference between effective positions
+    // This matches the bidirectional coordinate distance calculation
+    let dist = (eff_pos2 - eff_pos1).abs();
+
+    // Check if within bounds
+    dist >= stats[orientation].low as i64 && dist <= stats[orientation].high as i64
 }
 
 /// Extract mate information for flag context
