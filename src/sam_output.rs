@@ -39,13 +39,23 @@ pub fn select_single_end_alignments(
         };
     }
 
-    // Find the best (highest scoring) alignment as primary
+    // Find the primary alignment
+    // Priority: The alignment NOT marked as SECONDARY (already determined by mark_secondary_alignments)
+    // If all are SECONDARY (shouldn't happen), fall back to highest score
     let primary_idx = alignments
         .iter()
         .enumerate()
-        .max_by_key(|(_, aln)| aln.score)
+        .find(|(_, aln)| aln.flag & sam_flags::SECONDARY == 0)
         .map(|(idx, _)| idx)
-        .unwrap_or(0);
+        .unwrap_or_else(|| {
+            // Fallback: highest scoring alignment
+            alignments
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, aln)| aln.score)
+                .map(|(idx, _)| idx)
+                .unwrap_or(0)
+        });
 
     let best_alignment = &alignments[primary_idx];
     let best_is_unmapped = best_alignment.flag & sam_flags::UNMAPPED != 0;
@@ -61,11 +71,19 @@ pub fn select_single_end_alignments(
 
     // Select alignments for output
     let mut output_indices = Vec::new();
+    log::debug!(
+        "select_single_end_alignments: {} alignments, primary_idx={}, output_all={}",
+        alignments.len(), primary_idx, opt.output_all_alignments
+    );
     for (idx, alignment) in alignments.iter().enumerate() {
         let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
         let is_secondary = alignment.flag & sam_flags::SECONDARY != 0;
         let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
         let is_best = idx == primary_idx;
+        log::debug!(
+            "  align[{}]: flag={}, score={}, is_secondary={}, is_supp={}, is_best={}",
+            idx, alignment.flag, alignment.score, is_secondary, is_supplementary, is_best
+        );
 
         let should_output = if opt.output_all_alignments {
             // -a flag: output all alignments meeting score threshold
@@ -503,6 +521,32 @@ mod tests {
 
         // With -a flag, all alignments above threshold should be output
         assert_eq!(result.output_indices.len(), 3);
+    }
+
+    #[test]
+    fn test_select_single_end_secondary_highest_score() {
+        // Regression test: When the highest scoring alignment is marked SECONDARY,
+        // we should still select the non-SECONDARY alignment as primary
+        let mut opt = MemOpt::default();
+        opt.t = 30;
+        opt.output_all_alignments = false;
+
+        // Alignment 0: lower score, not secondary (should be primary)
+        // Alignment 1: higher score, but marked SECONDARY
+        let alignments = vec![
+            make_test_alignment("read1", 100, 0),  // Not secondary
+            make_test_alignment("read1", 150, sam_flags::SECONDARY),  // Higher score but secondary
+        ];
+
+        let result = select_single_end_alignments(&alignments, &opt);
+
+        // Primary should be alignment 0 (the non-SECONDARY one)
+        assert_eq!(result.primary_idx, 0);
+        assert!(!result.output_as_unmapped);
+        // Should output the primary alignment
+        assert!(result.output_indices.contains(&0));
+        // Should NOT output the secondary (unless -a flag)
+        assert!(!result.output_indices.contains(&1));
     }
 
     #[test]

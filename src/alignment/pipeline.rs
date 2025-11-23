@@ -856,7 +856,14 @@ fn finalize_alignments(
 
         // Remove redundant alignments (>95% overlap on both ref and query)
         // This matches C++ mem_sort_dedup_patch (bwamem.cpp:292-351)
+        let before_dedup = alignments.len();
         remove_redundant_alignments(&mut alignments, opt);
+        if alignments.len() != before_dedup {
+            log::debug!(
+                "{}: remove_redundant_alignments: {} -> {} alignments",
+                query_name, before_dedup, alignments.len()
+            );
+        }
 
         alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
         mark_secondary_alignments(&mut alignments, opt);
@@ -873,7 +880,13 @@ fn finalize_alignments(
                 }
             }
         }
-    } else {
+    }
+
+    // If all alignments were filtered/removed, output unmapped record
+    // This ensures SAM spec compliance: all input reads must appear in output
+    log::debug!("{}: Final alignment count: {}", query_name, alignments.len());
+    if alignments.is_empty() {
+        log::debug!("{}: No alignments remaining, creating unmapped record", query_name);
         alignments.push(Alignment {
             query_name: query_name.to_string(),
             flag: sam_flags::UNMAPPED,
