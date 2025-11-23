@@ -723,6 +723,45 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
             let ref_redundant = ref_overlap as f32 > ref_threshold;
             let query_redundant = query_overlap as f32 > query_threshold;
 
+            // Check for same-position duplicate alignments
+            // These occur when two chains align to the SAME reference region but cover
+            // different (or partially overlapping) query regions. One produces soft-clipped
+            // primary (e.g., 49M99S), the other produces what would become a hard-clipped
+            // supplementary (99H49M) at the SAME position.
+            //
+            // Key insight: if two alignments are at the same position with the same reference
+            // length and same strand, they're mapping to the IDENTICAL reference region.
+            // Only one should be kept (the one with higher score or more aligned bases).
+            let same_position_duplicate = {
+                let p_is_reverse = (p.flag & sam_flags::REVERSE) != 0;
+                let q_is_reverse = (q.flag & sam_flags::REVERSE) != 0;
+                let same_strand = p_is_reverse == q_is_reverse;
+
+                // Must be at exactly the same position
+                let same_pos = p.pos == q.pos;
+
+                // Must align to the same reference region (same ref length)
+                let p_ref_len = (p_ref_end - p_ref_start) as i32;
+                let q_ref_len = (q_ref_end - q_ref_start) as i32;
+                let same_ref_len = (p_ref_len - q_ref_len).abs() <= 2; // Allow small tolerance
+
+                // Query regions should be DIFFERENT (otherwise it's caught by ref+query overlap)
+                // We use a relaxed check: query_overlap < 50% of min query length
+                let partial_query_overlap = query_overlap < (min_query_len / 2);
+
+                if same_strand && same_pos && same_ref_len && partial_query_overlap {
+                    log::debug!(
+                        "same_position_duplicate: {}:{} (q[{},{}) ref_len={}) vs {}:{} (q[{},{}) ref_len={}), scores={}/{}, q_overlap={}",
+                        p.ref_name, p.pos, p_qb, p_qe, p_ref_len,
+                        q.ref_name, q.pos, q_qb, q_qe, q_ref_len,
+                        p.score, q.score, query_overlap
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+
             // Check for same-region opposite-strand alignments
             // These are the SAME alignment expressed differently (e.g., hard vs soft clips)
             // where the query regions are complementary when accounting for strand reversal
@@ -788,10 +827,13 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
             // 1. Both ref AND query overlap significantly (standard redundancy check)
             // 2. OR same genomic region on opposite strands with same query coverage
             //    (these produce equal scores, causing MAPQ=0 incorrectly)
-            if (ref_redundant && query_redundant) || same_region_opposite_strand {
+            // 3. OR same-position duplicate alignments (same ref region, different query regions)
+            if (ref_redundant && query_redundant) || same_region_opposite_strand || same_position_duplicate {
                 // Remove the lower-scoring one (or the current one if equal)
                 // Matches C++ logic: if p->score < q->score remove p, else remove q
-                let removal_reason = if same_region_opposite_strand {
+                let removal_reason = if same_position_duplicate {
+                    "same-position-duplicate"
+                } else if same_region_opposite_strand {
                     "same-region-opposite-strand"
                 } else {
                     "ref+query-overlap"

@@ -15,6 +15,8 @@ const MIN_DIR_RATIO: f64 = 0.05; // Minimum ratio for orientation
 const OUTLIER_BOUND: f64 = 2.0; // IQR multiplier for outliers
 const MAPPING_BOUND: f64 = 3.0; // IQR multiplier for mapping
 const MAX_STDDEV: f64 = 4.0; // Max standard deviations for boundaries
+const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignments (BWA-MEM2 bwamem_pair.cpp:49)
+const MAX_INS: i64 = 10000; // Maximum insert size to consider (default opt->max_ins)
 
 // Insert size statistics for one orientation
 #[derive(Debug, Clone)]
@@ -77,14 +79,15 @@ pub fn calculate_insert_size_stats(
 
     for &(pos1, pos2) in pairs {
         let (orientation, dist) = infer_orientation(l_pac, pos1, pos2);
-        if dist > 0 {
+        // BWA-MEM2: if (is && is <= opt->max_ins) kv_push(...)
+        if dist > 0 && dist <= MAX_INS {
             insert_sizes[orientation].push(dist);
         }
     }
 
+    // BWA-MEM2 style logging
     log::info!(
-        "Paired-end: {} candidate pairs (FF={}, FR={}, RF={}, RR={})",
-        insert_sizes.iter().map(|v| v.len()).sum::<usize>(),
+        "[PE] # candidate unique pairs for (FF, FR, RF, RR): ({}, {}, {}, {})",
         insert_sizes[0].len(),
         insert_sizes[1].len(),
         insert_sizes[2].len(),
@@ -127,27 +130,19 @@ pub fn calculate_insert_size_stats(
     // Calculate statistics for each orientation
     for d in 0..4 {
         let sizes = &mut insert_sizes[d];
+        let dir_name = format!("{}{}", &"FR"[d >> 1 & 1..=d >> 1 & 1], &"FR"[d & 1..=d & 1]);
 
         if sizes.len() < MIN_DIR_CNT {
-            log::debug!(
-                "Skipping orientation {} (insufficient pairs: {} < {})",
-                orientation_names[d],
-                sizes.len(),
-                MIN_DIR_CNT
-            );
+            log::info!("[PE] skip orientation {} as there are not enough pairs", dir_name);
             continue;
         }
 
-        log::info!(
-            "Analyzing insert size for orientation {} ({} pairs)",
-            orientation_names[d],
-            sizes.len()
-        );
+        log::info!("[PE] analyzing insert size distribution for orientation {}...", dir_name);
 
-        // Sort insert sizes
+        // Sort insert sizes (BWA-MEM2: ks_introsort_64)
         sizes.sort_unstable();
 
-        // Calculate percentiles
+        // Calculate percentiles (BWA-MEM2 exact formula)
         let p25 = sizes[(0.25 * sizes.len() as f64 + 0.499) as usize];
         let p50 = sizes[(0.50 * sizes.len() as f64 + 0.499) as usize];
         let p75 = sizes[(0.75 * sizes.len() as f64 + 0.499) as usize];
@@ -155,52 +150,52 @@ pub fn calculate_insert_size_stats(
         let iqr = p75 - p25;
 
         // Calculate initial bounds for mean/std calculation (outlier removal)
+        // BWA-MEM2 bwamem_pair.cpp:118-120
         let mut low = ((p25 as f64 - OUTLIER_BOUND * iqr as f64) + 0.499) as i32;
         if low < 1 {
             low = 1;
         }
-        let mut high = ((p75 as f64 + OUTLIER_BOUND * iqr as f64) + 0.499) as i32;
+        let high_outlier = ((p75 as f64 + OUTLIER_BOUND * iqr as f64) + 0.499) as i32;
 
-        log::debug!("  Percentiles (25/50/75): {}/{}/{}", p25, p50, p75);
-        log::debug!("  Outlier bounds: {} - {}", low, high);
+        log::info!("[PE] (25, 50, 75) percentile: ({}, {}, {})", p25, p50, p75);
+        log::info!("[PE] low and high boundaries for computing mean and std.dev: ({}, {})", low, high_outlier);
 
-        // Calculate mean (excluding outliers)
+        // Calculate mean (excluding outliers) - BWA-MEM2 bwamem_pair.cpp:123-126
         let mut sum = 0i64;
         let mut count = 0usize;
         for &size in sizes.iter() {
-            if size >= low as i64 && size <= high as i64 {
+            if size >= low as i64 && size <= high_outlier as i64 {
                 sum += size;
                 count += 1;
             }
         }
 
         if count == 0 {
-            log::warn!(
-                "No valid samples for orientation {} within bounds",
-                orientation_names[d]
-            );
+            log::warn!("[PE] no valid samples for orientation {} within bounds", dir_name);
             continue;
         }
 
         let avg = sum as f64 / count as f64;
 
-        // Calculate standard deviation (excluding outliers)
+        // Calculate standard deviation (excluding outliers) - BWA-MEM2 bwamem_pair.cpp:128-131
         let mut sum_sq = 0.0;
         for &size in sizes.iter() {
-            if size >= low as i64 && size <= high as i64 {
+            if size >= low as i64 && size <= high_outlier as i64 {
                 let diff = size as f64 - avg;
                 sum_sq += diff * diff;
             }
         }
         let std = (sum_sq / count as f64).sqrt();
 
-        log::info!("  Insert size: mean={:.1}, std={:.1}", avg, std);
+        log::info!("[PE] mean and std.dev: ({:.2}, {:.2})", avg, std);
 
         // Calculate final bounds for proper pairs (mapping bounds)
+        // BWA-MEM2 bwamem_pair.cpp:133-137
         low = ((p25 as f64 - MAPPING_BOUND * iqr as f64) + 0.499) as i32;
-        high = ((p75 as f64 + MAPPING_BOUND * iqr as f64) + 0.499) as i32;
+        let mut high = ((p75 as f64 + MAPPING_BOUND * iqr as f64) + 0.499) as i32;
 
-        // Adjust using standard deviation
+        // Adjust using standard deviation - use WIDER bounds
+        // BWA-MEM2: if (r->low > r->avg - MAX_STDDEV * r->std) r->low = ...
         let low_stddev = (avg - MAX_STDDEV * std + 0.499) as i32;
         let high_stddev = (avg + MAX_STDDEV * std + 0.499) as i32;
 
@@ -214,7 +209,7 @@ pub fn calculate_insert_size_stats(
             low = 1;
         }
 
-        log::info!("  Proper pair bounds: {} - {}", low, high);
+        log::info!("[PE] low and high boundaries for proper pairs: ({}, {})", low, high);
 
         stats[d] = InsertSizeStats {
             avg,
@@ -242,6 +237,38 @@ pub fn calculate_insert_size_stats(
     stats
 }
 
+/// Calculate the sub-optimal score for alignment uniqueness check
+/// BWA-MEM2 bwamem_pair.cpp:67-79 (cal_sub)
+/// Returns the best secondary alignment score that has significant overlap with primary
+fn calculate_sub_score(alignments: &[Alignment]) -> i32 {
+    if alignments.len() <= 1 {
+        return 0;
+    }
+
+    let primary = &alignments[0];
+    let mask_level = 0.5; // Default opt->mask_level
+
+    for secondary in alignments.iter().skip(1) {
+        // Check for significant overlap with primary
+        let b_max = secondary.query_start.max(primary.query_start);
+        let e_min = secondary.query_end.min(primary.query_end);
+
+        if e_min > b_max {
+            // Have overlap
+            let min_len = (secondary.query_end - secondary.query_start)
+                .min(primary.query_end - primary.query_start);
+            if (e_min - b_max) as f64 >= min_len as f64 * mask_level {
+                // Significant overlap - return this secondary's score
+                return secondary.score;
+            }
+        }
+    }
+
+    // No overlapping secondary found - use minimum seed length * match score as default
+    // This matches BWA-MEM2: opt->min_seed_len * opt->a (typically 19 * 1 = 19)
+    19 // Default fallback
+}
+
 /// Bootstrap insert size statistics from first batch only
 /// This allows streaming subsequent batches without buffering all alignments
 pub fn bootstrap_insert_size_stats(
@@ -249,8 +276,8 @@ pub fn bootstrap_insert_size_stats(
     l_pac: i64,
 ) -> [InsertSizeStats; 4] {
     log::info!(
-        "Bootstrapping insert size statistics from first batch ({} pairs)",
-        first_batch_alignments.len()
+        "[PE] Inferring insert size distribution from data (n={})",
+        first_batch_alignments.len() * 2
     );
 
     // Extract position pairs from first batch
@@ -259,7 +286,19 @@ pub fn bootstrap_insert_size_stats(
     for (alns1, alns2) in first_batch_alignments {
         // Use best alignment from each read for statistics
         if let (Some(aln1), Some(aln2)) = (alns1.first(), alns2.first()) {
-            // Only use pairs on same reference
+            // BWA-MEM2 bwamem_pair.cpp:97-98: Skip non-unique alignments
+            // if (cal_sub(opt, r[0]) > MIN_RATIO * r[0]->a[0].score) continue;
+            let sub1 = calculate_sub_score(alns1);
+            let sub2 = calculate_sub_score(alns2);
+
+            if sub1 as f64 > MIN_RATIO * aln1.score as f64 {
+                continue; // Read 1 is not unique enough
+            }
+            if sub2 as f64 > MIN_RATIO * aln2.score as f64 {
+                continue; // Read 2 is not unique enough
+            }
+
+            // Only use pairs on same reference (BWA-MEM2 bwamem_pair.cpp:99)
             if aln1.ref_name == aln2.ref_name {
                 // Convert positions to bidirectional coordinate space [0, 2*l_pac)
                 // This matches BWA-MEM2's convention where:
