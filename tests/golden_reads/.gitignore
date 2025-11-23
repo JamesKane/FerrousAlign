@@ -1,0 +1,9 @@
+# Golden reads test data - regenerate locally
+*.fq
+*.fastq
+*.sam
+*.bam
+
+# Keep documentation
+!README.md
+!.gitignore
