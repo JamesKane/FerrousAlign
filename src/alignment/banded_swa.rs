@@ -539,23 +539,33 @@ impl BandedPairWiseSW {
                 qlen - query_end
             );
         } else if query_end < qlen {
-            // BUG FIX: Even when global extension is "preferred", we must account for all query bases
-            // in the CIGAR. The traceback only went to query_end, not to qlen.
-            // We MUST add soft clips for the remaining bases to ensure CIGAR length matches query length.
+            // ==================================================================
+            // GLOBAL EXTENSION: Use M operations instead of soft-clipping
+            // ==================================================================
+            // When global extension is preferred (gscore > score - pen_clip3),
+            // BWA-MEM2 extends to the query boundary (qb=0 or qe=qlen).
             //
-            // The global score indicates the DP reached qlen, but we didn't trace back from there.
-            // To properly use global extension, we'd need a separate traceback from _max_ie to qlen.
-            // For now, always soft-clip to ensure valid CIGAR.
+            // BWA-MEM2 bwamem.cpp:2498-2504:
+            //   if (gscore <= 0 || gscore <= score - pen_clip5) {
+            //       a->qb -= qle; a->rb -= tle;  // LOCAL: soft-clip
+            //   } else {
+            //       a->qb = 0; a->rb -= gtle;    // GLOBAL: extend to boundary
+            //   }
+            //
+            // We achieve this by using M operations for the remaining bases.
+            // The M operation covers both matches and mismatches in SAM format.
+            // ==================================================================
+            let remaining_bases = qlen - query_end;
             log::debug!(
-                "3' extension: gscore={} > score={} - pen_clip3={} = {}, but adding soft-clip for {} bases (CIGAR completeness)",
+                "3' global extension: gscore={} > score={} - pen_clip3={} = {}, extending {} bases as M",
                 current_gscore,
                 max_score,
                 self.pen_clip3,
                 max_score - self.pen_clip3,
-                qlen - query_end
+                remaining_bases
             );
-            // CRITICAL: Always add soft clip to ensure CIGAR covers full query length
-            final_cigar.push((b'S', qlen - query_end));
+            // Use M operations for global extension (covers matches/mismatches)
+            final_cigar.push((b'M', remaining_bases));
         }
 
         // Debug logging for problematic CIGARs (all insertions)
