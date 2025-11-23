@@ -589,13 +589,42 @@ pub fn get_sa_entries(
     max_occurrences: u32,
 ) -> Vec<u64> {
     let mut ref_positions = Vec::new();
-    let num_to_retrieve = (interval_size as u32).min(max_occurrences) as u64;
 
-    for i in 0..num_to_retrieve {
-        let sa_index = bwt_interval_start + i;
+    // For repetitive seeds, we need to sample evenly across the ENTIRE interval
+    // to ensure we cover all reference positions, not just a clustered subset.
+    //
+    // BWA-MEM2 uses integer step = interval_size / max_occ, but this can leave
+    // gaps when interval_size is not much larger than max_occ.
+    //
+    // We use floating-point arithmetic to ensure even distribution across the
+    // full interval range.
+    let num_to_retrieve = (interval_size as u32).min(max_occurrences);
+
+    let actual_num = num_to_retrieve;
+
+    if num_to_retrieve == 0 {
+        return ref_positions;
+    }
+
+    // Use floating-point step to ensure we cover the entire interval
+    // For interval_size=713 and num_to_retrieve=250, this gives step=2.852
+    // which samples positions 0, 2.852, 5.704, ... -> 0, 2, 5, 8, ...
+    let step = if interval_size > actual_num as u64 {
+        interval_size as f64 / actual_num as f64
+    } else {
+        1.0
+    };
+
+    for i in 0..actual_num {
+        let k = (i as f64 * step) as u64;
+        if k >= interval_size {
+            break;
+        }
+        let sa_index = bwt_interval_start + k;
         let ref_pos = get_sa_entry(bwa_idx, sa_index);
         ref_positions.push(ref_pos);
     }
+
     ref_positions
 }
 

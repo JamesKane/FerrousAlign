@@ -753,20 +753,41 @@ fn find_seeds(
         unique_filtered_smems.len()
     );
 
+
     let mut sorted_smems = unique_filtered_smems;
     sorted_smems.sort_by_key(|smem| -(smem.query_end - smem.query_start + 1));
 
     // Match C++ SEEDS_PER_READ limit (see bwa-mem2/src/macro.h)
     const SEEDS_PER_READ: usize = 500;
 
+    // For highly repetitive reads (small number of SMEMs all covering full query),
+    // allow more seeds per SMEM to get full coverage of the reference range.
+    // Otherwise divide SEEDS_PER_READ among all SMEMs.
+    let is_highly_repetitive = sorted_smems.len() <= 4 &&
+        sorted_smems.iter().all(|s| s.query_end - s.query_start > (query_len as i32 * 3 / 4));
+
+    let seeds_per_smem = if sorted_smems.is_empty() {
+        SEEDS_PER_READ
+    } else if is_highly_repetitive {
+        // For highly repetitive: use full max_occ per SMEM
+        SEEDS_PER_READ
+    } else {
+        (SEEDS_PER_READ / sorted_smems.len()).max(1)
+    };
+
     let mut seeds = Vec::new();
     for smem in sorted_smems.iter() {
+        // Limit positions per SMEM to ensure coverage from multiple SMEMs
+        // The get_sa_entries function will sample evenly across the interval
+        let max_positions_this_smem = (seeds_per_smem as u32).min(opt.max_occ as u32);
+
         // Use the new get_sa_entries function to get multiple reference positions
+        // It samples evenly across the entire BWT interval using floating-point step
         let ref_positions = crate::alignment::seeding::get_sa_entries(
             bwa_idx,
             smem.bwt_interval_start,
             smem.interval_size,
-            opt.max_occ as u32,
+            max_positions_this_smem,
         );
 
         let seed_len = smem.query_end - smem.query_start;
