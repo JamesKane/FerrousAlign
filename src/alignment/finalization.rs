@@ -1010,14 +1010,21 @@ fn filter_supplementary_by_score(
 // MAIN SECONDARY MARKING FUNCTION
 // ============================================================================
 
-/// Mark secondary alignments and calculate MAPQ values
+/// Mark secondary alignments, calculate MAPQ values, and attach XA/SA tags
 /// Implements C++ mem_mark_primary_se (bwamem.cpp:1420-1464)
+///
+/// Phase 4 refactoring: Consolidated to handle all secondary-related processing:
+/// 1. Secondary/supplementary marking
+/// 2. MAPQ calculation and XS tag attachment
+/// 3. XA/SA tag generation and attachment
 ///
 /// Algorithm:
 /// 1. Sort alignments by score (descending), then by hash
 /// 2. For each alignment, check if it overlaps significantly with higher-scoring alignments
 /// 3. If overlap >= mask_level, mark as secondary (set sam_flags::SECONDARY flag)
 /// 4. Calculate MAPQ based on score difference and overlap count
+/// 5. Generate and attach XA tags (for secondary alignments)
+/// 6. Generate and attach SA tags (for chimeric/split alignments)
 pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     if alignments.is_empty() {
         return;
@@ -1056,6 +1063,31 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
     if !primary_indices.is_empty() {
         let primary_score = alignments[primary_indices[0]].score;
         filter_supplementary_by_score(alignments, primary_score, opt.xa_drop_ratio);
+    }
+
+    // Step 5+6: Generate and attach XA/SA tags (Phase 4 consolidation)
+    attach_xa_sa_tags(alignments, opt);
+}
+
+/// Attach XA and SA tags to alignments
+///
+/// Phase 4 consolidation: This was previously done in a separate loop in pipeline.rs.
+/// Moving it here keeps all secondary/supplementary processing in one place.
+fn attach_xa_sa_tags(alignments: &mut [Alignment], opt: &MemOpt) {
+    // Generate tags
+    let xa_tags = generate_xa_tags(alignments, opt);
+    let sa_tags = generate_sa_tags(alignments);
+
+    // Attach tags to non-secondary alignments
+    for aln in alignments.iter_mut() {
+        if aln.flag & sam_flags::SECONDARY == 0 {
+            // SA tag takes priority over XA tag
+            if let Some(sa_tag) = sa_tags.get(&aln.query_name) {
+                aln.tags.push(("SA".to_string(), sa_tag.clone()));
+            } else if let Some(xa_tag) = xa_tags.get(&aln.query_name) {
+                aln.tags.push(("XA".to_string(), xa_tag.clone()));
+            }
+        }
     }
 }
 

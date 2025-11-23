@@ -8,8 +8,6 @@ use crate::alignment::extension::AlignmentJob;
 use crate::alignment::extension::execute_adaptive_alignments;
 use crate::alignment::extension::execute_scalar_alignments;
 use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::generate_sa_tags;
-use crate::alignment::finalization::generate_xa_tags;
 use crate::alignment::finalization::mark_secondary_alignments;
 use crate::alignment::finalization::remove_redundant_alignments;
 use crate::alignment::finalization::sam_flags;
@@ -83,13 +81,304 @@ struct ChainJobMapping {
 
 type RawAlignment = (i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>);
 
+/// Result of CIGAR merging for a single chain
+///
+/// Contains the pre-merged CIGAR and metadata needed for candidate building.
+/// This struct is produced in the extension stage after combining left + seed + right.
+///
+/// Phase 3 refactoring: Coordinate conversion is now done in extension stage,
+/// so this struct contains chromosome coordinates directly (ref_name, ref_id, chr_pos).
+#[derive(Debug, Clone)]
+struct MergedChainResult {
+    chain_idx: usize,
+    cigar: Vec<(u8, i32)>,     // Pre-merged and normalized CIGAR
+    score: i32,
+    // Reference location (Phase 3 - coordinate conversion in extension)
+    ref_name: String,
+    ref_id: usize,
+    chr_pos: u64,              // 0-based chromosome position
+    fm_index_pos: u64,         // Original FM-index position (for MD tag generation)
+    // Query bounds (from CIGAR analysis)
+    query_start: i32,          // Sum of leading clips
+    query_end: i32,            // query_len - sum of trailing clips
+}
+
 struct ExtensionResult {
+    /// Raw extension results (job-level) - kept for debugging/future use
+    #[allow(dead_code)]
     extended_cigars: Vec<RawAlignment>,
-    chain_to_job_map: Vec<ChainJobMapping>,
+    /// Pre-merged chain results (Phase 2 - CIGAR merge moved to extension)
+    merged_chain_results: Vec<MergedChainResult>,
     filtered_chains: Vec<Chain>,
     sorted_seeds: Vec<Seed>,
     encoded_query: Vec<u8>,
     encoded_query_rc: Vec<u8>,
+}
+
+// ============================================================================
+// CIGAR MERGING (Phase 2 - Moved from finalization to extension)
+// ============================================================================
+
+/// Merge CIGARs for all chains from extension job results
+///
+/// This function combines left extension + seed + right extension CIGARs
+/// and picks the best-scoring seed per chain. Previously this logic was
+/// in build_candidate_alignments(), but moving it here centralizes all
+/// CIGAR manipulation in the extension stage.
+///
+/// Phase 3 refactoring: Also does coordinate conversion (FM-index pos -> chromosome pos).
+fn merge_cigars_for_chains(
+    bwa_idx: &BwaIndex,
+    query_name: &str,
+    chains: &[Chain],
+    seeds: &[Seed],
+    chain_to_job_map: &[ChainJobMapping],
+    alignment_scores: &[i32],
+    alignment_cigars: &[Vec<(u8, i32)>],
+    query_len: i32,
+) -> Vec<MergedChainResult> {
+    let mut results = Vec::new();
+
+    for (chain_idx, chain) in chains.iter().enumerate() {
+        if chain.seeds.is_empty() {
+            continue;
+        }
+
+        let mapping = &chain_to_job_map[chain_idx];
+        let mut best_score = 0;
+        let mut best_data: Option<(Vec<(u8, i32)>, i32, u64)> = None;
+
+        for seed_job in &mapping.seed_jobs {
+            let seed = &seeds[seed_job.seed_idx];
+            let mut combined_cigar = Vec::new();
+            let mut combined_score = 0;
+            let mut alignment_start_pos = seed.ref_pos;
+
+            // Track which extensions exist for proper score calculation
+            let has_left = seed_job.left_job_idx.is_some();
+            let has_right = seed_job.right_job_idx.is_some();
+
+            // Add left extension CIGAR or soft clip
+            if let Some(left_idx) = seed_job.left_job_idx {
+                let left_cigar = &alignment_cigars[left_idx];
+                combined_cigar.extend(left_cigar.iter().cloned());
+                combined_score += alignment_scores[left_idx];
+                let left_ref_len: i32 = left_cigar
+                    .iter()
+                    .filter_map(|&(op, len)| {
+                        if op == b'M' || op == b'D' {
+                            Some(len)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
+                alignment_start_pos = alignment_start_pos.saturating_sub(left_ref_len as u64);
+            } else if seed.query_pos > 0 {
+                combined_cigar.push((b'S', seed.query_pos));
+            }
+
+            // Add seed match
+            combined_cigar.push((b'M', seed.len));
+
+            // Score calculation: Each extension score includes h0 = seed.len
+            // - Both extensions: left_score + right_score - seed.len (avoid double-counting h0)
+            // - One extension only: score already includes seed via h0
+            // - No extensions: just seed.len
+            if !has_left && !has_right {
+                combined_score += seed.len;
+            } else if has_left && has_right {
+                combined_score -= seed.len;
+            }
+
+            // Add right extension CIGAR or soft clip
+            let seed_end = seed.query_pos + seed.len;
+            if let Some(right_idx) = seed_job.right_job_idx {
+                combined_cigar.extend(alignment_cigars[right_idx].iter().cloned());
+                combined_score += alignment_scores[right_idx];
+            } else if seed_end < query_len {
+                combined_cigar.push((b'S', query_len - seed_end));
+            }
+
+            // Merge adjacent operations and normalize CIGAR
+            let merged_cigar = merge_cigar_operations(combined_cigar);
+
+            if combined_score > best_score {
+                best_score = combined_score;
+                best_data = Some((merged_cigar, combined_score, alignment_start_pos));
+            }
+        }
+
+        if let Some((mut cigar, score, start_pos)) = best_data {
+            // Ensure CIGAR query length matches actual query length (invariant check)
+            let cigar_len: i32 = cigar
+                .iter()
+                .filter_map(|&(op, len)| {
+                    if matches!(op as char, 'M' | 'I' | 'S' | '=' | 'X') {
+                        Some(len)
+                    } else {
+                        None
+                    }
+                })
+                .sum();
+            if cigar_len != query_len {
+                if let Some(op) = cigar
+                    .iter_mut()
+                    .rev()
+                    .find(|op| matches!(op.0 as char, 'S' | 'M'))
+                {
+                    op.1 += query_len - cigar_len;
+                }
+            }
+
+            // Calculate query bounds from CIGAR
+            let mut query_start = 0i32;
+            let mut query_end = query_len;
+
+            // Sum leading clips
+            for &(op, len) in cigar.iter() {
+                if op == b'S' || op == b'H' {
+                    query_start += len;
+                } else {
+                    break;
+                }
+            }
+
+            // Sum trailing clips
+            for &(op, len) in cigar.iter().rev() {
+                if op == b'S' || op == b'H' {
+                    query_end -= len;
+                } else {
+                    break;
+                }
+            }
+
+            // Coordinate conversion: FM-index position -> chromosome position
+            let (pos_f, _is_rev) = bwa_idx.bns.bns_depos(start_pos as i64);
+            let rid = bwa_idx.bns.bns_pos2rid(pos_f);
+
+            log::debug!(
+                "{}: COORD_TRACE: start_pos={}, l_pac={}, pos_f={}, rid={}",
+                query_name, start_pos, bwa_idx.bns.packed_sequence_length, pos_f, rid
+            );
+
+            let (ref_name, ref_id, chr_pos) =
+                if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
+                    let ann = &bwa_idx.bns.annotations[rid as usize];
+                    log::debug!(
+                        "{}: COORD_TRACE: rid={}, ann.name={}, ann.offset={}, chr_pos={}",
+                        query_name, rid, ann.name, ann.offset, pos_f - ann.offset as i64
+                    );
+                    (
+                        ann.name.clone(),
+                        rid as usize,
+                        (pos_f - ann.offset as i64) as u64,
+                    )
+                } else {
+                    ("unknown_ref".to_string(), 0, 0)
+                };
+
+            results.push(MergedChainResult {
+                chain_idx,
+                cigar,
+                score,
+                ref_name,
+                ref_id,
+                chr_pos,
+                fm_index_pos: start_pos,
+                query_start,
+                query_end,
+            });
+        }
+    }
+
+    results
+}
+
+// ============================================================================
+// CANDIDATE ALIGNMENT (Phase 1 - Pipeline Front-Loading)
+// ============================================================================
+//
+// CandidateAlignment is an intermediate type that flows from extension to
+// finalization. It provides a clear contract between pipeline stages:
+//
+// - Extension stage: produces CandidateAlignment with all core alignment data
+// - Finalization stage: handles ranking, dedup, secondary/supplementary, MAPQ
+//
+// This separation makes the code more testable and reduces coupling.
+// ============================================================================
+
+/// Intermediate alignment candidate between extension and finalization
+///
+/// Contains all the data needed to make alignment decisions (scoring, dedup,
+/// secondary marking) without depending on FM-index access.
+#[derive(Debug, Clone)]
+struct CandidateAlignment {
+    // Reference location
+    ref_id: usize,
+    ref_name: String,
+    pos: u64, // 0-based chromosome position
+    strand_rev: bool,
+
+    // Alignment data (merged CIGAR)
+    cigar: Vec<(u8, i32)>, // Normalized, merged CIGAR
+    score: i32,
+
+    // Query bounds (computed from CIGAR)
+    query_start: i32, // Sum of leading S/H
+    query_end: i32,   // query_len - sum of trailing S/H
+
+    // Chain provenance (for MAPQ calculation)
+    seed_coverage: i32,
+    frac_rep: f32,
+    hash: u64,
+
+    // MD/NM tags (computed from reference comparison)
+    md_tag: String,
+    nm: i32,
+
+    // Debug/provenance tracking
+    #[allow(dead_code)]
+    chain_id: usize,
+}
+
+impl CandidateAlignment {
+    /// Convert CandidateAlignment to final Alignment struct
+    ///
+    /// This is the final step in finalization - after all scoring, dedup,
+    /// and secondary/supplementary marking decisions have been made.
+    fn to_alignment(&self, query_name: &str) -> Alignment {
+        use crate::alignment::finalization::sam_flags;
+
+        let flag = if self.strand_rev { sam_flags::REVERSE } else { 0 };
+
+        Alignment {
+            query_name: query_name.to_string(),
+            flag,
+            ref_name: self.ref_name.clone(),
+            ref_id: self.ref_id,
+            pos: self.pos,
+            mapq: 60, // Will be recalculated during secondary marking
+            score: self.score,
+            cigar: self.cigar.clone(),
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            // Don't store seq/qual here - they're passed at output time for memory efficiency
+            seq: String::new(),
+            qual: String::new(),
+            tags: vec![
+                ("AS".to_string(), format!("i:{}", self.score)),
+                ("NM".to_string(), format!("i:{}", self.nm)),
+                ("MD".to_string(), format!("Z:{}", self.md_tag)),
+            ],
+            query_start: self.query_start,
+            query_end: self.query_end,
+            seed_coverage: self.seed_coverage,
+            hash: self.hash,
+            frac_rep: self.frac_rep,
+        }
+    }
 }
 
 // ============================================================================
@@ -685,35 +974,7 @@ fn extend_chains_to_alignments(
     .map(|(s, c, ra, qa)| (s, c, ra, qa))
     .collect();
 
-    ExtensionResult {
-        extended_cigars,
-        chain_to_job_map,
-        filtered_chains: chains,
-        sorted_seeds: seeds,
-        encoded_query,
-        encoded_query_rc,
-    }
-}
-
-/// Stage 4: Finalization
-fn finalize_alignments(
-    extension_result: ExtensionResult,
-    bwa_idx: &BwaIndex,
-    pac_data: &[u8],
-    query_name: &str,
-    query_seq: &[u8],
-    query_qual: &str,
-    opt: &MemOpt,
-) -> Vec<Alignment> {
-    let ExtensionResult {
-        extended_cigars,
-        chain_to_job_map,
-        filtered_chains,
-        sorted_seeds: seeds,
-        encoded_query,
-        encoded_query_rc,
-    } = extension_result;
-
+    // Extract scores and CIGARs for merging
     let alignment_scores: Vec<i32> = extended_cigars
         .iter()
         .map(|(score, _, _, _)| *score)
@@ -723,224 +984,170 @@ fn finalize_alignments(
         .map(|(_, cigar, _, _)| cigar.clone())
         .collect();
 
-    let mut alignments = Vec::new();
+    // Determine query length for merging
+    let query_len = if !encoded_query.is_empty() {
+        encoded_query.len() as i32
+    } else {
+        0
+    };
 
-    for (chain_idx, chain) in filtered_chains.iter().enumerate() {
-        if chain.seeds.is_empty() {
-            continue;
-        }
+    // Merge CIGARs for all chains (Phase 2+3 - centralize CIGAR + coordinate logic)
+    let merged_chain_results = merge_cigars_for_chains(
+        bwa_idx,
+        _query_name,
+        &chains,
+        &seeds,
+        &chain_to_job_map,
+        &alignment_scores,
+        &alignment_cigars,
+        query_len,
+    );
 
-        let mapping = &chain_to_job_map[chain_idx];
+    ExtensionResult {
+        extended_cigars,
+        merged_chain_results,
+        filtered_chains: chains,
+        sorted_seeds: seeds,
+        encoded_query,
+        encoded_query_rc,
+    }
+}
+
+/// Stage 4: Finalization
+///
+/// This stage converts extension results into final Alignment structs.
+/// The flow is:
+/// 1. Build CandidateAlignment from extension results (core alignment data)
+/// 2. Filter by score threshold
+/// 3. Remove redundant alignments
+/// 4. Mark secondary/supplementary alignments and calculate MAPQ
+/// 5. Generate XA/SA tags
+/// 6. Convert to final Alignment structs
+fn finalize_alignments(
+    extension_result: ExtensionResult,
+    bwa_idx: &BwaIndex,
+    pac_data: &[u8],
+    query_name: &str,
+    query_seq: &[u8],
+    query_qual: &str,
+    opt: &MemOpt,
+) -> Vec<Alignment> {
+    // Step 1: Build CandidateAlignment from extension results
+    let candidates = build_candidate_alignments(
+        &extension_result,
+        bwa_idx,
+        pac_data,
+        query_name,
+    );
+
+    // Step 2-5: Convert to Alignments and apply post-processing
+    finalize_candidates(candidates, query_name, opt)
+}
+
+/// Build CandidateAlignment structs from extension results
+///
+/// This extracts all core alignment data (MD/NM tags) from the pre-merged
+/// extension results into a clean intermediate representation.
+///
+/// Phase 2+3 refactoring: CIGAR merging and coordinate conversion are now
+/// done in extend_chains_to_alignments(), so this function only generates
+/// MD/NM tags and builds the final CandidateAlignment structs.
+fn build_candidate_alignments(
+    extension_result: &ExtensionResult,
+    bwa_idx: &BwaIndex,
+    pac_data: &[u8],
+    _query_name: &str,
+) -> Vec<CandidateAlignment> {
+    let ExtensionResult {
+        merged_chain_results,
+        filtered_chains,
+        encoded_query,
+        encoded_query_rc,
+        ..
+    } = extension_result;
+
+    let mut candidates = Vec::new();
+
+    for merged in merged_chain_results {
+        let chain = &filtered_chains[merged.chain_idx];
         let full_query = if chain.is_rev {
-            &encoded_query_rc
+            encoded_query_rc
         } else {
-            &encoded_query
+            encoded_query
         };
-        let query_len = full_query.len() as i32;
 
-        let mut best_score = 0;
-        let mut best_alignment_data = None;
-
-        for seed_job in &mapping.seed_jobs {
-            let seed = &seeds[seed_job.seed_idx];
-            let mut combined_cigar = Vec::new();
-            let mut combined_score = 0;
-            let mut alignment_start_pos = seed.ref_pos;
-            let (mut query_start_aligned, mut query_end_aligned) = (0, query_len);
-
-            // Track which extensions exist for proper score calculation
-            let has_left = seed_job.left_job_idx.is_some();
-            let has_right = seed_job.right_job_idx.is_some();
-
-            if let Some(left_idx) = seed_job.left_job_idx {
-                let left_cigar = &alignment_cigars[left_idx];
-                combined_cigar.extend(left_cigar.iter().cloned());
-                combined_score += alignment_scores[left_idx];
-                let left_ref_len: i32 = left_cigar
-                    .iter()
-                    .filter_map(|&(op, len)| {
-                        if op == b'M' || op == b'D' {
-                            Some(len)
-                        } else {
-                            None
-                        }
-                    })
-                    .sum();
-                alignment_start_pos = alignment_start_pos.saturating_sub(left_ref_len as u64);
-            } else if seed.query_pos > 0 {
-                combined_cigar.push((b'S', seed.query_pos));
-                query_start_aligned = seed.query_pos;
-            }
-
-            combined_cigar.push((b'M', seed.len));
-
-            // Score calculation: Each extension score includes h0 = seed.len
-            // - Both extensions: left_score + right_score - seed.len (avoid double-counting h0)
-            // - One extension only: score already includes seed via h0
-            // - No extensions: just seed.len
-            if !has_left && !has_right {
-                combined_score += seed.len;
-            } else if has_left && has_right {
-                // Both extensions include h0=seed.len, so subtract one to avoid double-counting
-                combined_score -= seed.len;
-            }
-            // If only one extension exists, h0 is already counted once (correct)
-
-            let seed_end = seed.query_pos + seed.len;
-            if let Some(right_idx) = seed_job.right_job_idx {
-                combined_cigar.extend(alignment_cigars[right_idx].iter().cloned());
-                combined_score += alignment_scores[right_idx];
-            } else if seed_end < query_len {
-                combined_cigar.push((b'S', query_len - seed_end));
-                query_end_aligned = seed_end;
-            }
-
-            let cigar_for_candidate = merge_cigar_operations(combined_cigar);
-            if combined_score > best_score {
-                best_score = combined_score;
-                best_alignment_data = Some((
-                    cigar_for_candidate,
-                    combined_score,
-                    alignment_start_pos,
-                    query_start_aligned,
-                    query_end_aligned,
-                ));
-            }
-        }
-
-        if let Some((mut cigar, score, start_pos, q_start, q_end)) = best_alignment_data {
-            let cigar_len: i32 = cigar
+        // Generate MD tag and calculate NM
+        // NOTE: We use fm_index_pos (not chr_pos) for MD tag generation because
+        // bns_get_seq expects FM-index coordinates
+        let md_tag = if !pac_data.is_empty() {
+            let ref_len: i32 = merged.cigar
                 .iter()
                 .filter_map(|&(op, len)| {
-                    if matches!(op as char, 'M' | 'I' | 'S' | '=' | 'X') {
+                    if matches!(op as char, 'M' | 'D') {
                         Some(len)
                     } else {
                         None
                     }
                 })
                 .sum();
-            if cigar_len != query_len {
-                if let Some(op) = cigar
-                    .iter_mut()
-                    .rev()
-                    .find(|op| matches!(op.0 as char, 'S' | 'M'))
-                {
-                    op.1 += query_len - cigar_len;
-                }
-            }
-
-            // Calculate actual query bounds from CIGAR
-            // query_start = sum of leading S/H operations
-            // query_end = query_len - sum of trailing S/H operations
-            let mut actual_query_start = 0i32;
-            let mut actual_query_end = query_len;
-
-            // Sum leading clips
-            for &(op, len) in cigar.iter() {
-                if op == b'S' || op == b'H' {
-                    actual_query_start += len;
-                } else {
-                    break;
-                }
-            }
-
-            // Sum trailing clips
-            for &(op, len) in cigar.iter().rev() {
-                if op == b'S' || op == b'H' {
-                    actual_query_end -= len;
-                } else {
-                    break;
-                }
-            }
-
-            // Update query bounds
-            let q_start = actual_query_start;
-            let q_end = actual_query_end;
-
-            let (pos_f, is_rev) = bwa_idx.bns.bns_depos(start_pos as i64);
-            let rid = bwa_idx.bns.bns_pos2rid(pos_f);
-
-            // DEBUG: Trace coordinate conversion
-            log::debug!(
-                "{}: COORD_TRACE: start_pos={}, l_pac={}, pos_f={}, is_rev={}, rid={}",
-                query_name, start_pos, bwa_idx.bns.packed_sequence_length, pos_f, is_rev, rid
+            let ref_aligned = bwa_idx.bns.bns_get_seq(
+                pac_data,
+                merged.fm_index_pos as i64,
+                merged.fm_index_pos as i64 + ref_len as i64,
             );
+            Alignment::generate_md_tag(
+                &ref_aligned,
+                &full_query[merged.query_start as usize..merged.query_end as usize],
+                &merged.cigar,
+            )
+        } else {
+            merged.cigar
+                .iter()
+                .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
+                .sum::<i32>()
+                .to_string()
+        };
 
-            let (ref_name, ref_id, chr_pos) =
-                if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
-                    let ann = &bwa_idx.bns.annotations[rid as usize];
-                    log::debug!(
-                        "{}: COORD_TRACE: rid={}, ann.name={}, ann.offset={}, chr_pos={}",
-                        query_name, rid, ann.name, ann.offset, pos_f - ann.offset as i64
-                    );
-                    (
-                        ann.name.clone(),
-                        rid as usize,
-                        (pos_f - ann.offset as i64) as u64,
-                    )
-                } else {
-                    ("unknown_ref".to_string(), 0, 0)
-                };
+        let nm = Alignment::calculate_exact_nm(&md_tag, &merged.cigar);
 
-            let md_tag = if !pac_data.is_empty() {
-                let ref_len: i32 = cigar
-                    .iter()
-                    .filter_map(|&(op, len)| {
-                        if matches!(op as char, 'M' | 'D') {
-                            Some(len)
-                        } else {
-                            None
-                        }
-                    })
-                    .sum();
-                let ref_aligned = bwa_idx.bns.bns_get_seq(
-                    pac_data,
-                    start_pos as i64,
-                    start_pos as i64 + ref_len as i64,
-                );
-                Alignment::generate_md_tag(
-                    &ref_aligned,
-                    &full_query[q_start as usize..q_end as usize],
-                    &cigar,
-                )
-            } else {
-                cigar
-                    .iter()
-                    .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
-                    .sum::<i32>()
-                    .to_string()
-            };
-
-            let nm = Alignment::calculate_exact_nm(&md_tag, &cigar);
-
-            alignments.push(Alignment {
-                query_name: query_name.to_string(),
-                flag: if chain.is_rev { sam_flags::REVERSE } else { 0 },
-                ref_name,
-                ref_id,
-                pos: chr_pos,
-                mapq: 60,
-                score,
-                cigar,
-                rnext: "*".to_string(),
-                pnext: 0,
-                tlen: 0,
-                // Don't store seq/qual here - they're passed at output time for memory efficiency
-                seq: String::new(),
-                qual: String::new(),
-                tags: vec![
-                    ("AS".to_string(), format!("i:{}", score)),
-                    ("NM".to_string(), format!("i:{}", nm)),
-                    ("MD".to_string(), format!("Z:{}", md_tag)),
-                ],
-                query_start: q_start,
-                query_end: q_end,
-                seed_coverage: chain.weight,
-                hash: hash_64((chr_pos << 1) | (if chain.is_rev { 1 } else { 0 })),
-                frac_rep: chain.frac_rep,
-            });
-        }
+        candidates.push(CandidateAlignment {
+            ref_id: merged.ref_id,
+            ref_name: merged.ref_name.clone(),
+            pos: merged.chr_pos,
+            strand_rev: chain.is_rev,
+            cigar: merged.cigar.clone(),
+            score: merged.score,
+            query_start: merged.query_start,
+            query_end: merged.query_end,
+            seed_coverage: chain.weight,
+            frac_rep: chain.frac_rep,
+            hash: hash_64((merged.chr_pos << 1) | (if chain.is_rev { 1 } else { 0 })),
+            md_tag,
+            nm,
+            chain_id: merged.chain_idx,
+        });
     }
+
+    candidates
+}
+
+/// Convert CandidateAlignment structs to final Alignments with post-processing
+///
+/// Handles: score filtering, redundant removal, secondary/supplementary marking,
+/// MAPQ calculation, and XA/SA tag generation.
+///
+/// Phase 4 refactoring: XA/SA tag generation is now consolidated into
+/// mark_secondary_alignments(), simplifying this function.
+fn finalize_candidates(
+    candidates: Vec<CandidateAlignment>,
+    query_name: &str,
+    opt: &MemOpt,
+) -> Vec<Alignment> {
+    // Convert candidates to alignments
+    let mut alignments: Vec<Alignment> = candidates
+        .iter()
+        .map(|c| c.to_alignment(query_name))
+        .collect();
 
     if !alignments.is_empty() {
         // Filter alignments by minimum score threshold (matches C++ bwamem.cpp:1538)
@@ -968,21 +1175,10 @@ fn finalize_alignments(
             );
         }
 
+        // Mark secondary/supplementary, calculate MAPQ, attach XA/SA tags
+        // (Phase 4 consolidation: all secondary-related processing in one call)
         alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
         mark_secondary_alignments(&mut alignments, opt);
-
-        let xa_tags = generate_xa_tags(&alignments, opt);
-        let sa_tags = generate_sa_tags(&alignments);
-
-        for aln in alignments.iter_mut() {
-            if aln.flag & sam_flags::SECONDARY == 0 {
-                if let Some(sa_tag) = sa_tags.get(&aln.query_name) {
-                    aln.tags.push(("SA".to_string(), sa_tag.clone()));
-                } else if let Some(xa_tag) = xa_tags.get(&aln.query_name) {
-                    aln.tags.push(("XA".to_string(), xa_tag.clone()));
-                }
-            }
-        }
     }
 
     // If all alignments were filtered/removed, output unmapped record
