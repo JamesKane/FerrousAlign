@@ -957,12 +957,11 @@ fn calculate_all_mapq(
                 opt,
             );
 
-            // Add XS tag if there's a suboptimal score
-            if sub_scores[i] > 0 {
-                alignments[i]
-                    .tags
-                    .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
-            }
+            // Add XS tag (suboptimal alignment score)
+            // BWA-MEM2 always includes XS, even XS:i:0 for uniquely-mapped reads
+            alignments[i]
+                .tags
+                .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
         } else {
             // Secondary alignment: MAPQ = 0
             alignments[i].mapq = 0;
