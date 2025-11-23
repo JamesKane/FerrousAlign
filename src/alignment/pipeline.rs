@@ -20,6 +20,7 @@ use crate::alignment::seeding::generate_smems_from_position;
 use crate::alignment::seeding::get_sa_entries;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
+use crate::compute::ComputeBackend;
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::utils::hash_64;
@@ -34,6 +35,19 @@ use crate::utils::hash_64;
 // - Seed extension and filtering
 // ============================================================================
 
+// ============================================================================
+// HETEROGENEOUS COMPUTE INTEGRATION POINT - SEED GENERATION
+// ============================================================================
+//
+// This is the main entry point for per-read alignment. The compute_backend
+// parameter controls which hardware accelerator is used for extension.
+//
+// To add GPU/NPU acceleration:
+// 1. Pass appropriate ComputeBackend variant
+// 2. In extend_chains_to_alignments(), route based on backend
+// 3. For NPU: Use ONE-HOT encoding in find_seeds() (see compute::encoding)
+//
+// ============================================================================
 pub fn generate_seeds(
     bwa_idx: &BwaIndex,
     pac_data: &[u8], // Pre-loaded PAC data for MD tag generation
@@ -42,9 +56,11 @@ pub fn generate_seeds(
     query_qual: &str,
     opt: &MemOpt,
 ) -> Vec<Alignment> {
-    // Call the new refactored pipeline
+    // Default to CPU SIMD with auto-detected engine
+    // TODO: Accept ComputeBackend parameter when full integration is implemented
+    let compute_backend = crate::compute::detect_optimal_backend();
     align_read(
-        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, true, // use_batched_simd
+        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, compute_backend,
     )
 }
 
@@ -76,8 +92,26 @@ struct ExtensionResult {
     encoded_query_rc: Vec<u8>,
 }
 
-/// A new, top-level function that clearly shows the alignment pipeline.
-/// This is the refactored `generate_seeds`.
+// ============================================================================
+// HETEROGENEOUS COMPUTE INTEGRATION POINT - MAIN ALIGNMENT PIPELINE
+// ============================================================================
+//
+// This is the core alignment pipeline. The compute_backend parameter is
+// propagated to Stage 3 (Extension) where the heavy Smith-Waterman work
+// is performed on the selected hardware backend.
+//
+// Pipeline stages:
+//   Stage 1: Seeding (FM-Index, always CPU)
+//   Stage 2: Chaining (O(n²) DP, always CPU)
+//   Stage 3: Extension (Smith-Waterman, routes to SIMD/GPU/NPU)  ← KEY DISPATCH
+//   Stage 4: Finalization (scoring, always CPU)
+//
+// To add GPU/NPU acceleration:
+// 1. Stage 3 dispatches based on compute_backend
+// 2. GPU: Batch alignment jobs → GPU kernel → collect results
+// 3. NPU: Pre-filter seeds before extension (see compute::encoding)
+//
+// ============================================================================
 pub fn align_read(
     bwa_idx: &BwaIndex,
     pac_data: &[u8],
@@ -85,15 +119,23 @@ pub fn align_read(
     query_seq: &[u8],
     query_qual: &str,
     opt: &MemOpt,
-    use_batched_simd: bool,
+    compute_backend: ComputeBackend,
 ) -> Vec<Alignment> {
     // 1. SEEDING: Find maximal exact matches (SMEMs)
+    // NOTE: For NPU integration, this is where ONE-HOT encoding would be applied
+    // See compute::encoding::EncodingStrategy for the encoding abstraction
     let (seeds, encoded_query, encoded_query_rc) = find_seeds(bwa_idx, query_name, query_seq, opt);
 
     // 2. CHAINING: Group seeds into potential alignment chains
     let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len());
 
     // 3. EXTENSION: Perform banded Smith-Waterman on the chains
+    // ========================================================================
+    // HETEROGENEOUS COMPUTE DISPATCH POINT
+    // ========================================================================
+    // This is where alignment work is routed to the selected backend.
+    // Currently: CPU SIMD (SSE/AVX2/AVX-512/NEON)
+    // Future: GPU (Metal/CUDA), NPU (ANE/ONNX)
     let extension_result = extend_chains_to_alignments(
         bwa_idx,
         query_name,
@@ -102,7 +144,7 @@ pub fn align_read(
         sorted_seeds,
         encoded_query,
         encoded_query_rc,
-        use_batched_simd,
+        compute_backend,
     );
 
     // 4. FINALIZATION: Score, clean up, and format the final alignments
@@ -449,7 +491,30 @@ fn build_and_filter_chains(
     (filtered_chains, sorted_seeds)
 }
 
-/// Stage 3: Seed Extension / Alignment
+// ============================================================================
+// HETEROGENEOUS COMPUTE INTEGRATION POINT - STAGE 3: EXTENSION
+// ============================================================================
+//
+// This is the primary compute dispatch point. The compute_backend parameter
+// determines which hardware accelerator performs Smith-Waterman alignment.
+//
+// Current implementation:
+//   ComputeBackend::CpuSimd → execute_adaptive_alignments() (SIMD batch)
+//   ComputeBackend::Gpu     → NO-OP: falls back to CpuSimd
+//   ComputeBackend::Npu     → NO-OP: falls back to CpuSimd
+//
+// To implement GPU acceleration:
+// 1. Collect alignment_jobs into GPU-friendly format
+// 2. Transfer to GPU memory (zero-copy preferred)
+// 3. Execute GPU kernel
+// 4. Collect results back
+//
+// To implement NPU seed pre-filtering:
+// 1. Before building alignment_jobs, filter seeds using NPU classifier
+// 2. NPU uses ONE-HOT encoding (see compute::encoding module)
+// 3. Only surviving seeds become alignment jobs
+//
+// ============================================================================
 fn extend_chains_to_alignments(
     bwa_idx: &BwaIndex,
     _query_name: &str,
@@ -458,7 +523,7 @@ fn extend_chains_to_alignments(
     seeds: Vec<Seed>,
     encoded_query: Vec<u8>,
     encoded_query_rc: Vec<u8>,
-    use_batched_simd: bool,
+    compute_backend: ComputeBackend,
 ) -> ExtensionResult {
     let sw_params = BandedPairWiseSW::new(
         opt.o_del,
@@ -573,10 +638,48 @@ fn extend_chains_to_alignments(
         });
     }
 
-    let extended_cigars: Vec<RawAlignment> = if use_batched_simd && alignment_jobs.len() >= 8 {
-        execute_adaptive_alignments(&sw_params, &alignment_jobs)
-    } else {
-        execute_scalar_alignments(&sw_params, &alignment_jobs)
+    // ========================================================================
+    // HETEROGENEOUS COMPUTE BACKEND DISPATCH
+    // ========================================================================
+    //
+    // Route alignment work to the appropriate hardware backend.
+    //
+    // Current behavior:
+    //   CpuSimd: Use SIMD-accelerated batched alignment (SSE/AVX2/AVX-512/NEON)
+    //   Gpu:     NO-OP - falls back to CpuSimd (placeholder for Metal/CUDA)
+    //   Npu:     NO-OP - falls back to CpuSimd (placeholder for ANE/ONNX)
+    //
+    // To add a new backend:
+    //   1. Add match arm for the new ComputeBackend variant
+    //   2. Implement execute_<backend>_alignments() function
+    //   3. Handle result format conversion if needed
+    //
+    // ========================================================================
+    let effective_backend = compute_backend.effective_backend();
+    let extended_cigars: Vec<RawAlignment> = match effective_backend {
+        // CPU SIMD backend (active implementation)
+        ComputeBackend::CpuSimd(_) => {
+            if alignment_jobs.len() >= 8 {
+                execute_adaptive_alignments(&sw_params, &alignment_jobs)
+            } else {
+                execute_scalar_alignments(&sw_params, &alignment_jobs)
+            }
+        }
+        // GPU backend placeholder (falls back to CpuSimd via effective_backend())
+        ComputeBackend::Gpu => {
+            // TODO: When GPU is implemented:
+            // execute_gpu_alignments(&gpu_context, &sw_params, &alignment_jobs)
+            log::debug!("GPU backend not implemented, using CPU SIMD");
+            execute_adaptive_alignments(&sw_params, &alignment_jobs)
+        }
+        // NPU backend placeholder (falls back to CpuSimd via effective_backend())
+        ComputeBackend::Npu => {
+            // TODO: When NPU is implemented:
+            // Seeds should already be filtered by NPU pre-filter in find_seeds()
+            // execute_adaptive_alignments() handles the remaining alignment work
+            log::debug!("NPU backend not implemented, using CPU SIMD");
+            execute_adaptive_alignments(&sw_params, &alignment_jobs)
+        }
     }
     .into_iter()
     .map(|(s, c, ra, qa)| (s, c, ra, qa))

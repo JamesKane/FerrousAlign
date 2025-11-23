@@ -1,3 +1,48 @@
+// ============================================================================
+// HETEROGENEOUS COMPUTE INTEGRATION POINT - EXTENSION MODULE
+// ============================================================================
+//
+// This module contains the alignment execution functions that perform the
+// computationally intensive Smith-Waterman work. This is the primary target
+// for GPU and NPU acceleration.
+//
+// ## Current Implementation
+//
+// - execute_adaptive_alignments(): Batched SIMD alignment (SSE/AVX2/AVX-512)
+// - execute_scalar_alignments(): Fallback for small batches
+// - execute_batched_alignments_with_size(): Size-configurable SIMD batching
+//
+// ## Future GPU Integration
+//
+// To add GPU support (Metal, CUDA, ROCm):
+//
+// ```rust,ignore
+// pub fn execute_gpu_alignments(
+//     gpu_ctx: &GpuContext,
+//     sw_params: &BandedPairWiseSW,
+//     jobs: &[AlignmentJob],
+// ) -> Vec<(i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>)> {
+//     // 1. Convert AlignmentJob batch to GPU-friendly format
+//     // 2. Transfer to GPU (zero-copy via shared memory preferred)
+//     // 3. Execute GPU Smith-Waterman kernel
+//     // 4. Collect results and convert back to (score, cigar, ref, query)
+// }
+// ```
+//
+// ## Future NPU Integration
+//
+// NPU acceleration primarily targets seed pre-filtering (not extension).
+// The NPU path uses ONE-HOT encoding (see compute::encoding module).
+// This module would receive pre-filtered alignment jobs.
+//
+// ## Performance Thresholds
+//
+// - GPU dispatch overhead: ~20-50μs
+// - SW kernel CPU time: ~1-2μs per alignment
+// - GPU threshold: batch_size >= 1024 to amortize overhead
+//
+// ============================================================================
+
 // ----------------------------------------------------------------------------
 // Alignment Job Structure and Divergence Estimation
 // ----------------------------------------------------------------------------

@@ -8,11 +8,29 @@ use std::io::{self, Write};
 // Added import for BwaIndex
 
 pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
-    // Detect and display SIMD capabilities
-    use crate::simd::{detect_optimal_simd_engine, simd_engine_description};
-    let simd_engine = detect_optimal_simd_engine();
-    let simd_desc = simd_engine_description(simd_engine);
-    log::info!("Using SIMD engine: {}", simd_desc);
+    // ========================================================================
+    // HETEROGENEOUS COMPUTE BACKEND DETECTION
+    // ========================================================================
+    //
+    // This is the primary entry point for compute backend selection.
+    // The detected backend is used to route alignment computations to
+    // the appropriate hardware accelerator (CPU SIMD, GPU, or NPU).
+    //
+    // To add a new backend:
+    // 1. Add variant to compute::ComputeBackend enum
+    // 2. Implement detection in compute::detect_optimal_backend()
+    // 3. Add routing in alignment/extension.rs
+    //
+    // Current backends:
+    // - CpuSimd: SSE2/AVX2/AVX-512/NEON (active)
+    // - Gpu: Metal/CUDA/ROCm (NO-OP, falls back to CpuSimd)
+    // - Npu: ANE/ONNX (NO-OP, falls back to CpuSimd)
+    // ========================================================================
+    use crate::compute::{backend_description, detect_optimal_backend, ComputeContext};
+    let compute_backend = detect_optimal_backend();
+    let compute_ctx = ComputeContext::with_backend(compute_backend);
+    let backend_desc = backend_description(compute_backend);
+    log::info!("Using compute backend: {}", backend_desc);
 
     // Extract common options
     let verbosity = opts.verbosity;
@@ -209,6 +227,19 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("Error writing custom header: {}", e))?;
     }
 
+    // ========================================================================
+    // HETEROGENEOUS COMPUTE DISPATCH
+    // ========================================================================
+    //
+    // This is the dispatch point where alignment processing begins.
+    // The compute_ctx is passed to processing functions to control which
+    // hardware backend (CPU SIMD, GPU, NPU) is used for alignment.
+    //
+    // The compute context flows through:
+    //   main_mem() → process_single/paired_end() → align_read() → extension
+    //
+    // ========================================================================
+
     // Detect paired-end mode: if exactly 2 query files provided
     if opts.reads.len() == 2 {
         // Paired-end mode
@@ -222,6 +253,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("Invalid read2 file path"))?,
             &mut writer,
             &opt,
+            &compute_ctx,
         );
     } else {
         // Single-end mode (original behavior)
@@ -230,7 +262,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();
-        process_single_end(&bwa_idx, &read_files_str, &mut writer, &opt);
+        process_single_end(&bwa_idx, &read_files_str, &mut writer, &opt, &compute_ctx);
     }
     Ok(())
 }

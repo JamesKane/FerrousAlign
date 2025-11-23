@@ -94,6 +94,7 @@ pub mod alignment;        // Core alignment pipeline (seeding, chaining, extensi
 pub mod bntseq;           // Reference sequence handling
 pub mod bwa_index;        // Index building (uses bio crate for suffix array)
 pub mod bwt;              // BWT data structure
+pub mod compute;          // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
 pub mod fastq_reader;     // FASTQ parsing using bio::io::fastq (query reads with gzip support)
 pub mod fm_index;         // FM-Index operations (BWT search, occurrence counting)
 pub mod index;            // Index management (BwaIndex loading/dumping)
@@ -209,6 +210,81 @@ The pipeline implements a multi-kernel design matching the C++ version. Entry po
 - Runtime detection automatically selects best available SIMD engine
 - Banded Smith-Waterman processes 16/32/64 sequences in parallel (depending on SIMD width)
 - Threshold: Switches to batched SIMD when ≥16 alignment jobs available
+
+### Heterogeneous Compute Abstraction
+
+**Status**: ✅ **Integration points implemented** (Session 30)
+
+The codebase provides clean integration points for adding GPU (Metal/CUDA/ROCm) and NPU (ANE/ONNX) acceleration. Currently, GPU and NPU backends are **NO-OPs** that fall back to CPU SIMD.
+
+**Module Structure** (`src/compute/`):
+```
+src/compute/
+├── mod.rs          # ComputeBackend enum, detection, ComputeContext
+└── encoding.rs     # EncodingStrategy (Classic 2-bit vs ONE-HOT for NPU)
+```
+
+**ComputeBackend Enum** (`compute/mod.rs`):
+```rust
+pub enum ComputeBackend {
+    CpuSimd(SimdEngineType),  // Active: SSE/AVX2/AVX-512/NEON
+    Gpu,                       // NO-OP: Falls back to CpuSimd
+    Npu,                       // NO-OP: Falls back to CpuSimd
+}
+```
+
+**EncodingStrategy Enum** (`compute/encoding.rs`):
+```rust
+pub enum EncodingStrategy {
+    Classic,   // 2-bit encoding: A=0, C=1, G=2, T=3 (active)
+    OneHot,    // 4-channel: A=[1,0,0,0], etc. (NO-OP, for NPU)
+}
+```
+
+**Integration Points** (marked with `HETEROGENEOUS COMPUTE` comment blocks):
+
+| Location | File | Function | Purpose |
+|----------|------|----------|---------|
+| Entry | `src/mem.rs:10-33` | `main_mem()` | Backend detection |
+| Dispatch | `src/mem.rs:230-241` | `main_mem()` | Pass context to processing |
+| Single-end | `src/single_end.rs:35-50` | `process_single_end()` | Accept compute context |
+| Paired-end | `src/paired_end.rs:161-176` | `process_paired_end()` | Accept compute context |
+| Pipeline | `src/alignment/pipeline.rs:95-114` | `align_read()` | Main alignment entry |
+| Extension | `src/alignment/pipeline.rs:494-517` | `extend_chains_to_alignments()` | Stage 3 dispatch |
+| Backend Switch | `src/alignment/pipeline.rs:641-682` | `extend_chains_to_alignments()` | Route to backend |
+| Extension Docs | `src/alignment/extension.rs:1-44` | Module header | GPU/NPU implementation guide |
+
+**Adding a New Backend** (e.g., Metal GPU):
+
+1. **Update `compute/mod.rs`**:
+   - Remove NO-OP fallback in `effective_backend()` for your variant
+   - Add detection logic in `detect_optimal_backend()`
+
+2. **Update `alignment/pipeline.rs`** (line ~659):
+   ```rust
+   ComputeBackend::Gpu => {
+       execute_gpu_alignments(&gpu_context, &sw_params, &alignment_jobs)
+   }
+   ```
+
+3. **Implement backend kernel** (new file, e.g., `compute/gpu.rs`):
+   ```rust
+   pub fn execute_gpu_alignments(
+       ctx: &GpuContext,
+       sw_params: &BandedPairWiseSW,
+       jobs: &[AlignmentJob],
+   ) -> Vec<(i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>)>
+   ```
+
+4. **For NPU seed pre-filtering**:
+   - Use `EncodingStrategy::OneHot` in `find_seeds()` (pipeline.rs:127)
+   - Implement seed classifier model
+   - Filter seeds before building alignment jobs
+
+**Performance Thresholds**:
+- GPU dispatch overhead: ~20-50μs
+- SW kernel CPU time: ~1-2μs per alignment
+- GPU threshold: batch_size >= 1024 to amortize overhead
 
 ### Key Data Structures
 
@@ -573,6 +649,7 @@ let cigar = result.cigar_string;
 8. ✅ Index building format compatibility (Session 29 - .pac file format, ambiguous bases, BWT construction)
 9. ✅ Adaptive batch sizing and SIMD routing (Session 29 - performance optimizations)
 10. ✅ Golden reads parity test infrastructure (tests/golden_reads/ - 10K HG002 pairs)
+11. ✅ Heterogeneous compute abstraction (Session 30 - GPU/NPU integration points, NO-OP placeholders)
 
 **Remaining Optimizations**:
 1. Faster suffix array reconstruction (cache recent lookups)
@@ -598,7 +675,8 @@ let cigar = result.cigar_string;
 **Future Enhancements**:
 - Apple Acceleration framework integration (vDSP for matrix ops)
 - Memory-mapped index loading (reduce startup time)
-- GPU acceleration via Metal (Apple Silicon) or CUDA
+- GPU acceleration via Metal (Apple Silicon) or CUDA - **Integration points ready in `src/compute/`**
+- NPU seed pre-filtering via ANE/ONNX - **Integration points ready, ONE-HOT encoding in `src/compute/encoding.rs`**
 
 ## Development Workflow
 

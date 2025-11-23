@@ -6,6 +6,7 @@ pub mod alignment;
 pub mod bntseq;
 pub mod bwa_index;
 pub mod bwt;
+pub mod compute; // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
 pub mod defaults;
 pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
 pub mod fm_index; // FM-Index operations (BWT search, occurrence counting)

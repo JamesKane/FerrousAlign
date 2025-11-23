@@ -12,6 +12,7 @@
 
 use crate::alignment::finalization::Alignment;
 use crate::alignment::pipeline::generate_seeds;
+use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
@@ -31,13 +32,36 @@ const AVG_READ_LEN: usize = 101;
 // Minimum batch size (BATCH_SIZE from C++ macro.h)
 const MIN_BATCH_SIZE: usize = 512;
 
+// ============================================================================
+// HETEROGENEOUS COMPUTE ENTRY POINT - SINGLE-END PROCESSING
+// ============================================================================
+//
+// This function is the main entry point for single-end alignment processing.
+// The compute_ctx parameter controls which hardware backend is used for
+// alignment computations.
+//
+// Compute flow: process_single_end() → generate_seeds() → align_read() → extension
+//
+// To add GPU/NPU acceleration:
+// 1. Pass compute_ctx through to generate_seeds()
+// 2. In align_read(), route based on compute_ctx.backend
+// 3. Implement backend-specific alignment kernel
+//
+// ============================================================================
 pub fn process_single_end(
     bwa_idx: &BwaIndex,
     query_files: &Vec<String>,
     writer: &mut Box<dyn Write>,
     opt: &MemOpt,
+    compute_ctx: &ComputeContext,
 ) {
     use std::time::Instant;
+
+    // Log the compute backend being used for this processing run
+    log::debug!(
+        "Single-end processing using backend: {:?}",
+        compute_ctx.backend
+    );
 
     // Wrap index in Arc for thread-safe sharing
     let bwa_idx = Arc::new(bwa_idx);
