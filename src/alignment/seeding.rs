@@ -183,9 +183,13 @@ pub fn generate_smems_for_strand(
         }
 
         // Phase 2: Backward search
+        // BWA-MEM2 reverses prev array in-place before backward iteration (FMI_search.cpp:587-592)
+        // This puts the longest SMEM (last added during forward) at index 0
+        prev_array_buf.reverse();
+
         if !is_reverse_complement {
             log::debug!(
-                "{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={}",
+                "{}: [RUST Phase 2] Starting backward search from x={}, prev_array_buf.len()={} (reversed)",
                 query_name,
                 x,
                 prev_array_buf.len()
@@ -206,32 +210,36 @@ pub fn generate_smems_for_strand(
             }
 
             curr_array_buf.clear();
-            let curr_array = &mut curr_array_buf;
-            let mut curr_s = None;
+            let mut curr_s: i64 = -1; // BWA-MEM2 uses int curr_s = -1
+            let num_prev = prev_array_buf.len();
 
             if !is_reverse_complement {
                 log::debug!(
-                    "{}: [RUST Phase 2] j={}, base={}, prev_array_buf.len()={}",
+                    "{}: [RUST Phase 2] j={}, base={}, num_prev={}",
                     query_name,
                     j,
                     a,
-                    prev_array_buf.len()
+                    num_prev
                 );
             }
 
-            for (i, smem) in prev_array_buf.iter().rev().enumerate() {
-                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+            // First loop: process elements until we find one to output or keep
+            // BWA-MEM2: FMI_search.cpp lines 607-630
+            let mut p = 0;
+            while p < num_prev {
+                let smem = prev_array_buf[p];
+                let mut new_smem = backward_ext(bwa_idx, smem, a);
                 new_smem.query_start = j as i32;
 
                 if !is_reverse_complement {
                     let old_len = smem.query_end - smem.query_start + 1;
                     let new_len = new_smem.query_end - new_smem.query_start + 1;
                     log::debug!(
-                        "{}: [RUST Phase 2] x={}, j={}, i={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
+                        "{}: [RUST Phase 2] x={}, j={}, p={}: old_smem(m={},n={},len={},k={},l={},s={}), new_smem(m={},n={},len={},k={},l={},s={}), min_intv={}",
                         query_name,
                         x,
                         j,
-                        i,
+                        p,
                         smem.query_start,
                         smem.query_end,
                         old_len,
@@ -248,18 +256,13 @@ pub fn generate_smems_for_strand(
                     );
                 }
 
+                // Output condition: interval dropped below threshold AND length sufficient
                 if new_smem.interval_size < min_intv
                     && (smem.query_end - smem.query_start + 1) >= min_seed_len
                 {
                     if !is_reverse_complement {
-                        let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
-                            smem.bwt_interval_end - smem.bwt_interval_start
-                        } else {
-                            0
-                        };
-                        let s_matches = smem.interval_size == s_from_lk;
                         log::debug!(
-                            "{}: [RUST SMEM OUTPUT] Phase2 line 617: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}, l-k={}, s_match={}",
+                            "{}: [RUST SMEM OUTPUT] Phase2: smem(m={},n={},k={},l={},s={}) newSmem.s={} < min_intv={}",
                             query_name,
                             smem.query_start,
                             smem.query_end,
@@ -267,18 +270,19 @@ pub fn generate_smems_for_strand(
                             smem.bwt_interval_end,
                             smem.interval_size,
                             new_smem.interval_size,
-                            min_intv,
-                            s_from_lk,
-                            s_matches
+                            min_intv
                         );
                     }
-                    all_smems.push(*smem);
-                    break;
+                    all_smems.push(smem);
+                    break; // BWA-MEM2: break after output
                 }
 
-                if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
-                    curr_s = Some(new_smem.interval_size);
-                    curr_array.push(new_smem);
+                // Keep condition: interval still above threshold AND unique interval size
+                if new_smem.interval_size >= min_intv
+                    && (new_smem.interval_size as i64) != curr_s
+                {
+                    curr_s = new_smem.interval_size as i64;
+                    curr_array_buf.push(new_smem);
                     if !is_reverse_complement {
                         log::debug!(
                             "{}: [RUST Phase 2] Keeping new_smem (s={} >= min_intv={}), breaking",
@@ -287,32 +291,38 @@ pub fn generate_smems_for_strand(
                             min_intv
                         );
                     }
-                    break;
+                    break; // BWA-MEM2: break after keeping first valid interval
                 }
 
                 if !is_reverse_complement {
                     log::debug!(
-                        "{}: [RUST Phase 2] Rejecting new_smem (s={} < min_intv={} OR already_seen={})",
+                        "{}: [RUST Phase 2] Rejecting (s={} < min_intv={} OR already_seen={})",
                         query_name,
                         new_smem.interval_size,
                         min_intv,
-                        curr_s == Some(new_smem.interval_size)
+                        (new_smem.interval_size as i64) == curr_s
                     );
                 }
+
+                p += 1;
             }
 
-            for (i, smem) in prev_array_buf.iter().rev().skip(1).enumerate() {
-                let mut new_smem = backward_ext(bwa_idx, *smem, a);
+            // Second loop: continue from p+1 to process remaining elements
+            // BWA-MEM2: FMI_search.cpp lines 631-649: "p++; for(; p < numPrev; p++)"
+            p += 1;
+            while p < num_prev {
+                let smem = prev_array_buf[p];
+                let mut new_smem = backward_ext(bwa_idx, smem, a);
                 new_smem.query_start = j as i32;
 
                 if !is_reverse_complement {
                     let new_len = new_smem.query_end - new_smem.query_start + 1;
                     log::debug!(
-                        "{}: [RUST Phase 2] x={}, j={}, remaining_i={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
+                        "{}: [RUST Phase 2] x={}, j={}, remaining_p={}: smem(m={},n={},s={}), new_smem(m={},n={},len={},s={}), will_push={}",
                         query_name,
                         x,
                         j,
-                        i + 1,
+                        p,
                         smem.query_start,
                         smem.query_end,
                         smem.interval_size,
@@ -321,14 +331,19 @@ pub fn generate_smems_for_strand(
                         new_len,
                         new_smem.interval_size,
                         new_smem.interval_size >= min_intv
-                            && curr_s != Some(new_smem.interval_size)
+                            && (new_smem.interval_size as i64) != curr_s
                     );
                 }
 
-                if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
-                    curr_s = Some(new_smem.interval_size);
-                    curr_array.push(new_smem);
+                // Keep if above threshold and unique interval size
+                if new_smem.interval_size >= min_intv
+                    && (new_smem.interval_size as i64) != curr_s
+                {
+                    curr_s = new_smem.interval_size as i64;
+                    curr_array_buf.push(new_smem);
                 }
+
+                p += 1;
             }
 
             std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
@@ -355,19 +370,15 @@ pub fn generate_smems_for_strand(
             }
         }
 
+        // Output remaining SMEM: BWA-MEM2 takes prev[0] (longest SMEM after reversal)
+        // FMI_search.cpp lines 656-664
         if !prev_array_buf.is_empty() {
-            let smem = prev_array_buf[prev_array_buf.len() - 1];
+            let smem = prev_array_buf[0]; // First element after in-place reversal = longest SMEM
             let len = smem.query_end - smem.query_start + 1;
             if len >= min_seed_len {
                 if !is_reverse_complement {
-                    let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
-                        smem.bwt_interval_end - smem.bwt_interval_start
-                    } else {
-                        0
-                    };
-                    let s_matches = smem.interval_size == s_from_lk;
                     log::debug!(
-                        "{}: [RUST SMEM OUTPUT] Phase2 line 671: smem(m={},n={},k={},l={},s={}), len={}, l-k={}, s_match={}, next_x={}",
+                        "{}: [RUST SMEM OUTPUT] Phase2 final: smem(m={},n={},k={},l={},s={}), len={}, next_x={}",
                         query_name,
                         smem.query_start,
                         smem.query_end,
@@ -375,8 +386,6 @@ pub fn generate_smems_for_strand(
                         smem.bwt_interval_end,
                         smem.interval_size,
                         len,
-                        s_from_lk,
-                        s_matches,
                         next_x
                     );
                 }
@@ -470,6 +479,9 @@ pub fn generate_smems_from_position(
     }
 
     // Phase 2: Backward search
+    // BWA-MEM2 reverses prev array in-place before backward iteration
+    prev_array_buf.reverse();
+
     let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
 
     for j in (0..start_pos).rev() {
@@ -479,36 +491,49 @@ pub fn generate_smems_from_position(
         }
 
         curr_array_buf.clear();
-        let curr_array = &mut curr_array_buf;
-        let mut curr_s = None;
+        let mut curr_s: i64 = -1;
+        let num_prev = prev_array_buf.len();
 
-        for smem in prev_array_buf.iter().rev() {
-            let mut new_smem = backward_ext(bwa_idx, *smem, a);
+        // First loop: process elements until we find one to output or keep
+        let mut p = 0;
+        while p < num_prev {
+            let smem = prev_array_buf[p];
+            let mut new_smem = backward_ext(bwa_idx, smem, a);
             new_smem.query_start = j as i32;
 
             if new_smem.interval_size < min_intv
                 && (smem.query_end - smem.query_start + 1) >= min_seed_len
             {
-                // Output this SMEM - it's the longest extension that meets threshold
-                all_smems.push(*smem);
+                all_smems.push(smem);
                 break;
             }
 
-            if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
-                curr_s = Some(new_smem.interval_size);
-                curr_array.push(new_smem);
+            if new_smem.interval_size >= min_intv
+                && (new_smem.interval_size as i64) != curr_s
+            {
+                curr_s = new_smem.interval_size as i64;
+                curr_array_buf.push(new_smem);
                 break;
             }
+
+            p += 1;
         }
 
-        for smem in prev_array_buf.iter().rev().skip(1) {
-            let mut new_smem = backward_ext(bwa_idx, *smem, a);
+        // Second loop: continue from p+1 to process remaining elements
+        p += 1;
+        while p < num_prev {
+            let smem = prev_array_buf[p];
+            let mut new_smem = backward_ext(bwa_idx, smem, a);
             new_smem.query_start = j as i32;
 
-            if new_smem.interval_size >= min_intv && curr_s != Some(new_smem.interval_size) {
-                curr_s = Some(new_smem.interval_size);
-                curr_array.push(new_smem);
+            if new_smem.interval_size >= min_intv
+                && (new_smem.interval_size as i64) != curr_s
+            {
+                curr_s = new_smem.interval_size as i64;
+                curr_array_buf.push(new_smem);
             }
+
+            p += 1;
         }
 
         std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
@@ -518,9 +543,9 @@ pub fn generate_smems_from_position(
         }
     }
 
-    // Output any remaining SMEMs at the end of backward search
+    // Output remaining SMEM: takes prev[0] (longest SMEM after reversal)
     if !prev_array_buf.is_empty() {
-        let smem = prev_array_buf[prev_array_buf.len() - 1];
+        let smem = prev_array_buf[0];
         let len = smem.query_end - smem.query_start + 1;
         if len >= min_seed_len {
             all_smems.push(smem);
