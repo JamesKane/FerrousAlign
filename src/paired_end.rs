@@ -703,6 +703,21 @@ fn mate_rescue_batch(
             let mate_seq = encode_sequence(seq1);
             let num_anchors = alns2.len().min(max_matesw);
 
+            // Trace: Log all anchor positions for debugging
+            if name1.contains("10009:11965") {
+                log::debug!(
+                    "MATE_RESCUE_DEBUG {}: Using {} anchors from R2 to rescue R1",
+                    name1, num_anchors
+                );
+                for (idx, aln) in alns2.iter().enumerate().take(num_anchors) {
+                    log::debug!(
+                        "MATE_RESCUE_DEBUG {}: R2 anchor[{}] = {}:{} (rev={}, score={})",
+                        name1, idx, aln.ref_name, aln.pos,
+                        (aln.flag & 0x10) != 0, aln.score
+                    );
+                }
+            }
+
             for j in 0..num_anchors {
                 let n = mem_matesw(
                     bwa_idx, pac, stats, &alns2[j],

@@ -894,7 +894,11 @@ fn find_seeds(
     };
 
     let mut seeds = Vec::new();
-    for smem in sorted_smems.iter() {
+    let mut seeds_per_smem_count = Vec::new(); // Track seeds generated per SMEM for Phase 2 validation
+
+    for (smem_idx, smem) in sorted_smems.iter().enumerate() {
+        let seeds_before = seeds.len();
+
         // Limit positions per SMEM to ensure coverage from multiple SMEMs
         // The get_sa_entries function will sample evenly across the interval
         let max_positions_this_smem = (seeds_per_smem as u32).min(opt.max_occ as u32);
@@ -911,12 +915,23 @@ fn find_seeds(
         let seed_len = smem.query_end - smem.query_start;
         let l_pac = bwa_idx.bns.packed_sequence_length;
 
-        for ref_pos in ref_positions {
+        // PHASE 2 VALIDATION: Log first few reference positions for this SMEM
+        if log::log_enabled!(log::Level::Debug) && smem_idx < 5 {
+            log::debug!(
+                "SEED_CONVERSION {}: SMEM[{}] query[{}..{}] → {} ref positions (requested: {})",
+                query_name, smem_idx, smem.query_start, smem.query_end,
+                ref_positions.len(), max_positions_this_smem
+            );
+        }
+
+        let mut skipped_boundary = 0;
+        for (pos_idx, ref_pos) in ref_positions.iter().enumerate() {
             // Compute rid (chromosome ID) - skip seeds that span chromosome boundaries
             // Matches C++ bwamem.cpp:911-914
-            let rid = bwa_idx.bns.pos_to_rid(ref_pos, ref_pos + seed_len as u64);
+            let rid = bwa_idx.bns.pos_to_rid(*ref_pos, *ref_pos + seed_len as u64);
             if rid < 0 {
                 // Seed spans multiple chromosomes or forward-reverse boundary - skip
+                skipped_boundary += 1;
                 continue;
             }
 
@@ -924,11 +939,20 @@ fn find_seeds(
             // - Positions in [0, l_pac): forward strand (read matches forward ref)
             // - Positions in [l_pac, 2*l_pac): reverse strand (read matches revcomp ref)
             // See bns_depos() in bntseq.h: (*is_rev = (pos >= bns->l_pac))
-            let is_rev = ref_pos >= l_pac;
+            let is_rev = *ref_pos >= l_pac;
+
+            // PHASE 2 VALIDATION: Log first few seeds for this SMEM
+            if log::log_enabled!(log::Level::Debug) && smem_idx < 5 && pos_idx < 3 {
+                log::debug!(
+                    "SEED_CONVERSION {}:   Seed[{}]: ref_pos={} is_rev={} rid={} chr={}",
+                    query_name, pos_idx, ref_pos, is_rev, rid,
+                    if rid >= 0 { bwa_idx.bns.annotations[rid as usize].name.as_str() } else { "N/A" }
+                );
+            }
 
             let seed = Seed {
                 query_pos: smem.query_start,
-                ref_pos,
+                ref_pos: *ref_pos,
                 len: seed_len,
                 is_rev,
                 interval_size: smem.interval_size,
@@ -947,8 +971,39 @@ fn find_seeds(
             }
         }
 
+        let seeds_added = seeds.len() - seeds_before;
+        seeds_per_smem_count.push((smem_idx, seeds_added, skipped_boundary));
+
         if seeds.len() >= SEEDS_PER_READ {
             break;
+        }
+    }
+
+    // PHASE 2 VALIDATION: Log seed conversion summary
+    log::debug!(
+        "SEED_CONVERSION {}: Total {} SMEMs → {} seeds ({} seeds/SMEM limit)",
+        query_name,
+        sorted_smems.len(),
+        seeds.len(),
+        seeds_per_smem
+    );
+
+    // Log per-SMEM breakdown for first few SMEMs
+    if log::log_enabled!(log::Level::Debug) {
+        for &(idx, count, skipped) in seeds_per_smem_count.iter().take(10) {
+            if count > 0 || skipped > 0 {
+                log::debug!(
+                    "SEED_CONVERSION {}:   SMEM[{}] → {} seeds ({} skipped at boundary)",
+                    query_name, idx, count, skipped
+                );
+            }
+        }
+        if seeds_per_smem_count.len() > 10 {
+            log::debug!(
+                "SEED_CONVERSION {}:   ... ({} more SMEMs)",
+                query_name,
+                seeds_per_smem_count.len() - 10
+            );
         }
     }
 
