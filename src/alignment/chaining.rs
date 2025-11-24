@@ -144,8 +144,15 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
 
     log::debug!("chain_seeds: Input with {} seeds (B-tree algorithm)", seeds.len());
 
-    // 1. Sort seeds by (query_pos, ref_pos) - same as C++
-    seeds.sort_by_key(|s| (s.query_pos, s.ref_pos));
+    // 1. Sort seeds by (query_pos, query_end) - CRITICAL for overlapping seed handling!
+    // BWA-MEM2 sorts SMEMs by (query_start, query_end), which ensures that when
+    // multiple seeds start at the same position (e.g., len=117 and len=130 both at pos 18),
+    // the SHORTER seed is processed first. This allows the LONGER seed to be added to
+    // the chain via test_and_merge (since the longer seed is NOT contained).
+    // If we sorted by ref_pos instead, the order would be random, and if the longer
+    // seed is processed first, the shorter seed would be marked as "contained" and dropped,
+    // resulting in chains with only 1 seed instead of multiple overlapping seeds.
+    seeds.sort_by_key(|s| (s.query_pos, s.query_pos + s.len));
 
     // 2. Initialize B-tree for chain lookup
     // Key: reference position (chain.pos), Value: index into chains vector

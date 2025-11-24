@@ -308,6 +308,7 @@ pub struct ScoreOnlyExtensionResult {
 /// - Supporting data for later CIGAR regeneration
 pub fn extend_chains_to_regions(
     bwa_idx: &BwaIndex,
+    query_name: &str,
     opt: &MemOpt,
     chains: Vec<Chain>,
     seeds: Vec<Seed>,
@@ -401,6 +402,16 @@ pub fn extend_chains_to_regions(
                 if tmp > 0 && tmp <= rseq.len() {
                     left_job_idx = Some(left_jobs.len());
 
+                    // PHASE 4 VALIDATION: Log left extension job
+                    if log::log_enabled!(log::Level::Debug) {
+                        log::debug!(
+                            "EXTENSION_JOB {}: Chain[{}] type=LEFT query=[0..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
+                            query_name, chain_idx, seed.query_pos,
+                            rmax_0, seed.ref_pos,
+                            seed.query_pos, seed.len, seed.is_rev
+                        );
+                    }
+
                     // Build reversed sequences for left extension
                     let query_seg: Vec<u8> = encoded_query[0..seed.query_pos as usize]
                         .iter()
@@ -425,6 +436,16 @@ pub fn extend_chains_to_regions(
                 let re = ((seed.ref_pos + seed.len as u64) - rmax_0) as usize;
                 if re < rseq.len() {
                     right_job_idx = Some(right_jobs.len());
+
+                    // PHASE 4 VALIDATION: Log right extension job
+                    if log::log_enabled!(log::Level::Debug) {
+                        log::debug!(
+                            "EXTENSION_JOB {}: Chain[{}] type=RIGHT query=[{}..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
+                            query_name, chain_idx, seed_query_end, query_len,
+                            seed.ref_pos + seed.len as u64, rmax_1,
+                            seed.query_pos, seed.len, seed.is_rev
+                        );
+                    }
 
                     let query_seg: Vec<u8> =
                         encoded_query[seed_query_end as usize..].to_vec();

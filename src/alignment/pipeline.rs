@@ -478,7 +478,7 @@ pub fn align_read(
     let (seeds, encoded_query, encoded_query_rc) = find_seeds(bwa_idx, query_name, query_seq, opt);
 
     // 2. CHAINING: Group seeds into potential alignment chains
-    let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len());
+    let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len(), query_name);
 
     log::debug!(
         "{}: STANDARD_CIGAR: {} chains, {} seeds",
@@ -825,19 +825,16 @@ fn find_seeds(
         opt.max_occ as u64
     };
 
-    if let Some(mut prev_smem) = all_smems.first().cloned() {
-        for i in 0..all_smems.len() {
-            let smem = all_smems[i];
-            if i > 0 && smem == prev_smem {
-                continue;
-            }
-            let seed_len = smem.query_end - smem.query_start + 1;
-            let occurrences = smem.interval_size;
-            // Keep seeds that pass basic quality filter (min_seed_len AND max_occ)
-            if seed_len >= opt.min_seed_len && occurrences <= effective_max_occ {
-                unique_filtered_smems.push(smem);
-            }
-            prev_smem = smem;
+    // CRITICAL FIX: DO NOT filter duplicate SMEMs!
+    // BWA-MEM2 preserves all SMEMs including duplicates from different passes.
+    // Filtering duplicates here causes chains to have fewer seeds, leading to
+    // different extension boundaries and lower proper pairing rates.
+    for smem in all_smems.iter() {
+        let seed_len = smem.query_end - smem.query_start + 1;
+        let occurrences = smem.interval_size;
+        // Keep seeds that pass basic quality filter (min_seed_len AND max_occ)
+        if seed_len >= opt.min_seed_len && occurrences <= effective_max_occ {
+            unique_filtered_smems.push(*smem);
         }
     }
 
@@ -858,16 +855,16 @@ fn find_seeds(
         unique_filtered_smems.len()
     );
 
-    // Debug logging for problematic read
-    let is_debug_read = query_name.contains("10009:11965");
-    if is_debug_read {
-        log::debug!("SEED_DEBUG {}: {} SMEMs after filtering:", query_name, unique_filtered_smems.len());
-        for (idx, smem) in unique_filtered_smems.iter().enumerate().take(20) {
+    // SMEM OVERLAP DEBUG: Log ALL SMEMs to identify overlapping/duplicate SMEMs
+    if log::log_enabled!(log::Level::Debug) {
+        log::debug!("SMEM_OVERLAP {}: {} SMEMs after filtering:", query_name, unique_filtered_smems.len());
+        for (idx, smem) in unique_filtered_smems.iter().enumerate() {
             log::debug!(
-                "SEED_DEBUG {}:   SMEM[{}]: query[{}..{}] len={} interval=[{}, {}) size={}",
+                "SMEM_OVERLAP {}:   SMEM[{}]: query[{}..{}] len={} interval=[{}, {}) size={} rev={}",
                 query_name, idx, smem.query_start, smem.query_end,
                 smem.query_end - smem.query_start + 1,
-                smem.bwt_interval_start, smem.bwt_interval_end, smem.interval_size
+                smem.bwt_interval_start, smem.bwt_interval_end, smem.interval_size,
+                smem.is_reverse_complement
             );
         }
     }
@@ -1007,59 +1004,6 @@ fn find_seeds(
         }
     }
 
-    // Debug logging for problematic read - show all seeds
-    if is_debug_read {
-        log::debug!("SEED_DEBUG {}: Generated {} total seeds", query_name, seeds.len());
-        // Group seeds by chromosome for easier analysis
-        let chr5_offset = bwa_idx.bns.annotations.iter()
-            .find(|ann| ann.name == "chr5")
-            .map(|ann| ann.offset)
-            .unwrap_or(0);
-
-        let mut chr5_seeds: Vec<_> = seeds.iter()
-            .filter(|s| s.rid == 4) // chr5 is typically ID 4
-            .collect();
-        chr5_seeds.sort_by_key(|s| s.ref_pos);
-
-        log::debug!("SEED_DEBUG {}: {} seeds on chr5:", query_name, chr5_seeds.len());
-        for (idx, seed) in chr5_seeds.iter().enumerate().take(30) {
-            let chr_pos = if seed.ref_pos >= bwa_idx.bns.packed_sequence_length {
-                (2 * bwa_idx.bns.packed_sequence_length - 1 - seed.ref_pos - chr5_offset) as i64
-            } else {
-                (seed.ref_pos - chr5_offset) as i64
-            };
-            log::debug!(
-                "SEED_DEBUG {}:   Seed[{}]: query_pos={}, chr5:{}, len={}, is_rev={}, occ={}",
-                query_name, idx, seed.query_pos, chr_pos, seed.len, seed.is_rev, seed.interval_size
-            );
-        }
-
-        // Check if any seed is near position 50141532
-        let target_pos = 50141532u64;
-        let target_range = 50140000u64..50143000u64;
-        let nearby_seeds: Vec<_> = chr5_seeds.iter()
-            .filter(|s| {
-                let chr_pos = if s.ref_pos >= bwa_idx.bns.packed_sequence_length {
-                    2 * bwa_idx.bns.packed_sequence_length - 1 - s.ref_pos - chr5_offset
-                } else {
-                    s.ref_pos - chr5_offset
-                };
-                target_range.contains(&chr_pos)
-            })
-            .collect();
-
-        if nearby_seeds.is_empty() {
-            log::warn!(
-                "SEED_DEBUG {}: NO SEEDS found near target position {} (range {}..{})",
-                query_name, target_pos, target_range.start, target_range.end
-            );
-        } else {
-            log::debug!(
-                "SEED_DEBUG {}: Found {} seeds near target position {}",
-                query_name, nearby_seeds.len(), target_pos
-            );
-        }
-    }
 
     if max_smem_count > query_len {
         log::debug!(
@@ -1084,17 +1028,45 @@ fn build_and_filter_chains(
     seeds: Vec<Seed>,
     opt: &MemOpt,
     query_len: usize,
+    query_name: &str,
 ) -> (Vec<Chain>, Vec<Seed>) {
     // Chain seeds together and then filter them
     let (mut chained_results, sorted_seeds) = chain_seeds(seeds, opt);
-    log::debug!("Chaining produced {} chains", chained_results.len());
+    log::debug!("{}: Chaining produced {} chains", query_name, chained_results.len());
+
+    // PHASE 3 VALIDATION: Log all chains before filtering
+    if log::log_enabled!(log::Level::Debug) {
+        for (idx, chain) in chained_results.iter().enumerate() {
+            log::debug!(
+                "CHAIN_VALIDATION {}: Chain[{}] score={} seeds={} query=[{}..{}] ref=[{}..{}] rev={} weight={} frac_rep={:.3} rid={}",
+                query_name, idx, chain.score, chain.seeds.len(),
+                chain.query_start, chain.query_end,
+                chain.ref_start, chain.ref_end,
+                chain.is_rev, chain.weight, chain.frac_rep, chain.rid
+            );
+        }
+    }
 
     let filtered_chains = filter_chains(&mut chained_results, &sorted_seeds, opt, query_len as i32);
     log::debug!(
-        "Chain filtering kept {} chains (from {} total)",
+        "CHAIN_VALIDATION {}: Kept {} chains after filtering (from {} total)",
+        query_name,
         filtered_chains.len(),
         chained_results.len()
     );
+
+    // PHASE 3 VALIDATION: Log filtered chains
+    if log::log_enabled!(log::Level::Debug) {
+        for (idx, chain) in filtered_chains.iter().enumerate() {
+            log::debug!(
+                "CHAIN_VALIDATION {}: FilteredChain[{}] score={} seeds={} query=[{}..{}] ref=[{}..{}] rev={} weight={} frac_rep={:.3} rid={}",
+                query_name, idx, chain.score, chain.seeds.len(),
+                chain.query_start, chain.query_end,
+                chain.ref_start, chain.ref_end,
+                chain.is_rev, chain.weight, chain.frac_rep, chain.rid
+            );
+        }
+    }
 
     (filtered_chains, sorted_seeds)
 }
@@ -1207,6 +1179,17 @@ fn extend_chains_to_alignments(
                 let tmp = (seed.ref_pos - rmax_0) as usize;
                 if tmp > 0 && tmp <= rseq.len() {
                     left_job_idx = Some(alignment_jobs.len());
+
+                    // PHASE 4 VALIDATION: Log left extension job
+                    if log::log_enabled!(log::Level::Debug) {
+                        log::debug!(
+                            "EXTENSION_JOB {}: Chain[{}] type=LEFT query=[0..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
+                            _query_name, chain_idx, seed.query_pos,
+                            rmax_0, seed.ref_pos,
+                            seed.query_pos, seed.len, seed.is_rev
+                        );
+                    }
+
                     alignment_jobs.push(AlignmentJob {
                         seed_idx: chain_idx,
                         query: full_query[0..seed.query_pos as usize].to_vec(),
@@ -1224,6 +1207,17 @@ fn extend_chains_to_alignments(
                 let re = ((seed.ref_pos + seed.len as u64) - rmax_0) as usize;
                 if re < rseq.len() {
                     right_job_idx = Some(alignment_jobs.len());
+
+                    // PHASE 4 VALIDATION: Log right extension job
+                    if log::log_enabled!(log::Level::Debug) {
+                        log::debug!(
+                            "EXTENSION_JOB {}: Chain[{}] type=RIGHT query=[{}..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
+                            _query_name, chain_idx, seed_query_end, query_len,
+                            seed.ref_pos + seed.len as u64, rmax_1,
+                            seed.query_pos, seed.len, seed.is_rev
+                        );
+                    }
+
                     alignment_jobs.push(AlignmentJob {
                         seed_idx: chain_idx,
                         query: full_query[seed_query_end as usize..].to_vec(),
@@ -1662,7 +1656,7 @@ pub fn align_read_deferred(
     }
 
     // Phase 2: Chaining (same as standard pipeline)
-    let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len());
+    let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len(), query_name);
 
     if chains.is_empty() {
         log::debug!("{}: No chains after filtering, returning unmapped", query_name);
@@ -1679,6 +1673,7 @@ pub fn align_read_deferred(
     // Phase 3: Score-only extension → AlignmentRegions (NO CIGAR yet)
     let extension_result = extend_chains_to_regions(
         bwa_idx,
+        query_name,
         opt,
         chains,
         sorted_seeds,
