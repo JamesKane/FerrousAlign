@@ -915,8 +915,8 @@ fn find_seeds(
         let seed_len = smem.query_end - smem.query_start;
         let l_pac = bwa_idx.bns.packed_sequence_length;
 
-        // PHASE 2 VALIDATION: Log first few reference positions for this SMEM
-        if log::log_enabled!(log::Level::Debug) && smem_idx < 5 {
+        // PHASE 2 VALIDATION: Log ALL SMEMs for exhaustive comparison
+        if log::log_enabled!(log::Level::Debug) {
             log::debug!(
                 "SEED_CONVERSION {}: SMEM[{}] query[{}..{}] → {} ref positions (requested: {})",
                 query_name, smem_idx, smem.query_start, smem.query_end,
@@ -941,8 +941,8 @@ fn find_seeds(
             // See bns_depos() in bntseq.h: (*is_rev = (pos >= bns->l_pac))
             let is_rev = *ref_pos >= l_pac;
 
-            // PHASE 2 VALIDATION: Log first few seeds for this SMEM
-            if log::log_enabled!(log::Level::Debug) && smem_idx < 5 && pos_idx < 3 {
+            // PHASE 2 VALIDATION: Log ALL seeds for exhaustive comparison
+            if log::log_enabled!(log::Level::Debug) {
                 log::debug!(
                     "SEED_CONVERSION {}:   Seed[{}]: ref_pos={} is_rev={} rid={} chr={}",
                     query_name, pos_idx, ref_pos, is_rev, rid,
