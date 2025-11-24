@@ -298,11 +298,12 @@ pub struct MemCliOptions {
     #[arg(short = 't', long, value_name = "INT")]
     pub threads: Option<usize>,
 
-    // ===== Experimental Options =====
-    /// Use deferred CIGAR architecture (experimental)
-    /// Generates CIGARs only for high-scoring alignments, reducing computation by 80-90%
+    // ===== Pipeline Options =====
+    /// Use original CIGAR pipeline (legacy mode)
+    /// By default, the deferred CIGAR pipeline is used (generates CIGARs only for
+    /// high-scoring alignments, reducing computation by 80-90% and matching BWA-MEM2)
     #[arg(long)]
-    pub deferred_cigar: bool,
+    pub standard_cigar: bool,
 }
 
 /// Parse XA hits string "INT" or "INT,INT"
@@ -403,8 +404,8 @@ impl Default for MemOpt {
             smallest_coord_primary: false,
             output_all_alignments: false, // Default: only output primary alignments (matching bwa-mem2)
 
-            // Experimental (Session 40)
-            deferred_cigar: false, // Default: disabled, use standard pipeline
+            // Pipeline architecture (Session 46)
+            deferred_cigar: true, // Default: enabled, use deferred CIGAR pipeline (matches BWA-MEM2)
         };
 
         // Calculate mapq_coef_fac as log of mapq_coef_len (matching C++)

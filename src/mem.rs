@@ -169,10 +169,13 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     opt.smallest_coord_primary = opts.smallest_coord_primary;
     opt.output_all_alignments = opts.output_all;
 
-    // Experimental: Deferred CIGAR architecture
-    opt.deferred_cigar = opts.deferred_cigar;
-    if opt.deferred_cigar {
-        log::info!("Using experimental deferred CIGAR pipeline");
+    // Pipeline architecture: Deferred CIGAR (default) vs Standard (legacy)
+    // CLI flag is --standard-cigar, but internal field is deferred_cigar
+    opt.deferred_cigar = !opts.standard_cigar;
+    if opts.standard_cigar {
+        log::info!("Using standard CIGAR pipeline (legacy mode)");
+    } else {
+        log::info!("Using deferred CIGAR pipeline (default, matches BWA-MEM2)");
     }
 
     // Load the BWA index
