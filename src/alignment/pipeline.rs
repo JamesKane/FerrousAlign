@@ -499,6 +499,9 @@ pub fn align_read(
     );
 
     // 4. FINALIZATION: Score, clean up, and format the final alignments
+    // For paired-end mode (skip_secondary_marking=true), also skip score filtering
+    // to allow mate rescue to work with low-scoring alignments
+    let skip_score_filtering = skip_secondary_marking;
     let final_alignments = finalize_alignments(
         extension_result,
         bwa_idx,
@@ -509,6 +512,7 @@ pub fn align_read(
         opt,
         read_id,
         skip_secondary_marking,
+        skip_score_filtering,
     );
 
     final_alignments
@@ -559,24 +563,20 @@ fn find_seeds(
 
     let mut max_smem_count = 0usize;
 
-    // Process forward and reverse complement strands
+    // BWA-MEM2 SMEM algorithm: Search ONLY with the original query.
+    // The bidirectional FM-index automatically finds matches on both strands:
+    // - Positions in [0, l_pac): forward strand alignments
+    // - Positions in [l_pac, 2*l_pac): reverse strand alignments
+    //
+    // Searching with the reverse complement query would find DIFFERENT positions
+    // (where the revcomp pattern matches), not the same alignment on the other strand.
+    // The strand is determined later based on whether the FM-index position >= l_pac.
     generate_smems_for_strand(
         bwa_idx,
         query_name,
         query_len,
         &encoded_query,
-        false,
-        min_seed_len,
-        min_intv,
-        &mut all_smems,
-        &mut max_smem_count,
-    );
-    generate_smems_for_strand(
-        bwa_idx,
-        query_name,
-        query_len,
-        &encoded_query_rc,
-        true,
+        false, // is_reverse_complement = false for all SMEMs (strand determined by position)
         min_seed_len,
         min_intv,
         &mut all_smems,
@@ -590,7 +590,8 @@ fn find_seeds(
     let split_width = opt.split_width as u64;
 
     // Collect re-seeding candidates from initial SMEMs
-    let mut reseed_candidates: Vec<(usize, u64, bool)> = Vec::new(); // (middle_pos, min_intv, is_rc)
+    // NOTE: Re-seeding always uses original query since all SMEMs come from original query search
+    let mut reseed_candidates: Vec<(usize, u64)> = Vec::new(); // (middle_pos, min_intv)
 
     for smem in all_smems.iter() {
         let smem_len = smem.query_end - smem.query_start + 1;
@@ -601,36 +602,29 @@ fn find_seeds(
             let new_min_intv = smem.interval_size + 1;
 
             log::debug!(
-                "{}: Re-seed candidate: smem m={}, n={}, len={}, s={}, middle_pos={}, new_min_intv={}, is_rc={}",
+                "{}: Re-seed candidate: smem m={}, n={}, len={}, s={}, middle_pos={}, new_min_intv={}",
                 query_name,
                 smem.query_start,
                 smem.query_end,
                 smem_len,
                 smem.interval_size,
                 middle_pos,
-                new_min_intv,
-                smem.is_reverse_complement
+                new_min_intv
             );
 
-            reseed_candidates.push((middle_pos, new_min_intv, smem.is_reverse_complement));
+            reseed_candidates.push((middle_pos, new_min_intv));
         }
     }
 
-    // Execute re-seeding for each candidate
+    // Execute re-seeding for each candidate (always use original query)
     let initial_smem_count = all_smems.len();
-    for (middle_pos, new_min_intv, is_rc) in reseed_candidates {
-        let encoded = if is_rc {
-            &encoded_query_rc
-        } else {
-            &encoded_query
-        };
-
+    for (middle_pos, new_min_intv) in reseed_candidates {
         generate_smems_from_position(
             bwa_idx,
             query_name,
             query_len,
-            encoded,
-            is_rc,
+            &encoded_query,
+            false, // is_reverse_complement = false (strand determined by position)
             min_seed_len,
             new_min_intv,
             middle_pos,
@@ -666,22 +660,13 @@ fn find_seeds(
         // Use forward-only seed strategy matching BWA-MEM2's bwtSeedStrategyAllPosOneThread
         // This iterates through ALL positions, doing forward extension only,
         // and outputs seeds when interval drops BELOW max_mem_intv
+        // NOTE: Only search with original query - bidirectional index handles both strands
         forward_only_seed_strategy(
             bwa_idx,
             query_name,
             query_len,
             &encoded_query,
-            false,
-            min_seed_len,
-            opt.max_mem_intv,
-            &mut all_smems,
-        );
-        forward_only_seed_strategy(
-            bwa_idx,
-            query_name,
-            query_len,
-            &encoded_query_rc,
-            true,
+            false, // is_reverse_complement = false (strand determined by position)
             min_seed_len,
             opt.max_mem_intv,
             &mut all_smems,
@@ -791,6 +776,8 @@ fn find_seeds(
         );
 
         let seed_len = smem.query_end - smem.query_start;
+        let l_pac = bwa_idx.bns.packed_sequence_length;
+
         for ref_pos in ref_positions {
             // Compute rid (chromosome ID) - skip seeds that span chromosome boundaries
             // Matches C++ bwamem.cpp:911-914
@@ -800,11 +787,17 @@ fn find_seeds(
                 continue;
             }
 
+            // BWA-MEM2 determines strand from reference position, not SMEM flag:
+            // - Positions in [0, l_pac): forward strand (read matches forward ref)
+            // - Positions in [l_pac, 2*l_pac): reverse strand (read matches revcomp ref)
+            // See bns_depos() in bntseq.h: (*is_rev = (pos >= bns->l_pac))
+            let is_rev = ref_pos >= l_pac;
+
             let seed = Seed {
                 query_pos: smem.query_start,
                 ref_pos,
                 len: seed_len,
-                is_rev: smem.is_reverse_complement,
+                is_rev,
                 interval_size: smem.interval_size,
                 rid,
             };
@@ -923,11 +916,11 @@ fn extend_chains_to_alignments(
             continue;
         }
 
-        let full_query = if chain.is_rev {
-            &encoded_query_rc
-        } else {
-            &encoded_query
-        };
+        // Since we only search with the original query (not revcomp), we always
+        // use the original query for extension. The FM-index position determines
+        // which region of the reference to extract, and bns_get_seq handles
+        // both forward (pos < l_pac) and reverse (pos >= l_pac) regions correctly.
+        let full_query = &encoded_query;
         let query_len = full_query.len() as i32;
 
         let l_pac = bwa_idx.bns.packed_sequence_length;
@@ -1117,6 +1110,7 @@ fn finalize_alignments(
     opt: &MemOpt,
     read_id: u64,
     skip_secondary_marking: bool,
+    skip_score_filtering: bool,
 ) -> Vec<Alignment> {
     // Step 1: Build CandidateAlignment from extension results
     let candidates = build_candidate_alignments(
@@ -1128,7 +1122,7 @@ fn finalize_alignments(
     );
 
     // Step 2-5: Convert to Alignments and apply post-processing
-    finalize_candidates(candidates, query_name, opt, skip_secondary_marking)
+    finalize_candidates(candidates, query_name, opt, skip_secondary_marking, skip_score_filtering)
 }
 
 /// Build CandidateAlignment structs from extension results
@@ -1158,11 +1152,8 @@ fn build_candidate_alignments(
 
     for merged in merged_chain_results {
         let chain = &filtered_chains[merged.chain_idx];
-        let full_query = if chain.is_rev {
-            encoded_query_rc
-        } else {
-            encoded_query
-        };
+        // Always use original query since we only search with original query
+        let full_query = encoded_query;
 
         // Generate MD tag and calculate NM
         // NOTE: We use fm_index_pos (not chr_pos) for MD tag generation because
@@ -1198,12 +1189,13 @@ fn build_candidate_alignments(
 
         let nm = Alignment::calculate_exact_nm(&md_tag, &merged.cigar);
 
-        // Compute final strand: XOR of query strand (is_rev) and FM-index strand (fm_is_rev)
-        // - is_rev=false, fm_is_rev=false: forward query on forward ref → forward alignment
-        // - is_rev=false, fm_is_rev=true: forward query on revcomp ref → reverse alignment
-        // - is_rev=true, fm_is_rev=false: revcomp query on forward ref → reverse alignment
-        // - is_rev=true, fm_is_rev=true: revcomp query on revcomp ref → forward alignment
-        let final_strand_rev = chain.is_rev != merged.fm_is_rev;
+        // Compute final strand based on FM-index position.
+        // Since we only search with the original query (not reverse complement),
+        // the strand is determined solely by whether the match is in the revcomp
+        // region of the bidirectional FM-index:
+        // - fm_is_rev=false (pos < l_pac): read matches forward ref → forward alignment
+        // - fm_is_rev=true (pos >= l_pac): read matches revcomp ref → reverse alignment
+        let final_strand_rev = merged.fm_is_rev;
 
         candidates.push(CandidateAlignment {
             ref_id: merged.ref_id,
@@ -1258,6 +1250,7 @@ fn finalize_candidates(
     query_name: &str,
     opt: &MemOpt,
     skip_secondary_marking: bool,
+    skip_score_filtering: bool,
 ) -> Vec<Alignment> {
     // Convert candidates to alignments
     let mut alignments: Vec<Alignment> = candidates
@@ -1267,17 +1260,21 @@ fn finalize_candidates(
 
     if !alignments.is_empty() {
         // Filter alignments by minimum score threshold (matches C++ bwamem.cpp:1538)
-        let before_filter = alignments.len();
-        alignments.retain(|a| a.score >= opt.t);
-        if before_filter != alignments.len() {
-            log::debug!(
-                "{}: Filtered {} alignments below score threshold {} (before: {}, after: {})",
-                query_name,
-                before_filter - alignments.len(),
-                opt.t,
-                before_filter,
-                alignments.len()
-            );
+        // For paired-end mode, skip this filtering - it's done after mate rescue
+        // in output_batch_paired() to allow mate rescue to work with low-scoring alignments
+        if !skip_score_filtering {
+            let before_filter = alignments.len();
+            alignments.retain(|a| a.score >= opt.t);
+            if before_filter != alignments.len() {
+                log::debug!(
+                    "{}: Filtered {} alignments below score threshold {} (before: {}, after: {})",
+                    query_name,
+                    before_filter - alignments.len(),
+                    opt.t,
+                    before_filter,
+                    alignments.len()
+                );
+            }
         }
 
         // Remove redundant alignments (>95% overlap on both ref and query)

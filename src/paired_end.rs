@@ -885,8 +885,12 @@ fn output_batch_paired(
         );
 
         // Stage 1: Filter by score threshold
-        filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, opt.t);
-        filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, opt.t);
+        // For paired-end, use min_seed_len (19) as threshold instead of opt.t (30)
+        // This matches BWA-MEM2 behavior where mate-rescued alignments with score >= min_seed_len
+        // are kept if they form a concordant pair, even if below the normal output threshold
+        let pe_threshold = opt.min_seed_len;
+        filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, pe_threshold);
+        filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, pe_threshold);
 
         // Stage 2: Select best pair (using alignments without secondary marking)
         let (best_idx1, best_idx2, is_properly_paired) =
