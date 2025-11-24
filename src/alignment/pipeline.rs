@@ -574,6 +574,17 @@ fn find_seeds(
         query_len
     );
 
+    // PHASE 1 VALIDATION: Log SMEM generation parameters
+    log::debug!(
+        "SMEM_VALIDATION {}: Parameters: min_seed_len={}, max_occ={}, split_factor={:.2}, split_width={}, max_mem_intv={}",
+        query_name,
+        opt.min_seed_len,
+        opt.max_occ,
+        opt.split_factor,
+        opt.split_width,
+        opt.max_mem_intv
+    );
+
     let mut max_smem_count = 0usize;
 
     // BWA-MEM2 SMEM algorithm: Search ONLY with the original query.
@@ -595,6 +606,33 @@ fn find_seeds(
         &mut all_smems,
         &mut max_smem_count,
     );
+
+    // PHASE 1 VALIDATION: Log initial SMEMs
+    let pass1_count = all_smems.len();
+    log::debug!(
+        "SMEM_VALIDATION {}: Pass 1 (initial) generated {} SMEMs",
+        query_name,
+        pass1_count
+    );
+    if log::log_enabled!(log::Level::Debug) {
+        for (idx, smem) in all_smems.iter().enumerate().take(10) {
+            log::debug!(
+                "SMEM_VALIDATION {}:   Pass1[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                query_name, idx,
+                smem.query_start, smem.query_end,
+                smem.query_end - smem.query_start + 1,
+                smem.bwt_interval_start, smem.bwt_interval_end,
+                smem.interval_size
+            );
+        }
+        if all_smems.len() > 10 {
+            log::debug!(
+                "SMEM_VALIDATION {}:   ... ({} more SMEMs)",
+                query_name,
+                all_smems.len() - 10
+            );
+        }
+    }
 
     // Re-seeding pass: For long unique SMEMs, re-seed from middle to find split alignments
     // This matches C++ bwamem.cpp:695-714
@@ -645,12 +683,38 @@ fn find_seeds(
         );
     }
 
-    if all_smems.len() > initial_smem_count {
+    // PHASE 1 VALIDATION: Log Pass 2 (re-seeding) results
+    let pass2_added = all_smems.len() - initial_smem_count;
+    if pass2_added > 0 {
         log::debug!(
-            "{}: Re-seeding added {} new SMEMs (total: {})",
+            "SMEM_VALIDATION {}: Pass 2 (re-seeding) added {} new SMEMs (total: {})",
             query_name,
-            all_smems.len() - initial_smem_count,
+            pass2_added,
             all_smems.len()
+        );
+        if log::log_enabled!(log::Level::Debug) {
+            for (idx, smem) in all_smems.iter().skip(initial_smem_count).enumerate().take(10) {
+                log::debug!(
+                    "SMEM_VALIDATION {}:   Pass2[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                    query_name, idx,
+                    smem.query_start, smem.query_end,
+                    smem.query_end - smem.query_start + 1,
+                    smem.bwt_interval_start, smem.bwt_interval_end,
+                    smem.interval_size
+                );
+            }
+            if pass2_added > 10 {
+                log::debug!(
+                    "SMEM_VALIDATION {}:   ... ({} more SMEMs)",
+                    query_name,
+                    pass2_added - 10
+                );
+            }
+        }
+    } else {
+        log::debug!(
+            "SMEM_VALIDATION {}: Pass 2 (re-seeding) added 0 new SMEMs",
+            query_name
         );
     }
 
@@ -685,12 +749,45 @@ fn find_seeds(
             &mut all_smems,
         );
 
-        if all_smems.len() > smems_before_3rd_round {
+        // PHASE 1 VALIDATION: Log Pass 3 (forward-only) results
+        let pass3_added = all_smems.len() - smems_before_3rd_round;
+        if pass3_added > 0 {
             log::debug!(
-                "{}: 3rd round seeding added {} new SMEMs (total: {})",
-                query_name, all_smems.len() - smems_before_3rd_round, all_smems.len()
+                "SMEM_VALIDATION {}: Pass 3 (forward-only) added {} new SMEMs (total: {})",
+                query_name,
+                pass3_added,
+                all_smems.len()
+            );
+            if log::log_enabled!(log::Level::Debug) {
+                for (idx, smem) in all_smems.iter().skip(smems_before_3rd_round).enumerate().take(10) {
+                    log::debug!(
+                        "SMEM_VALIDATION {}:   Pass3[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                        query_name, idx,
+                        smem.query_start, smem.query_end,
+                        smem.query_end - smem.query_start + 1,
+                        smem.bwt_interval_start, smem.bwt_interval_end,
+                        smem.interval_size
+                    );
+                }
+                if pass3_added > 10 {
+                    log::debug!(
+                        "SMEM_VALIDATION {}:   ... ({} more SMEMs)",
+                        query_name,
+                        pass3_added - 10
+                    );
+                }
+            }
+        } else {
+            log::debug!(
+                "SMEM_VALIDATION {}: Pass 3 (forward-only) added 0 new SMEMs",
+                query_name
             );
         }
+    } else {
+        log::debug!(
+            "SMEM_VALIDATION {}: Pass 3 (forward-only) skipped (max_mem_intv=0)",
+            query_name
+        );
     }
 
     // Filter SMEMs
@@ -744,6 +841,16 @@ fn find_seeds(
         }
     }
 
+    // PHASE 1 VALIDATION: Log filtering summary
+    log::debug!(
+        "SMEM_VALIDATION {}: Filtering summary: {} total SMEMs -> {} unique (min_seed_len={}, max_occ={})",
+        query_name,
+        all_smems.len(),
+        unique_filtered_smems.len(),
+        opt.min_seed_len,
+        effective_max_occ
+    );
+
     log::debug!(
         "{}: Generated {} SMEMs, filtered to {} unique",
         query_name,
@@ -751,6 +858,19 @@ fn find_seeds(
         unique_filtered_smems.len()
     );
 
+    // Debug logging for problematic read
+    let is_debug_read = query_name.contains("10009:11965");
+    if is_debug_read {
+        log::debug!("SEED_DEBUG {}: {} SMEMs after filtering:", query_name, unique_filtered_smems.len());
+        for (idx, smem) in unique_filtered_smems.iter().enumerate().take(20) {
+            log::debug!(
+                "SEED_DEBUG {}:   SMEM[{}]: query[{}..{}] len={} interval=[{}, {}) size={}",
+                query_name, idx, smem.query_start, smem.query_end,
+                smem.query_end - smem.query_start + 1,
+                smem.bwt_interval_start, smem.bwt_interval_end, smem.interval_size
+            );
+        }
+    }
 
     let mut sorted_smems = unique_filtered_smems;
     sorted_smems.sort_by_key(|smem| -(smem.query_end - smem.query_start + 1));
@@ -829,6 +949,60 @@ fn find_seeds(
 
         if seeds.len() >= SEEDS_PER_READ {
             break;
+        }
+    }
+
+    // Debug logging for problematic read - show all seeds
+    if is_debug_read {
+        log::debug!("SEED_DEBUG {}: Generated {} total seeds", query_name, seeds.len());
+        // Group seeds by chromosome for easier analysis
+        let chr5_offset = bwa_idx.bns.annotations.iter()
+            .find(|ann| ann.name == "chr5")
+            .map(|ann| ann.offset)
+            .unwrap_or(0);
+
+        let mut chr5_seeds: Vec<_> = seeds.iter()
+            .filter(|s| s.rid == 4) // chr5 is typically ID 4
+            .collect();
+        chr5_seeds.sort_by_key(|s| s.ref_pos);
+
+        log::debug!("SEED_DEBUG {}: {} seeds on chr5:", query_name, chr5_seeds.len());
+        for (idx, seed) in chr5_seeds.iter().enumerate().take(30) {
+            let chr_pos = if seed.ref_pos >= bwa_idx.bns.packed_sequence_length {
+                (2 * bwa_idx.bns.packed_sequence_length - 1 - seed.ref_pos - chr5_offset) as i64
+            } else {
+                (seed.ref_pos - chr5_offset) as i64
+            };
+            log::debug!(
+                "SEED_DEBUG {}:   Seed[{}]: query_pos={}, chr5:{}, len={}, is_rev={}, occ={}",
+                query_name, idx, seed.query_pos, chr_pos, seed.len, seed.is_rev, seed.interval_size
+            );
+        }
+
+        // Check if any seed is near position 50141532
+        let target_pos = 50141532u64;
+        let target_range = 50140000u64..50143000u64;
+        let nearby_seeds: Vec<_> = chr5_seeds.iter()
+            .filter(|s| {
+                let chr_pos = if s.ref_pos >= bwa_idx.bns.packed_sequence_length {
+                    2 * bwa_idx.bns.packed_sequence_length - 1 - s.ref_pos - chr5_offset
+                } else {
+                    s.ref_pos - chr5_offset
+                };
+                target_range.contains(&chr_pos)
+            })
+            .collect();
+
+        if nearby_seeds.is_empty() {
+            log::warn!(
+                "SEED_DEBUG {}: NO SEEDS found near target position {} (range {}..{})",
+                query_name, target_pos, target_range.start, target_range.end
+            );
+        } else {
+            log::debug!(
+                "SEED_DEBUG {}: Found {} seeds near target position {}",
+                query_name, nearby_seeds.len(), target_pos
+            );
         }
     }
 
