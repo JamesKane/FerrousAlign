@@ -11,7 +11,7 @@
 // - Output: sam_output::write_sam_record() writes to stream
 
 use crate::alignment::finalization::Alignment;
-use crate::alignment::pipeline::generate_seeds;
+use crate::alignment::pipeline::{generate_seeds, align_read_deferred};
 use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
@@ -134,6 +134,9 @@ pub fn process_single_end(
             let pac_data_clone = Arc::clone(&pac_data);
             let opt_clone = Arc::clone(&opt);
             let batch_start_id = reads_processed; // Capture for closure
+            let use_deferred = opt.deferred_cigar;
+            let compute_backend = compute_ctx.backend.clone();
+
             let alignments: Vec<Vec<Alignment>> = batch
                 .names
                 .par_iter()
@@ -143,7 +146,25 @@ pub fn process_single_end(
                 .map(|(i, ((name, seq), qual))| {
                     // Global read ID for deterministic hash tie-breaking (matches C++ bwamem.cpp:1325)
                     let read_id = batch_start_id + i as u64;
-                    generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone, read_id)
+
+                    if use_deferred {
+                        // Deferred CIGAR pipeline (experimental)
+                        // Generates CIGARs only for high-scoring alignments
+                        align_read_deferred(
+                            &bwa_idx_clone,
+                            &pac_data_clone,
+                            name,
+                            seq,
+                            qual,
+                            &opt_clone,
+                            compute_backend.clone(),
+                            read_id,
+                            false, // don't skip secondary marking
+                        )
+                    } else {
+                        // Standard pipeline
+                        generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone, read_id)
+                    }
                 })
                 .collect();
 

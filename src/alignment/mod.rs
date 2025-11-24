@@ -4,6 +4,7 @@ pub mod extension;
 pub mod finalization;
 pub mod ksw_affine_gap;
 pub mod pipeline;
+pub mod region;
 pub mod seeding;
 pub mod utils;
 

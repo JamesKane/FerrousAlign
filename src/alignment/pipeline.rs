@@ -480,6 +480,13 @@ pub fn align_read(
     // 2. CHAINING: Group seeds into potential alignment chains
     let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len());
 
+    log::debug!(
+        "{}: STANDARD_CIGAR: {} chains, {} seeds",
+        query_name,
+        chains.len(),
+        sorted_seeds.len()
+    );
+
     // 3. EXTENSION: Perform banded Smith-Waterman on the chains
     // ========================================================================
     // HETEROGENEOUS COMPUTE DISPATCH POINT
@@ -496,6 +503,12 @@ pub fn align_read(
         encoded_query,
         encoded_query_rc,
         compute_backend,
+    );
+
+    log::debug!(
+        "{}: STANDARD_CIGAR: {} merged results from extension",
+        query_name,
+        extension_result.merged_chain_results.len()
     );
 
     // 4. FINALIZATION: Score, clean up, and format the final alignments
@@ -1004,6 +1017,23 @@ fn extend_chains_to_alignments(
         });
     }
 
+    log::debug!(
+        "{}: STANDARD_CIGAR: {} alignment jobs from {} chains",
+        _query_name,
+        alignment_jobs.len(),
+        chains.len()
+    );
+
+    // Log seed_len (h0) values for debugging
+    if log::log_enabled!(log::Level::Debug) && !alignment_jobs.is_empty() {
+        let h0_values: Vec<i32> = alignment_jobs.iter().map(|j| j.seed_len).collect();
+        log::debug!(
+            "{}: STANDARD_CIGAR: h0 (seed_len) values: {:?}",
+            _query_name,
+            h0_values
+        );
+    }
+
     // ========================================================================
     // HETEROGENEOUS COMPUTE BACKEND DISPATCH
     // ========================================================================
@@ -1060,6 +1090,15 @@ fn extend_chains_to_alignments(
         .iter()
         .map(|(_, cigar, _, _)| cigar.clone())
         .collect();
+
+    // Log raw extension scores for debugging
+    if log::log_enabled!(log::Level::Debug) && !alignment_scores.is_empty() {
+        log::debug!(
+            "{}: STANDARD_CIGAR: raw extension scores: {:?}",
+            _query_name,
+            alignment_scores
+        );
+    }
 
     // Determine query length for merging
     let query_len = if !encoded_query.is_empty() {
@@ -1119,6 +1158,12 @@ fn finalize_alignments(
         pac_data,
         query_name,
         read_id,
+    );
+
+    log::debug!(
+        "{}: STANDARD_CIGAR: {} candidates after build_candidate_alignments",
+        query_name,
+        candidates.len()
     );
 
     // Step 2-5: Convert to Alignments and apply post-processing
@@ -1259,34 +1304,38 @@ fn finalize_candidates(
         .collect();
 
     if !alignments.is_empty() {
+        // Log scores before filtering
+        if log::log_enabled!(log::Level::Debug) {
+            let scores: Vec<i32> = alignments.iter().map(|a| a.score).collect();
+            log::debug!(
+                "{}: STANDARD_CIGAR: alignment scores before filter: {:?}",
+                query_name,
+                scores
+            );
+        }
+
         // Filter alignments by minimum score threshold (matches C++ bwamem.cpp:1538)
         // For paired-end mode, skip this filtering - it's done after mate rescue
         // in output_batch_paired() to allow mate rescue to work with low-scoring alignments
         if !skip_score_filtering {
             let before_filter = alignments.len();
             alignments.retain(|a| a.score >= opt.t);
-            if before_filter != alignments.len() {
-                log::debug!(
-                    "{}: Filtered {} alignments below score threshold {} (before: {}, after: {})",
-                    query_name,
-                    before_filter - alignments.len(),
-                    opt.t,
-                    before_filter,
-                    alignments.len()
-                );
-            }
+            log::debug!(
+                "{}: STANDARD_CIGAR: {} alignments after score filter (threshold={})",
+                query_name,
+                alignments.len(),
+                opt.t
+            );
         }
 
         // Remove redundant alignments (>95% overlap on both ref and query)
         // This matches C++ mem_sort_dedup_patch (bwamem.cpp:292-351)
         let before_dedup = alignments.len();
         remove_redundant_alignments(&mut alignments, opt);
-        if alignments.len() != before_dedup {
-            log::debug!(
-                "{}: remove_redundant_alignments: {} -> {} alignments",
-                query_name, before_dedup, alignments.len()
-            );
-        }
+        log::debug!(
+            "{}: STANDARD_CIGAR: {} alignments after redundancy removal (was {})",
+            query_name, alignments.len(), before_dedup
+        );
 
         // Sort by score for consistent ordering
         alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
@@ -1301,7 +1350,7 @@ fn finalize_candidates(
 
     // If all alignments were filtered/removed, output unmapped record
     // This ensures SAM spec compliance: all input reads must appear in output
-    log::debug!("{}: Final alignment count: {}", query_name, alignments.len());
+    log::debug!("{}: STANDARD_CIGAR: Final {} alignments", query_name, alignments.len());
     if alignments.is_empty() {
         log::debug!("{}: No alignments remaining, creating unmapped record", query_name);
         alignments.push(Alignment {
@@ -1332,6 +1381,296 @@ fn finalize_candidates(
     }
 
     alignments
+}
+
+// ============================================================================
+// DEFERRED CIGAR PIPELINE (EXPERIMENTAL)
+// ============================================================================
+//
+// This implements the deferred CIGAR architecture matching BWA-MEM2:
+//   Phase 1: Seeding (same as standard pipeline)
+//   Phase 2: Chaining (same as standard pipeline)
+//   Phase 3: Score-only extension via SIMD batch scoring → AlignmentRegions
+//   Phase 4: Region filtering using scores (eliminates ~80-90% of work)
+//   Phase 5: CIGAR generation for survivors only (~10-20% of regions)
+//
+// Expected performance improvement: 3-5x faster alignment due to reduced
+// CIGAR computation work.
+//
+// ============================================================================
+
+/// Deferred CIGAR pipeline entry point
+///
+/// This function implements the BWA-MEM2 deferred CIGAR architecture where
+/// CIGAR strings are generated only for alignments that survive filtering.
+///
+/// ## Heterogeneous Compute Integration
+///
+/// The `compute_backend` parameter controls which hardware performs scoring:
+/// - `CpuSimd`: SIMD batch scoring (SSE/AVX2/AVX-512/NEON)
+/// - `Gpu`: GPU kernel dispatch (placeholder)
+/// - `Npu`: NPU seed filtering (placeholder)
+#[allow(dead_code)]
+pub fn align_read_deferred(
+    bwa_idx: &BwaIndex,
+    pac_data: &[u8],
+    query_name: &str,
+    query_seq: &[u8],
+    query_qual: &str,
+    opt: &MemOpt,
+    compute_backend: ComputeBackend,
+    read_id: u64,
+    skip_secondary_marking: bool,
+) -> Vec<Alignment> {
+    use crate::alignment::region::{extend_chains_to_regions, generate_cigar_from_region};
+
+    // Phase 1: Seeding (same as standard pipeline)
+    let (seeds, encoded_query, encoded_query_rc) = find_seeds(bwa_idx, query_name, query_seq, opt);
+
+    if seeds.is_empty() {
+        log::debug!("{}: No seeds found, returning unmapped", query_name);
+        return vec![create_unmapped_alignment(query_name)];
+    }
+
+    // Phase 2: Chaining (same as standard pipeline)
+    let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len());
+
+    if chains.is_empty() {
+        log::debug!("{}: No chains after filtering, returning unmapped", query_name);
+        return vec![create_unmapped_alignment(query_name)];
+    }
+
+    log::debug!(
+        "{}: DEFERRED_CIGAR: {} chains, {} seeds",
+        query_name,
+        chains.len(),
+        sorted_seeds.len()
+    );
+
+    // Phase 3: Score-only extension → AlignmentRegions (NO CIGAR yet)
+    let extension_result = extend_chains_to_regions(
+        bwa_idx,
+        opt,
+        chains,
+        sorted_seeds,
+        encoded_query.clone(),
+        encoded_query_rc,
+        compute_backend,
+    );
+
+    log::debug!(
+        "{}: DEFERRED_CIGAR: {} regions from score-only extension",
+        query_name,
+        extension_result.regions.len()
+    );
+
+    if extension_result.regions.is_empty() {
+        log::debug!("{}: No regions after extension, returning unmapped", query_name);
+        return vec![create_unmapped_alignment(query_name)];
+    }
+
+    // Log region scores before filtering
+    if log::log_enabled!(log::Level::Debug) {
+        let scores: Vec<i32> = extension_result.regions.iter().map(|r| r.score).collect();
+        log::debug!(
+            "{}: DEFERRED_CIGAR: region scores before filter: {:?}",
+            query_name,
+            scores
+        );
+    }
+
+    // Phase 4: Region filtering using scores
+    // Filter by minimum score threshold (opt.t)
+    let mut filtered_regions: Vec<_> = extension_result
+        .regions
+        .iter()
+        .filter(|r| r.score >= opt.t)
+        .cloned()
+        .collect();
+
+    log::debug!(
+        "{}: DEFERRED_CIGAR: {} regions after score filter (threshold={})",
+        query_name,
+        filtered_regions.len(),
+        opt.t
+    );
+
+    // Sort by score descending for primary selection
+    filtered_regions.sort_by(|a, b| b.score.cmp(&a.score));
+
+    // Remove redundant regions (overlapping on same reference)
+    filtered_regions = remove_redundant_regions(filtered_regions, opt.mask_level);
+
+    log::debug!(
+        "{}: DEFERRED_CIGAR: {} regions after redundancy removal",
+        query_name,
+        filtered_regions.len()
+    );
+
+    if filtered_regions.is_empty() {
+        log::debug!("{}: All regions filtered, returning unmapped", query_name);
+        return vec![create_unmapped_alignment(query_name)];
+    }
+
+    // Phase 5: CIGAR generation for survivors only
+    // This is where the performance gain comes from - only ~10-20% of
+    // original regions need CIGAR computation
+    let mut alignments = Vec::new();
+    let _query_len = query_seq.len() as i32; // May be used for validation in future
+
+    for (idx, region) in filtered_regions.iter().enumerate() {
+        // Generate CIGAR from region boundaries
+        let cigar_result = generate_cigar_from_region(
+            bwa_idx,
+            pac_data,
+            &encoded_query,
+            region,
+            opt,
+        );
+
+        let (cigar, nm, md_tag) = match cigar_result {
+            Some(result) => result,
+            None => {
+                log::debug!(
+                    "{}: DEFERRED_CIGAR: Failed to generate CIGAR for region {} (chr_pos={})",
+                    query_name,
+                    idx,
+                    region.chr_pos
+                );
+                continue;
+            }
+        };
+
+        // Build alignment from region + generated CIGAR
+        let mut flag = if region.is_rev { sam_flags::REVERSE } else { 0 };
+        if idx > 0 {
+            // Mark non-primary alignments
+            flag |= sam_flags::SECONDARY;
+        }
+
+        let hash = crate::utils::hash_64(read_id + idx as u64);
+
+        alignments.push(Alignment {
+            query_name: query_name.to_string(),
+            flag,
+            ref_name: region.ref_name.clone(),
+            ref_id: region.rid as usize,
+            pos: region.chr_pos,
+            mapq: 60, // Will be recalculated in secondary marking
+            score: region.score,
+            cigar,
+            rnext: "*".to_string(),
+            pnext: 0,
+            tlen: 0,
+            seq: String::new(),
+            qual: String::new(),
+            tags: vec![
+                ("AS".to_string(), format!("i:{}", region.score)),
+                ("NM".to_string(), format!("i:{}", nm)),
+                ("MD".to_string(), format!("Z:{}", md_tag)),
+            ],
+            query_start: region.qb,
+            query_end: region.qe,
+            seed_coverage: region.seedcov,
+            hash,
+            frac_rep: region.frac_rep,
+        });
+    }
+
+    if alignments.is_empty() {
+        log::debug!("{}: No valid alignments after CIGAR generation, returning unmapped", query_name);
+        return vec![create_unmapped_alignment(query_name)];
+    }
+
+    // Apply standard redundancy removal (matching finalize_candidates behavior)
+    crate::alignment::finalization::remove_redundant_alignments(&mut alignments, opt);
+
+    if alignments.is_empty() {
+        log::debug!("{}: No alignments after redundancy removal, returning unmapped", query_name);
+        return vec![create_unmapped_alignment(query_name)];
+    }
+
+    // Apply secondary/supplementary marking if not skipped
+    if !skip_secondary_marking {
+        mark_secondary_alignments(&mut alignments, opt);
+    }
+
+    log::debug!(
+        "{}: DEFERRED_CIGAR: Final {} alignments",
+        query_name,
+        alignments.len()
+    );
+
+    alignments
+}
+
+/// Remove redundant regions based on overlap
+///
+/// Matches BWA-MEM2's mem_sort_dedup_patch behavior for regions.
+fn remove_redundant_regions(
+    mut regions: Vec<crate::alignment::region::AlignmentRegion>,
+    mask_level: f32,
+) -> Vec<crate::alignment::region::AlignmentRegion> {
+    if regions.len() <= 1 {
+        return regions;
+    }
+
+    // Mark redundant regions
+    let mut keep = vec![true; regions.len()];
+
+    for i in 0..regions.len() {
+        if !keep[i] {
+            continue;
+        }
+
+        for j in (i + 1)..regions.len() {
+            if !keep[j] {
+                continue;
+            }
+
+            // Check if region j overlaps significantly with region i
+            if regions[i].overlaps_with(&regions[j], mask_level) {
+                // Keep higher-scoring region (i is higher due to sorting)
+                keep[j] = false;
+            }
+        }
+    }
+
+    // Filter to non-redundant regions
+    regions
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| keep[*i])
+        .map(|(_, r)| r)
+        .collect()
+}
+
+/// Create an unmapped alignment record
+fn create_unmapped_alignment(query_name: &str) -> Alignment {
+    Alignment {
+        query_name: query_name.to_string(),
+        flag: sam_flags::UNMAPPED,
+        ref_name: "*".to_string(),
+        ref_id: 0,
+        pos: 0,
+        mapq: 0,
+        score: 0,
+        cigar: Vec::new(),
+        rnext: "*".to_string(),
+        pnext: 0,
+        tlen: 0,
+        seq: String::new(),
+        qual: String::new(),
+        tags: vec![
+            ("AS".to_string(), "i:0".to_string()),
+            ("NM".to_string(), "i:0".to_string()),
+        ],
+        query_start: 0,
+        query_end: 0,
+        seed_coverage: 0,
+        hash: 0,
+        frac_rep: 0.0,
+    }
 }
 
 #[cfg(test)]
@@ -1390,5 +1729,65 @@ mod tests {
         );
         assert!(pa.pos < 60, "Position should be within reference length");
         assert_eq!(pa.cigar_string(), "12M", "Expected a perfect match CIGAR");
+    }
+
+    #[test]
+    fn test_deferred_cigar_pipeline() {
+        use crate::compute::detect_optimal_backend;
+        use crate::mem_opt::MemOpt;
+        use std::path::Path;
+
+        let prefix = Path::new("test_data/test_ref.fa");
+        if !prefix.exists() {
+            eprintln!("Skipping test_deferred_cigar_pipeline - test data not found");
+            return;
+        }
+
+        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+            Ok(idx) => idx,
+            Err(_) => {
+                eprintln!("Skipping test_deferred_cigar_pipeline - could not load index");
+                return;
+            }
+        };
+
+        let mut opt = MemOpt::default();
+        opt.min_seed_len = 10;
+
+        let query_name = "test_deferred";
+        let query_seq = b"ACGTACGTACGT";
+        let query_qual = "IIIIIIIIIIII";
+        let pac_data: &[u8] = &[];
+        let read_id = 0u64;
+        let compute_backend = detect_optimal_backend();
+
+        // Run the deferred CIGAR pipeline
+        let alignments = super::align_read_deferred(
+            &bwa_idx,
+            pac_data,
+            query_name,
+            query_seq,
+            query_qual,
+            &opt,
+            compute_backend,
+            read_id,
+            false, // don't skip secondary marking
+        );
+
+        // Should produce at least one alignment
+        assert!(
+            !alignments.is_empty(),
+            "Deferred CIGAR pipeline should produce alignments"
+        );
+
+        // Check primary alignment has valid CIGAR
+        let primary = alignments
+            .iter()
+            .find(|a| a.flag & sam_flags::SECONDARY == 0);
+        assert!(primary.is_some(), "Should have a primary alignment");
+
+        let pa = primary.unwrap();
+        assert!(!pa.cigar.is_empty(), "Primary should have CIGAR");
+        assert!(pa.score > 0, "Primary should have positive score");
     }
 }

@@ -15,7 +15,7 @@
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::finalization::mark_secondary_alignments;
-use crate::alignment::pipeline::generate_seeds_for_paired;
+use crate::alignment::pipeline::{generate_seeds_for_paired, align_read_deferred};
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
@@ -278,30 +278,63 @@ pub fn process_paired_end(
     let opt_clone = Arc::clone(&opt);
     let batch_start_id = pairs_processed; // Capture for closure
 
+    let use_deferred = opt.deferred_cigar;
+    let compute_backend = compute_ctx.backend.clone();
+
     let mut first_batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
         .into_par_iter()
         .map(|i| {
             // Global read ID for deterministic hash tie-breaking (matches C++ bwamem_pair.cpp:416-417)
             // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
             let pair_id = batch_start_id + i as u64;
-            let aln1 = generate_seeds_for_paired(
-                &bwa_idx_clone,
-                pac_clone,
-                &first_batch1.names[i],
-                &first_batch1.seqs[i],
-                &first_batch1.quals[i],
-                &opt_clone,
-                (pair_id << 1) | 0, // Read 1 of pair
-            );
-            let aln2 = generate_seeds_for_paired(
-                &bwa_idx_clone,
-                pac_clone,
-                &first_batch2.names[i],
-                &first_batch2.seqs[i],
-                &first_batch2.quals[i],
-                &opt_clone,
-                (pair_id << 1) | 1, // Read 2 of pair
-            );
+
+            let (aln1, aln2) = if use_deferred {
+                // Deferred CIGAR pipeline (experimental)
+                let a1 = align_read_deferred(
+                    &bwa_idx_clone,
+                    pac_clone,
+                    &first_batch1.names[i],
+                    &first_batch1.seqs[i],
+                    &first_batch1.quals[i],
+                    &opt_clone,
+                    compute_backend.clone(),
+                    (pair_id << 1) | 0,
+                    true, // skip secondary marking - done after pairing
+                );
+                let a2 = align_read_deferred(
+                    &bwa_idx_clone,
+                    pac_clone,
+                    &first_batch2.names[i],
+                    &first_batch2.seqs[i],
+                    &first_batch2.quals[i],
+                    &opt_clone,
+                    compute_backend.clone(),
+                    (pair_id << 1) | 1,
+                    true, // skip secondary marking - done after pairing
+                );
+                (a1, a2)
+            } else {
+                // Standard pipeline
+                let a1 = generate_seeds_for_paired(
+                    &bwa_idx_clone,
+                    pac_clone,
+                    &first_batch1.names[i],
+                    &first_batch1.seqs[i],
+                    &first_batch1.quals[i],
+                    &opt_clone,
+                    (pair_id << 1) | 0,
+                );
+                let a2 = generate_seeds_for_paired(
+                    &bwa_idx_clone,
+                    pac_clone,
+                    &first_batch2.names[i],
+                    &first_batch2.seqs[i],
+                    &first_batch2.quals[i],
+                    &opt_clone,
+                    (pair_id << 1) | 1,
+                );
+                (a1, a2)
+            };
             (aln1, aln2)
         })
         .collect();
@@ -466,24 +499,54 @@ pub fn process_paired_end(
                 // Global read ID for deterministic hash tie-breaking (matches C++ bwamem_pair.cpp:416-417)
                 // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
                 let pair_id = batch_start_id + i as u64;
-                let aln1 = generate_seeds_for_paired(
-                    &bwa_idx_clone,
-                    pac_clone,
-                    &batch1.names[i],
-                    &batch1.seqs[i],
-                    &batch1.quals[i],
-                    &opt_clone,
-                    (pair_id << 1) | 0, // Read 1 of pair
-                );
-                let aln2 = generate_seeds_for_paired(
-                    &bwa_idx_clone,
-                    pac_clone,
-                    &batch2.names[i],
-                    &batch2.seqs[i],
-                    &batch2.quals[i],
-                    &opt_clone,
-                    (pair_id << 1) | 1, // Read 2 of pair
-                );
+
+                let (aln1, aln2) = if use_deferred {
+                    // Deferred CIGAR pipeline (experimental)
+                    let a1 = align_read_deferred(
+                        &bwa_idx_clone,
+                        pac_clone,
+                        &batch1.names[i],
+                        &batch1.seqs[i],
+                        &batch1.quals[i],
+                        &opt_clone,
+                        compute_backend.clone(),
+                        (pair_id << 1) | 0,
+                        true, // skip secondary marking - done after pairing
+                    );
+                    let a2 = align_read_deferred(
+                        &bwa_idx_clone,
+                        pac_clone,
+                        &batch2.names[i],
+                        &batch2.seqs[i],
+                        &batch2.quals[i],
+                        &opt_clone,
+                        compute_backend.clone(),
+                        (pair_id << 1) | 1,
+                        true, // skip secondary marking - done after pairing
+                    );
+                    (a1, a2)
+                } else {
+                    // Standard pipeline
+                    let a1 = generate_seeds_for_paired(
+                        &bwa_idx_clone,
+                        pac_clone,
+                        &batch1.names[i],
+                        &batch1.seqs[i],
+                        &batch1.quals[i],
+                        &opt_clone,
+                        (pair_id << 1) | 0,
+                    );
+                    let a2 = generate_seeds_for_paired(
+                        &bwa_idx_clone,
+                        pac_clone,
+                        &batch2.names[i],
+                        &batch2.seqs[i],
+                        &batch2.quals[i],
+                        &opt_clone,
+                        (pair_id << 1) | 1,
+                    );
+                    (a1, a2)
+                };
                 (aln1, aln2)
             })
             .collect();

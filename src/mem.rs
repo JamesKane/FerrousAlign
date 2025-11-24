@@ -169,6 +169,12 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     opt.smallest_coord_primary = opts.smallest_coord_primary;
     opt.output_all_alignments = opts.output_all;
 
+    // Experimental: Deferred CIGAR architecture
+    opt.deferred_cigar = opts.deferred_cigar;
+    if opt.deferred_cigar {
+        log::info!("Using experimental deferred CIGAR pipeline");
+    }
+
     // Load the BWA index
     let bwa_idx = BwaIndex::bwa_idx_load(&opts.index)
         .map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
