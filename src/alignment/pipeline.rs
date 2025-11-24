@@ -499,9 +499,9 @@ pub fn align_read(
     );
 
     // 4. FINALIZATION: Score, clean up, and format the final alignments
-    // For paired-end mode (skip_secondary_marking=true), also skip score filtering
-    // to allow mate rescue to work with low-scoring alignments
-    let skip_score_filtering = skip_secondary_marking;
+    // Always apply score filtering to match BWA-MEM2 behavior (opt->T threshold)
+    // N-rich reads should be addressed through specialized seeding, not lower thresholds
+    let skip_score_filtering = false;
     let final_alignments = finalize_alignments(
         extension_result,
         bwa_idx,

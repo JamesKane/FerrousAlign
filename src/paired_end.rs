@@ -817,10 +817,12 @@ fn select_output_indices(
         let is_primary = idx == best_idx;
         let is_supplementary = alignment.flag & sam_flags::SUPPLEMENTARY != 0;
 
+        // BWA-MEM2 mem_reg2sam line 1538: ALL alignments must have score >= opt->T
+        // Apply score threshold to supplementary alignments as well
         let should_output = if output_all {
             is_unmapped || alignment.score >= threshold
         } else {
-            is_primary || is_supplementary
+            (is_primary || is_supplementary) && (is_unmapped || alignment.score >= threshold)
         };
 
         if should_output {
@@ -885,10 +887,9 @@ fn output_batch_paired(
         );
 
         // Stage 1: Filter by score threshold
-        // For paired-end, use min_seed_len (19) as threshold instead of opt.t (30)
-        // This matches BWA-MEM2 behavior where mate-rescued alignments with score >= min_seed_len
-        // are kept if they form a concordant pair, even if below the normal output threshold
-        let pe_threshold = opt.min_seed_len;
+        // Use opt.t (30) to match BWA-MEM2's opt->T threshold in mem_reg2sam
+        // N-rich reads should be addressed through specialized seeding, not lower thresholds
+        let pe_threshold = opt.t;
         filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, pe_threshold);
         filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, pe_threshold);
 
