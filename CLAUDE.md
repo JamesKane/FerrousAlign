@@ -90,27 +90,19 @@ cargo fmt -- --check
 
 **Library Modules** (`src/lib.rs`):
 ```
-pub mod alignment;        // Core alignment pipeline (seeding, chaining, extension, finalization)
-pub mod bntseq;           // Reference sequence handling
-pub mod bwa_index;        // Index building (uses bio crate for suffix array)
-pub mod bwt;              // BWT data structure
+pub mod alignment;        // Core alignment pipeline, including single and paired-end logic
 pub mod compute;          // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
-pub mod fastq_reader;     // FASTQ parsing using bio::io::fastq (query reads with gzip support)
-pub mod fm_index;         // FM-Index operations (BWT search, occurrence counting)
-pub mod index;            // Index management (BwaIndex loading/dumping)
-pub mod insert_size;      // Insert size statistics for paired-end
-pub mod kseq;             // FASTA parsing (used for reference genomes during indexing)
-pub mod mate_rescue;      // Mate rescue using Smith-Waterman
-pub mod mem;              // High-level alignment logic (includes logging/stats)
-pub mod mem_opt;          // Command-line options and parameters
-pub mod paired_end;       // Paired-end read processing
-pub mod pairing;          // Paired-end alignment scoring
-pub mod sam_output;       // SAM output formatting and flag management
-pub mod simd;             // SIMD engine detection and dispatch
-pub mod simd_abstraction; // Cross-platform SIMD layer (SSE2/AVX2/AVX-512/NEON)
-pub mod single_end;       // Single-end read processing
-pub mod utils;            // I/O and bit manipulation utilities
+pub mod defaults;         // Default values for alignment parameters
+pub mod index;            // Genome index data structures (BWT, FM-Index) and management
+pub mod io;               // Readers for FASTA/FASTQ and writer for SAM output
+pub mod utils;            // General-purpose utilities
 ```
+
+Key sub-modules have been reorganized:
+- **`src/alignment/`**: `mem.rs`, `mem_opt.rs`, `single_end.rs`, and the `paired/` directory containing `paired_end.rs`, `pairing.rs`, `insert_size.rs`, `mate_rescue.rs`.
+- **`src/index/`**: `bntseq.rs`, `bwa_index.rs`, `bwt.rs`, `fm_index.rs`.
+- **`src/io/`**: `fastq_reader.rs`, `fasta_reader.rs` (replacing the old `kseq.rs`), `sam_output.rs`.
+- **`src/compute/simd_abstraction/`**: The `simd_abstraction.rs` file has been expanded into a full module containing the different SIMD engine implementations.
 
 **Alignment Submodules** (`src/alignment/`):
 ```
@@ -177,7 +169,7 @@ The pipeline implements a multi-kernel design matching the C++ version. Entry po
 
 **Design Philosophy**: Write-once, run-anywhere SIMD code
 
-**Platform Detection** (`simd_abstraction.rs`):
+**Platform Detection** (`src/compute/simd_abstraction/mod.rs`):
 ```rust
 #[cfg(target_arch = "x86_64")]
 // Native x86 intrinsics via <immintrin.h>
@@ -198,7 +190,7 @@ The pipeline implements a multi-kernel design matching the C++ version. Entry po
 - **Shifts**: `_mm_slli_epi16`, `_mm_srli_si128` (element vs byte shifts)
 - **Load/Store**: `_mm_load_si128`, `_mm_storeu_si128`
 
-**Performance Hotspot** (`popcount64()` in `align.rs`):
+**Performance Hotspot** (`popcount64()` in `src/index/fm_index.rs`):
 - x86_64: Uses `_popcnt64` hardware instruction
 - ARM: Uses NEON `vcnt` + pairwise additions (`vpaddl`)
 - Called millions of times during FM-Index backward search
@@ -245,10 +237,10 @@ pub enum EncodingStrategy {
 
 | Location | File | Function | Purpose |
 |----------|------|----------|---------|
-| Entry | `src/mem.rs:10-33` | `main_mem()` | Backend detection |
-| Dispatch | `src/mem.rs:230-241` | `main_mem()` | Pass context to processing |
-| Single-end | `src/single_end.rs:35-50` | `process_single_end()` | Accept compute context |
-| Paired-end | `src/paired_end.rs:161-176` | `process_paired_end()` | Accept compute context |
+| Entry | `src/alignment/mem.rs:10-33` | `main_mem()` | Backend detection |
+| Dispatch | `src/alignment/mem.rs:230-241` | `main_mem()` | Pass context to processing |
+| Single-end | `src/alignment/single_end.rs:35-50` | `process_single_end()` | Accept compute context |
+| Paired-end | `src/alignment/paired/paired_end.rs:161-176` | `process_paired_end()` | Accept compute context |
 | Pipeline | `src/alignment/pipeline.rs:95-114` | `align_read()` | Main alignment entry |
 | Extension | `src/alignment/pipeline.rs:494-517` | `extend_chains_to_alignments()` | Stage 3 dispatch |
 | Backend Switch | `src/alignment/pipeline.rs:641-682` | `extend_chains_to_alignments()` | Route to backend |
@@ -288,7 +280,7 @@ pub enum EncodingStrategy {
 
 ### Key Data Structures
 
-**FM-Index Tier** (`fm_index.rs`, `bwt.rs`):
+**FM-Index Tier** (`src/index/fm_index.rs`, `src/index/bwt.rs`):
 ```rust
 pub struct SMEM {                        // alignment/seeding.rs
     pub query_start: i32,                // Start position in query (0-based, inclusive)
@@ -299,12 +291,12 @@ pub struct SMEM {                        // alignment/seeding.rs
     pub is_reverse_complement: bool,     // Forward or reverse strand
 }
 
-pub struct CpOcc {                       // fm_index.rs
+pub struct CpOcc {                       // src/index/fm_index.rs
     cp_count: [i64; 4],                  // Cumulative base counts at checkpoint
     one_hot_bwt_str: [u64; 4],           // One-hot encoded BWT for popcount
 }
 
-pub struct Bwt {                         // bwt.rs
+pub struct Bwt {                         // src/index/bwt.rs
     pub bwt_str: Vec<u8>,                // 2-bit packed BWT (4 bases per byte)
     pub sa_samples: Vec<u64>,            // Sampled suffix array
     pub cp_occ: Vec<CpOcc>,              // Checkpoints every 64 bases
@@ -350,7 +342,7 @@ pub struct Alignment {                   // alignment/finalization.rs
 }
 ```
 
-**Reference Tier** (`bntseq.rs`):
+**Reference Tier** (`src/index/bntseq.rs`):
 ```rust
 pub struct BntSeq {
     l_pac: u64,              // Total packed sequence length
@@ -432,11 +424,11 @@ pub struct BntAnn1 {
 - More memory efficient (single shared index vs per-thread copies)
 
 **Implementation Files**:
-- `src/single_end.rs`: Single-end batched processing with Rayon
-- `src/paired_end.rs`: Paired-end batched processing with Rayon
-- `src/mem.rs`: Entry point (`main_mem()`), dispatches to single/paired-end
+- `src/alignment/single_end.rs`: Single-end batched processing with Rayon
+- `src/alignment/paired/paired_end.rs`: Paired-end batched processing with Rayon
+- `src/alignment/mem.rs`: Entry point (`main_mem()`), dispatches to single/paired-end
 - `src/main.rs`: CLI parsing, logger initialization, thread validation
-- `src/fastq_reader.rs`: FASTQ I/O wrapper using bio::io::fastq with gzip support
+- `src/io/fastq_reader.rs`: FASTQ I/O wrapper using bio::io::fastq with gzip support
 
 ### Logging and Statistics (Session 26)
 
@@ -484,8 +476,8 @@ env_logger::Builder::from_default_env()
 
 **Implementation Files**:
 - `src/main.rs`: Logger initialization, verbosity mapping
-- `src/single_end.rs`: Single-end with statistics tracking
-- `src/paired_end.rs`: Paired-end with statistics tracking
+- `src/alignment/single_end.rs`: Single-end with statistics tracking
+- `src/alignment/paired/paired_end.rs`: Paired-end with statistics tracking
 
 **Usage Examples**:
 ```bash
@@ -513,7 +505,7 @@ Always use the abstraction layer, never raw intrinsics:
 
 ```rust
 // GOOD: Portable across x86_64 and ARM
-use crate::simd_abstraction::*;
+use crate::compute::simd_abstraction::*;
 let sum = _mm_add_epi16(a, b);
 
 // BAD: x86-only
@@ -560,13 +552,12 @@ let cigar = result.cigar_string;
 ## Testing Architecture
 
 **Unit Tests** (98+ tests in source files):
-- `bwt_test.rs`: FM-Index backward search, checkpoint calculation, popcount64
-- `kseq_test.rs`: FASTA parsing edge cases (used for reference genomes)
-- `fastq_reader_test.rs`: FASTQ parsing with bio::io::fastq, gzip support
-- `bntseq_test.rs`: Reference loading and ambiguous base handling
-- `alignment/banded_swa`: Smith-Waterman tests including SIMD batched variants
-- `alignment/pipeline`: Pipeline stage tests
-- `mem_opt`: Command-line parameter parsing tests
+- `src/index/bwt_test.rs`: FM-Index backward search, checkpoint calculation, popcount64
+- `src/io/fastq_reader_test.rs`: FASTQ parsing with bio::io::fastq, gzip support
+- `src/index/bntseq.rs` (inline tests): Reference loading and ambiguous base handling
+- `src/alignment/banded_swa.rs` (inline tests): Smith-Waterman tests including SIMD batched variants
+- `src/alignment/pipeline.rs` (inline tests): Pipeline stage tests
+- `src/alignment/mem_opt.rs` (inline tests): Command-line parameter parsing tests
 
 **Integration Tests** (`tests/`):
 - `integration_test.rs`: End-to-end index build + single-end alignment
@@ -700,10 +691,10 @@ let cigar = result.cigar_string;
 - Check SIMD codegen: `cargo rustc --release -- --emit asm`
 
 **Common Development Tasks**:
-- Add new SIMD intrinsic: Update `simd_abstraction.rs` with both x86_64 and aarch64 implementations
-- Modify alignment scoring: Edit constants in `align.rs` and `banded_swa.rs`
-- Change index format: Update serialization in `bwa_index.rs` and `bwt.rs`
-- Add SAM tags: Modify output formatting in `align.rs`
+- Add new SIMD intrinsic: Update `src/compute/simd_abstraction/mod.rs` with both x86_64 and aarch64 implementations
+- Modify alignment scoring: Edit constants in `src/alignment/banded_swa.rs`
+- Change index format: Update serialization in `src/index/bwa_index.rs` and `src/index/bwt.rs`
+- Add SAM tags: Modify output formatting in `src/alignment/finalization.rs`
 
 ## References
 
