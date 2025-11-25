@@ -359,6 +359,25 @@ impl SimdEngine for SimdEngine256 {
 
     #[inline]
     #[target_feature(enable = "avx2")]
+    unsafe fn cmpgt_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        // AVX2 has no native unsigned comparison; use XOR trick to flip sign bit
+        // a >_u b ⟺ (a XOR 0x80) >_s (b XOR 0x80)
+        let sign_bit = simd_arch::_mm256_set1_epi8(0x80u8 as i8);
+        let a_signed = simd_arch::_mm256_xor_si256(a, sign_bit);
+        let b_signed = simd_arch::_mm256_xor_si256(b, sign_bit);
+        simd_arch::_mm256_cmpgt_epi8(a_signed, b_signed)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn cmpge_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        // a >=_u b ⟺ max(a, b) == a
+        let max_val = simd_arch::_mm256_max_epu8(a, b);
+        simd_arch::_mm256_cmpeq_epi8(max_val, a)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
     unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         simd_arch::_mm256_cmpeq_epi16(a, b)
     }
@@ -393,8 +412,20 @@ impl SimdEngine for SimdEngine256 {
 
     #[inline]
     #[target_feature(enable = "avx2")]
+    unsafe fn xor_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm256_xor_si256(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
     unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         simd_arch::_mm256_andnot_si256(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn shuffle_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm256_shuffle_epi8(a, b)
     }
 
     // ===== Shift Operations =====

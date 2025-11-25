@@ -163,6 +163,10 @@ pub trait SimdEngine: Sized + Copy {
     unsafe fn cmpeq_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
     /// Compare greater‑than on signed i8 lanes; result is an all‑ones/-zeros mask vector.
     unsafe fn cmpgt_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+    /// Compare greater‑than on unsigned i8 lanes; result is an all‑ones/-zeros mask vector.
+    unsafe fn cmpgt_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+    /// Compare greater‑or‑equal on unsigned i8 lanes; result is an all‑ones/-zeros mask vector.
+    unsafe fn cmpge_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
     /// Compare equal on i16 lanes; result is an all‑ones/-zeros mask vector.
     unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16;
     /// Compare greater‑than on signed i16 lanes; result is an all‑ones/-zeros mask vector.
@@ -177,8 +181,15 @@ pub trait SimdEngine: Sized + Copy {
     unsafe fn and_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
     /// Per‑byte bitwise OR.
     unsafe fn or_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+    /// Per‑byte bitwise XOR.
+    unsafe fn xor_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
     /// Per‑byte bitwise AND‑NOT: `~a & b` on a per‑byte basis.
     unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+
+    // ===== Shuffle Operations =====
+    /// Shuffle bytes in `a` using indices in `b`.
+    /// Maps to `_mm_shuffle_epi8` (SSSE3), `_mm256_shuffle_epi8` (AVX2), `_mm512_shuffle_epi8` (AVX-512).
+    unsafe fn shuffle_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
 
     // ===== Fixed/portable Shift Operations =====
     /// Shift each i16 lane left by a fixed immediate `imm8` (backend may accept

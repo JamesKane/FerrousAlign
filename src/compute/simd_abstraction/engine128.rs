@@ -315,6 +315,45 @@ impl SimdEngine for SimdEngine128 {
     }
 
     #[inline]
+    unsafe fn cmpgt_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        // SSE has no native unsigned comparison; use XOR trick to flip sign bit
+        // a >_u b ⟺ (a XOR 0x80) >_s (b XOR 0x80)
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            let sign_bit = _mm_set1_epi8(0x80u8 as i8);
+            let a_signed = _mm_xor_si128(a, sign_bit);
+            let b_signed = _mm_xor_si128(b, sign_bit);
+            _mm_cmpgt_epi8(a_signed, b_signed)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            // NEON: vcgt_u8 - unsigned greater-than
+            let result_u8 = vcgtq_u8(a.as_u8(), b.as_u8());
+            __m128i::from_u8(result_u8)
+        }
+    }
+
+    #[inline]
+    unsafe fn cmpge_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        // a >=_u b ⟺ max(a, b) == a
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            let max_val = _mm_max_epu8(a, b);
+            _mm_cmpeq_epi8(max_val, a)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            // NEON: vcge_u8 - unsigned greater-or-equal
+            let result_u8 = vcgeq_u8(a.as_u8(), b.as_u8());
+            __m128i::from_u8(result_u8)
+        }
+    }
+
+    #[inline]
     unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         unsafe { _mm_cmpeq_epi16(a, b) }
     }
@@ -344,8 +383,38 @@ impl SimdEngine for SimdEngine128 {
     }
 
     #[inline]
+    unsafe fn xor_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            _mm_xor_si128(a, b)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            __m128i::from_u8(veorq_u8(a.as_u8(), b.as_u8()))
+        }
+    }
+
+    #[inline]
     unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { _mm_andnot_si128(a, b) }
+    }
+
+    #[inline]
+    unsafe fn shuffle_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            _mm_shuffle_epi8(a, b)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            // NEON: vtbl1q_u8 - table lookup
+            let result = vqtbl1q_u8(a.as_u8(), b.as_u8());
+            __m128i::from_u8(result)
+        }
     }
 
     // ===== Shift Operations =====

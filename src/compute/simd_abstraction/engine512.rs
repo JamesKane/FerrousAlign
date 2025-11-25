@@ -382,6 +382,20 @@ impl SimdEngine for SimdEngine512 {
 
     #[inline]
     #[target_feature(enable = "avx512bw")]
+    unsafe fn cmpgt_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        let mask = simd_arch::_mm512_cmpgt_epu8_mask(a, b);
+        simd_arch::_mm512_maskz_set1_epi8(mask, -1i8)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn cmpge_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        let mask = simd_arch::_mm512_cmpge_epu8_mask(a, b);
+        simd_arch::_mm512_maskz_set1_epi8(mask, -1i8)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
     unsafe fn cmpeq_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         let mask = simd_arch::_mm512_cmpeq_epi16_mask(a, b);
         simd_arch::_mm512_maskz_set1_epi16(mask, -1i16)
@@ -416,8 +430,20 @@ impl SimdEngine for SimdEngine512 {
 
     #[inline]
     #[target_feature(enable = "avx512bw")]
+    unsafe fn xor_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm512_xor_si512(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
     unsafe fn andnot_si128(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         simd_arch::_mm512_andnot_si512(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn shuffle_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm512_shuffle_epi8(a, b)
     }
 
     #[inline]

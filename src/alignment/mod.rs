@@ -5,6 +5,7 @@ pub mod coordinates;
 pub mod edit_distance;
 pub mod finalization;
 pub mod ksw_affine_gap;
+pub mod kswv_batch;  // Horizontal SIMD batching for mate rescue
 pub mod mem;
 pub mod mem_opt;
 pub mod paired;
@@ -21,3 +22,5 @@ pub mod banded_swa_avx2;
 // AVX-512-specific SIMD implementations (x86_64 only, requires avx512 feature flag)
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 pub mod banded_swa_avx512;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+pub mod kswv_avx512;
