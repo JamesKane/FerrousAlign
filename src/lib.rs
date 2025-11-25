@@ -9,10 +9,10 @@ pub mod bwt;
 pub mod compute; // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
 pub mod defaults;
 pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
+pub mod fasta_reader; // FASTA reader using bio::io::fasta (used for reference genome)
 pub mod fm_index; // FM-Index operations (BWT search, occurrence counting)
 pub mod index; // Index management (BwaIndex loading/dumping)
 pub mod insert_size; // Insert size statistics
-pub mod kseq; // Used for FASTA reference reading during index building
 pub mod mate_rescue; // Mate rescue using Smith-Waterman
 pub mod mem;
 pub mod mem_opt;

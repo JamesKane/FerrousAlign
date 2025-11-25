@@ -81,6 +81,8 @@ pub struct BntSeq {
 #[path = "bntseq_test.rs"]
 mod bntseq_test;
 
+use crate::fasta_reader::FastaReader;
+
 impl BntSeq {
     pub fn new() -> Self {
         BntSeq {
@@ -146,8 +148,8 @@ impl BntSeq {
         }
     }
 
-    pub fn bns_fasta2bntseq<R: Read + 'static>(
-        reader: R,
+    pub fn bns_fasta2bntseq(
+        fasta_path: &Path,
         prefix: &Path,
         _for_only: bool, // for_only is not used in the C version's bns_fasta2bntseq
     ) -> io::Result<Self> {
@@ -155,7 +157,7 @@ impl BntSeq {
         bns.seed = 11; // Fixed seed matching C++ bwa-mem2 (line 314 in bntseq.cpp)
         let mut rng = StdRng::seed_from_u64(bns.seed as u64);
 
-        let mut kseq = crate::kseq::KSeq::new(Box::new(reader));
+        let mut fasta_reader = FastaReader::new(fasta_path.to_str().unwrap())?;
         let mut pac_data: Vec<u8> = Vec::new();
 
         let mut seq_id = 0;
@@ -164,26 +166,21 @@ impl BntSeq {
 
         let mut current_ambs: Vec<BntAmb1> = Vec::new();
 
-        loop {
-            let len = kseq.read()?; // Reads one sequence
-            if len < 0 {
-                break;
-            } // EOF or error
-
+        while let Some(record) = fasta_reader.read_record()? {
             let mut ann = BntAnn1 {
                 // Create a new BntAnn1 for each sequence
                 offset: packed_base_count,
-                sequence_length: kseq.seq.len() as i32,
+                sequence_length: record.seq().len() as i32,
                 ambiguous_base_count: 0, // Will be updated later
                 geninfo_identifier: 0,
                 is_alternate_locus: 0,
-                name: kseq.name.clone(),
-                anno: kseq.comment.clone(),
+                name: record.id().to_string(),
+                anno: record.desc().unwrap_or("").to_string(),
             };
 
             let mut n_ambs_in_seq = 0;
-            for base in kseq.seq.bytes() {
-                let mut nt4 = NST_NT4_TABLE[base as usize];
+            for base in record.seq() {
+                let mut nt4 = NST_NT4_TABLE[*base as usize];
 
                 // CRITICAL: Match C++ bwa-mem2 behavior (bntseq.cpp lines 264-292)
                 // For ambiguous bases (N, etc.), record in ambs array AND replace with random base
@@ -197,7 +194,7 @@ impl BntSeq {
                         current_ambs.push(BntAmb1 {
                             offset: pac_len,
                             region_length: 1,
-                            ambiguous_base: base as char,
+                            ambiguous_base: *base as char,
                         });
                     } else {
                         current_ambs.last_mut().unwrap().region_length += 1;

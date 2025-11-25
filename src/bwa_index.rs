@@ -14,7 +14,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
 
     // Step 1: Parse FASTA and generate BntSeq and PAC array
     let bns = crate::bntseq::BntSeq::bns_fasta2bntseq(
-        File::open(fasta_file)?,
+        fasta_file,
         prefix,
         false, // for_only is false
     )?;
