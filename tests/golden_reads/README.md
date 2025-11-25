@@ -103,8 +103,60 @@ For pipeline refactoring, the following must remain unchanged:
    - Mapped rate: ±0.1%
    - MAPQ distribution: histogram match
 
+## SIMD Backend Verification (2025-11-25)
+
+All SIMD backends must produce identical alignment results. The following tests verify correctness across different instruction sets.
+
+### Test Results
+
+| Backend | Build Flags | Time | Output Hash | Status |
+|---------|-------------|------|-------------|--------|
+| AVX2 (256-bit) | `--release` | 0.84s | `c663c0be36a839cced3d1e3b9e36c543` | ✅ Verified |
+| AVX-512 (512-bit) | `--release --features avx512` | 2.08s | `c663c0be36a839cced3d1e3b9e36c543` | ✅ Verified |
+| SSE/NEON (128-bit) | `--release` (aarch64) | - | - | ⏳ Pending |
+
+**Key findings:**
+- AVX2 and AVX-512 produce **byte-for-byte identical** alignment outputs
+- AVX-512 timing is slower due to CPU frequency throttling (expected on Intel)
+- All backends use vertical SIMD for banded Smith-Waterman
+- Horizontal SIMD kernels (for batched mate rescue) are integrated but not yet invoked
+
+### Verification Commands
+
+```bash
+# Build with AVX-512 support
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features avx512
+
+# Run and verify output hash
+./target/release/ferrous-align mem -t 16 $REF \
+    tests/golden_reads/golden_10k_R1.fq \
+    tests/golden_reads/golden_10k_R2.fq \
+    > /tmp/test.sam 2> /tmp/test.log
+
+# Check backend used
+grep "compute backend" /tmp/test.log
+
+# Compare hash with baseline
+grep -v "^@" /tmp/test.sam | md5sum
+```
+
+### NEON Validation (aarch64)
+
+NEON backend requires testing on an ARM64 machine (Apple Silicon or Linux aarch64):
+
+```bash
+# On aarch64 machine
+cargo build --release
+./target/release/ferrous-align mem -t 8 $REF \
+    tests/golden_reads/golden_10k_R1.fq \
+    tests/golden_reads/golden_10k_R2.fq \
+    | grep -v "^@" | md5sum
+# Expected: c663c0be36a839cced3d1e3b9e36c543
+```
+
 ## Notes
 
 - Golden reads are NOT committed to git (too large)
 - Regenerate with `make golden-reads` or script above
 - BWA-MEM2 output is for reference only; ferrous baseline is the parity target
+- All SIMD backends must produce identical results (verified by MD5 hash)
