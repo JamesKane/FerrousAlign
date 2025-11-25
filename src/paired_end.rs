@@ -21,7 +21,10 @@ use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
-use crate::mate_rescue::mem_matesw;
+use crate::mate_rescue::{
+    execute_mate_rescue_batch, prepare_mate_rescue_jobs_for_anchor, result_to_alignment,
+    MateRescueJob,
+};
 use crate::mem_opt::MemOpt;
 use crate::pairing::mem_pair;
 use crate::sam_output::{
@@ -649,6 +652,11 @@ pub fn process_paired_end(
 /// - max_matesw: Maximum number of alignments to use as anchors (default: 50)
 ///
 /// Returns number of pairs where at least one mate was rescued.
+///
+/// OPTIMIZATION (Session 48): Three-phase batched mate rescue
+/// Phase 1: Collect all SW jobs across all pairs (parallel collection)
+/// Phase 2: Execute all SW in parallel using rayon
+/// Phase 3: Distribute results back to pairs
 fn mate_rescue_batch(
     batch_pairs: &mut [(Vec<Alignment>, Vec<Alignment>)],
     batch_seqs1: &[(&str, &[u8], &str)], // (name, seq, qual) for read1
@@ -662,98 +670,122 @@ fn mate_rescue_batch(
         return 0;
     }
 
-    // Process pairs in parallel - each pair's rescue is independent
-    let rescued: usize = batch_pairs
-        .par_iter_mut()
+    // ========================================================================
+    // PHASE 1: Collect all SW jobs across all pairs
+    // ========================================================================
+    // We collect jobs in parallel from each pair, then flatten into one big list.
+    // Each job stores (pair_index, which_read) so we know where to put results.
+
+    let all_jobs: Vec<MateRescueJob> = batch_pairs
+        .par_iter()
         .enumerate()
-        .map(|(i, (alns1, alns2))| {
+        .flat_map(|(i, (alns1, alns2))| {
             let (name1, seq1, _qual1) = batch_seqs1[i];
-            let (name2, seq2, qual2) = batch_seqs2[i];
-            let (_, _, qual1) = batch_seqs1[i]; // Re-get qual1 since we need both
+            let (name2, seq2, _qual2) = batch_seqs2[i];
 
-            log::debug!(
-                "Pair {}: {} has {} alignments, {} has {} alignments",
-                i,
-                name1,
-                alns1.len(),
-                name2,
-                alns2.len()
-            );
+            let mut pair_jobs = Vec::new();
 
-            let mut pair_rescued = false;
-
-            // BWA-MEM2 behavior: For each top alignment in read1, try to rescue read2
-            // This runs UNCONDITIONALLY, not just when read2 has no alignments
+            // Collect jobs for rescuing read2 using read1's anchors
             if !alns1.is_empty() {
                 let mate_seq = encode_sequence(seq2);
                 let num_anchors = alns1.len().min(max_matesw);
 
                 for j in 0..num_anchors {
-                    let n = mem_matesw(
-                        bwa_idx, pac, stats, &alns1[j], &mate_seq, qual2, name2, alns2,
+                    let jobs = prepare_mate_rescue_jobs_for_anchor(
+                        bwa_idx,
+                        pac,
+                        stats,
+                        &alns1[j],
+                        &mate_seq,
+                        name2,
+                        alns2,
+                        i,
+                        false, // rescuing read2
                     );
-                    if n > 0 {
-                        pair_rescued = true;
-                        log::debug!(
-                            "Pair {}: Rescued {} alignments for {} using {} anchor {}",
-                            i,
-                            n,
-                            name2,
-                            name1,
-                            j
-                        );
-                    }
+                    pair_jobs.extend(jobs);
                 }
             }
 
-            // BWA-MEM2 behavior: For each top alignment in read2, try to rescue read1
+            // Collect jobs for rescuing read1 using read2's anchors
             if !alns2.is_empty() {
                 let mate_seq = encode_sequence(seq1);
                 let num_anchors = alns2.len().min(max_matesw);
 
-                // Trace: Log all anchor positions for debugging
-                if name1.contains("10009:11965") {
-                    log::debug!(
-                        "MATE_RESCUE_DEBUG {}: Using {} anchors from R2 to rescue R1",
-                        name1,
-                        num_anchors
-                    );
-                    for (idx, aln) in alns2.iter().enumerate().take(num_anchors) {
-                        log::debug!(
-                            "MATE_RESCUE_DEBUG {}: R2 anchor[{}] = {}:{} (rev={}, score={})",
-                            name1,
-                            idx,
-                            aln.ref_name,
-                            aln.pos,
-                            (aln.flag & 0x10) != 0,
-                            aln.score
-                        );
-                    }
-                }
-
                 for j in 0..num_anchors {
-                    let n = mem_matesw(
-                        bwa_idx, pac, stats, &alns2[j], &mate_seq, qual1, name1, alns1,
+                    let jobs = prepare_mate_rescue_jobs_for_anchor(
+                        bwa_idx,
+                        pac,
+                        stats,
+                        &alns2[j],
+                        &mate_seq,
+                        name1,
+                        alns1,
+                        i,
+                        true, // rescuing read1
                     );
-                    if n > 0 {
-                        pair_rescued = true;
-                        log::debug!(
-                            "Pair {}: Rescued {} alignments for {} using {} anchor {}",
-                            i,
-                            n,
-                            name1,
-                            name2,
-                            j
-                        );
-                    }
+                    pair_jobs.extend(jobs);
                 }
             }
 
-            if pair_rescued { 1 } else { 0 }
+            pair_jobs
         })
-        .sum();
+        .collect();
 
-    rescued
+    if all_jobs.is_empty() {
+        return 0;
+    }
+
+    log::debug!(
+        "Mate rescue: collected {} SW jobs across {} pairs",
+        all_jobs.len(),
+        batch_pairs.len()
+    );
+
+    // ========================================================================
+    // PHASE 2: Execute all SW in parallel
+    // ========================================================================
+    let mut jobs_for_execution = all_jobs;
+    let results = execute_mate_rescue_batch(&mut jobs_for_execution);
+
+    // ========================================================================
+    // PHASE 3: Distribute results back to pairs
+    // ========================================================================
+    // Track which pairs had at least one successful rescue
+    let mut pairs_rescued = vec![false; batch_pairs.len()];
+
+    for result in results.iter() {
+        let job = &jobs_for_execution[result.job_index];
+
+        // Try to convert the SW result to an Alignment
+        if let Some(alignment) = result_to_alignment(job, &result.aln, bwa_idx) {
+            let pair_idx = job.pair_index;
+
+            // Add to the appropriate alignment list
+            if job.rescuing_read1 {
+                batch_pairs[pair_idx].0.push(alignment);
+            } else {
+                batch_pairs[pair_idx].1.push(alignment);
+            }
+
+            pairs_rescued[pair_idx] = true;
+        }
+    }
+
+    // Count how many pairs had at least one rescue
+    let rescued_count = pairs_rescued.iter().filter(|&&x| x).count();
+
+    log::debug!(
+        "Mate rescue: {} SW jobs produced {} rescued alignments in {} pairs",
+        results.len(),
+        results
+            .iter()
+            .filter(|r| result_to_alignment(&jobs_for_execution[r.job_index], &r.aln, bwa_idx)
+                .is_some())
+            .count(),
+        rescued_count
+    );
+
+    rescued_count
 }
 
 // ============================================================================
