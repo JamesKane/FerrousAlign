@@ -399,12 +399,50 @@ pub fn batch_ksw_align(
         }
         #[cfg(target_arch = "x86_64")]
         SimdEngineType::Engine256 => {
-            // TODO: Implement AVX2 kernel (32-way horizontal SIMD)
-            batch_ksw_align_fallback(soa, pairs, results, match_score, mismatch_penalty, gap_open, gap_extend)
+            use crate::alignment::kswv_avx2;
+
+            // Call AVX2 kernel (32-way horizontal SIMD)
+            unsafe {
+                kswv_avx2::batch_ksw_align_avx2(
+                    soa.ref_ptr(),
+                    soa.query_ptr(),
+                    pairs[0].ref_len as i16,  // nrow
+                    pairs[0].query_len as i16, // ncol
+                    pairs,
+                    results,
+                    match_score,
+                    mismatch_penalty,
+                    gap_open,
+                    gap_extend,
+                    gap_open,   // o_ins
+                    gap_extend, // e_ins
+                    -1,         // w_ambig
+                    0,          // phase
+                )
+            }
         }
         SimdEngineType::Engine128 => {
-            // TODO: Implement SSE/NEON kernel (16-way horizontal SIMD)
-            batch_ksw_align_fallback(soa, pairs, results, match_score, mismatch_penalty, gap_open, gap_extend)
+            use crate::alignment::kswv_sse_neon;
+
+            // Call SSE/NEON kernel (16-way horizontal SIMD)
+            unsafe {
+                kswv_sse_neon::batch_ksw_align_sse_neon(
+                    soa.ref_ptr(),
+                    soa.query_ptr(),
+                    pairs[0].ref_len as i16,  // nrow
+                    pairs[0].query_len as i16, // ncol
+                    pairs,
+                    results,
+                    match_score,
+                    mismatch_penalty,
+                    gap_open,
+                    gap_extend,
+                    gap_open,   // o_ins
+                    gap_extend, // e_ins
+                    -1,         // w_ambig
+                    0,          // phase
+                )
+            }
         }
     }
 }
