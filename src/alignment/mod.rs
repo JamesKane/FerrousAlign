@@ -5,7 +5,8 @@ pub mod coordinates;
 pub mod edit_distance;
 pub mod finalization;
 pub mod ksw_affine_gap;
-pub mod kswv_batch;  // Horizontal SIMD batching for mate rescue
+pub mod kswv_batch;  // Horizontal SIMD batching infrastructure
+pub mod kswv_sse_neon;  // Baseline 128-bit horizontal SIMD kernel
 pub mod mem;
 pub mod mem_opt;
 pub mod paired;
