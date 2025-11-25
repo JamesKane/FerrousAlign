@@ -11,11 +11,11 @@
 // - Output: sam_output::write_sam_record() writes to stream
 
 use crate::alignment::finalization::Alignment;
+use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::pipeline::{align_read_deferred, generate_seeds};
 use crate::compute::ComputeContext;
-use crate::io::fastq_reader::FastqReader;
 use crate::index::index::BwaIndex;
-use crate::alignment::mem_opt::MemOpt;
+use crate::io::fastq_reader::FastqReader;
 use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
     write_sam_record,

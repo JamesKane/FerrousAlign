@@ -446,10 +446,20 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
                 S::load_si128(q.hmax.add(k / S::WIDTH_8) as *const S::Vec8),
                 (k % S::WIDTH_8) as i32,
             );
-            // Calculate actual query position from k (SIMD lane index + segment index)
-            // (k / S::WIDTH_8) is the segment index
-            // (k % S::WIDTH_8) is the lane index
-            let current_qe_candidate = (k / S::WIDTH_8 * slen + k % S::WIDTH_8) as i32;
+            // Calculate actual query position from k using striped layout formula:
+            // - Segment index: k / WIDTH_8
+            // - Lane index: k % WIDTH_8
+            // - Query position = segment + lane * slen (NOT segment * slen + lane!)
+            // The striped layout stores positions: segment 0 has [0, slen, 2*slen, ...],
+            // segment 1 has [1, 1+slen, 1+2*slen, ...], etc.
+            let segment = k / S::WIDTH_8;
+            let lane = k % S::WIDTH_8;
+            let current_qe_candidate = (segment + lane * slen) as i32;
+
+            // Skip padding positions beyond actual query length
+            if current_qe_candidate >= q.qlen {
+                continue;
+            }
 
             if val as i32 > max_val_qe {
                 max_val_qe = val as i32;
@@ -680,7 +690,18 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
                 S::load_si128_16(q.hmax.add(k / S::WIDTH_16) as *const S::Vec16),
                 (k % S::WIDTH_16) as i32,
             );
-            let current_qe_candidate = (k / S::WIDTH_16 * slen + k % S::WIDTH_16) as i32;
+            // Calculate actual query position from k using striped layout formula:
+            // - Segment index: k / WIDTH_16
+            // - Lane index: k % WIDTH_16
+            // - Query position = segment + lane * slen (NOT segment * slen + lane!)
+            let segment = k / S::WIDTH_16;
+            let lane = k % S::WIDTH_16;
+            let current_qe_candidate = (segment + lane * slen) as i32;
+
+            // Skip padding positions beyond actual query length
+            if current_qe_candidate >= q.qlen {
+                continue;
+            }
 
             if val as i32 > max_val_qe {
                 max_val_qe = val as i32;
@@ -821,8 +842,12 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
         ksw_qfree(q2_ptr);
 
         // Update result with start positions if scores match
+        // Note: When KSW_XSTOP is used, the reverse alignment stops when score >= target,
+        // so rr.score may be >= r.score. We accept if scores match OR if reverse found
+        // the target score (i.e., rr.score >= r.score means the reverse alignment
+        // successfully found an equally good or better alignment from the end).
         let mut result = r;
-        if r.score == rr.score {
+        if rr.score >= r.score {
             result.tb = r.te - rr.te;
             result.qb = r.qe - rr.qe;
         }

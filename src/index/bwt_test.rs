@@ -2,10 +2,10 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::index::bwt::Bwt;
     use std::fs;
     use std::io::{self, Read};
     use std::path::Path;
-    use crate::index::bwt::Bwt;
 
     // Helper function to create a dummy Bwt for testing
     fn create_dummy_bwt() -> Bwt {

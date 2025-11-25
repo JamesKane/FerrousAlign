@@ -1,8 +1,8 @@
 // bwa-mem2-rust/src/banded_swa.rs
 
 use crate::compute::simd_abstraction::portable_intrinsics::*;
-use crate::compute::simd_abstraction::types::__m128i;
 use crate::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
+use crate::compute::simd_abstraction::types::__m128i;
 
 // Rust equivalent of dnaSeqPair (C++ bandedSWA.h:90-99)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2747,7 +2747,11 @@ mod tests {
         // since the actual location can't be determined from the error message
         let detect_optimal_simd_engine = || {
             #[derive(Debug)]
-            enum SimdEngine { Sse2, Avx2, Avx512 }
+            enum SimdEngine {
+                Sse2,
+                Avx2,
+                Avx512,
+            }
 
             if is_x86_feature_detected!("avx512bw") {
                 SimdEngine::Avx512

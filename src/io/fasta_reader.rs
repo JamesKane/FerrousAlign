@@ -72,7 +72,9 @@ impl FastaReader {
                 let bgzf_reader = bgzf::MultithreadedReader::new(File::open(path)?);
                 Box::new(BufReader::with_capacity(BUFFER_SIZE, bgzf_reader))
             } else {
-                log::debug!("Detected standard gzip format, using single-threaded decompression for FASTA");
+                log::debug!(
+                    "Detected standard gzip format, using single-threaded decompression for FASTA"
+                );
                 // Fall back to flate2 for standard gzip
                 Box::new(BufReader::with_capacity(BUFFER_SIZE, GzDecoder::new(file)))
             }

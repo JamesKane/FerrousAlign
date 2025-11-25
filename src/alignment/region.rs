@@ -23,10 +23,10 @@
 
 use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use crate::alignment::chaining::{Chain, cal_max_gap};
+use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::seeding::Seed;
 use crate::compute::ComputeBackend;
 use crate::index::index::BwaIndex;
-use crate::alignment::mem_opt::MemOpt;
 
 /// Alignment region with boundaries but NO CIGAR
 ///

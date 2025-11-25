@@ -8,10 +8,10 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 use ferrous_align::alignment;
 use ferrous_align::alignment::mem_opt::MemCliOptions;
 use ferrous_align::index::bwa_index;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "ferrous-align")]

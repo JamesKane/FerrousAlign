@@ -64,7 +64,11 @@ AGCTAGCTAGCTAGCT
         .arg("-p")
         .arg(ref_prefix.to_str().unwrap())
         .output()?;
-    assert!(index_output.status.success(), "Index command failed with: {:?}", index_output);
+    assert!(
+        index_output.status.success(),
+        "Index command failed with: {:?}",
+        index_output
+    );
 
     // Verify index files are created
     // Note: bwa-mem2 format embeds SA data in .bwt.2bit.64, doesn't create separate .sa file

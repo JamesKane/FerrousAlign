@@ -217,9 +217,9 @@ pub mod engine128;
 pub mod engine256;
 pub mod engine512;
 pub mod portable_intrinsics;
+pub mod simd;
 pub mod tests;
 pub mod types;
-pub mod simd;
 
 use portable_intrinsics::*;
 use types::__m128i; // Import __m128i from types // Import all portable intrinsics

@@ -17,12 +17,12 @@
 // 2. Execution phase: Run all SW alignments in parallel (execute_mate_rescue_batch)
 // 3. Distribution phase: Create alignments and add to pairs (distribute_rescue_results)
 
+use super::insert_size::InsertSizeStats;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
-use crate::index::index::BwaIndex;
-use super::insert_size::InsertSizeStats;
 use crate::compute::simd_abstraction::SimdEngine128;
+use crate::index::index::BwaIndex;
 use rayon::prelude::*;
 
 /// A mate rescue SW job prepared for batch execution
@@ -490,7 +490,10 @@ pub fn execute_mate_rescue_batch(jobs: &mut [MateRescueJob]) -> Vec<MateRescueRe
                 )
             };
 
-            MateRescueResult { job_index: idx, aln }
+            MateRescueResult {
+                job_index: idx,
+                aln,
+            }
         })
         .collect()
 }
@@ -509,7 +512,15 @@ pub fn result_to_alignment(
     if is_debug_read {
         log::debug!(
             "MATE_RESCUE_RESULT {}: orientation={} adj_rb={} score={} tb={} te={} qb={} qe={} min_seed_len={}",
-            job.mate_name, job.orientation, job.adj_rb, aln.score, aln.tb, aln.te, aln.qb, aln.qe, job.min_seed_len
+            job.mate_name,
+            job.orientation,
+            job.adj_rb,
+            aln.score,
+            aln.tb,
+            aln.te,
+            aln.qb,
+            aln.qe,
+            job.min_seed_len
         );
     }
 
@@ -518,7 +529,10 @@ pub fn result_to_alignment(
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_RESULT {}: REJECTED - score {} < min_seed_len {} or qb {} < 0",
-                job.mate_name, aln.score, job.min_seed_len, aln.qb
+                job.mate_name,
+                aln.score,
+                job.min_seed_len,
+                aln.qb
             );
         }
         return None;
@@ -546,7 +560,11 @@ pub fn result_to_alignment(
     if is_debug_read {
         log::debug!(
             "MATE_RESCUE_RESULT {}: rescued_rb={} pos_f={} rescued_rid={} anchor_ref_id={}",
-            job.mate_name, rescued_rb, pos_f, rescued_rid, job.anchor_ref_id
+            job.mate_name,
+            rescued_rb,
+            pos_f,
+            rescued_rid,
+            job.anchor_ref_id
         );
     }
 
@@ -554,7 +572,9 @@ pub fn result_to_alignment(
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_RESULT {}: REJECTED - rid mismatch ({} vs {})",
-                job.mate_name, rescued_rid, job.anchor_ref_id
+                job.mate_name,
+                rescued_rid,
+                job.anchor_ref_id
             );
         }
         return None;
@@ -565,7 +585,8 @@ pub fn result_to_alignment(
     if is_debug_read {
         log::debug!(
             "MATE_RESCUE_RESULT {}: SUCCESS - chr_pos={} (target ~50141532)",
-            job.mate_name, chr_pos
+            job.mate_name,
+            chr_pos
         );
     }
 
@@ -664,7 +685,13 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
     if is_debug_read {
         log::debug!(
             "MATE_RESCUE_PREP {}: anchor={}:{} is_rev={} anchor_rb={} rescuing_read1={} existing_alns={}",
-            mate_name, anchor.ref_name, anchor.pos, anchor_is_rev, anchor_rb, rescuing_read1, existing_alignments.len()
+            mate_name,
+            anchor.ref_name,
+            anchor.pos,
+            anchor_is_rev,
+            anchor_rb,
+            rescuing_read1,
+            existing_alignments.len()
         );
     }
 
@@ -686,8 +713,14 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
             if is_debug_read {
                 log::debug!(
                     "MATE_RESCUE_PREP {}: existing aln {}:{} mate_rb={} dir={} dist={} range=[{},{}] in_range={}",
-                    mate_name, aln.ref_name, aln.pos, mate_rb, dir, dist,
-                    stats[dir].low, stats[dir].high,
+                    mate_name,
+                    aln.ref_name,
+                    aln.pos,
+                    mate_rb,
+                    dir,
+                    dist,
+                    stats[dir].low,
+                    stats[dir].high,
                     dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64
                 );
             }
@@ -700,7 +733,10 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
     // Early exit if all orientations already have pairs
     if skip.iter().all(|&x| x) {
         if is_debug_read {
-            log::debug!("MATE_RESCUE_PREP {}: EARLY EXIT - all orientations have pairs", mate_name);
+            log::debug!(
+                "MATE_RESCUE_PREP {}: EARLY EXIT - all orientations have pairs",
+                mate_name
+            );
         }
         return jobs;
     }
@@ -763,7 +799,14 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_PREP {}: orientation r={} is_rev={} is_larger={} rb={} re={} range=[{},{}]",
-                mate_name, r, is_rev, is_larger, rb, re, stats[r].low, stats[r].high
+                mate_name,
+                r,
+                is_rev,
+                is_larger,
+                rb,
+                re,
+                stats[r].low,
+                stats[r].high
             );
         }
 
@@ -775,13 +818,18 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
         }
 
         // Fetch reference sequence
-        let (ref_seq, adj_rb, adj_re, rid) =
-            bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
+        let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
 
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_PREP {}: r={} fetched ref: adj_rb={} adj_re={} rid={} anchor.ref_id={} len={}",
-                mate_name, r, adj_rb, adj_re, rid, anchor.ref_id, adj_re - adj_rb
+                mate_name,
+                r,
+                adj_rb,
+                adj_re,
+                rid,
+                anchor.ref_id,
+                adj_re - adj_rb
             );
         }
 
@@ -790,7 +838,11 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
             if is_debug_read {
                 log::debug!(
                     "MATE_RESCUE_PREP {}: SKIP r={} - rid mismatch ({} vs {}) or too small ({})",
-                    mate_name, r, rid, anchor.ref_id, adj_re - adj_rb
+                    mate_name,
+                    r,
+                    rid,
+                    anchor.ref_id,
+                    adj_re - adj_rb
                 );
             }
             continue;

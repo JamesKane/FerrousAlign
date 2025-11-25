@@ -14,10 +14,10 @@
 // SAM coordinates always use the leftmost position on the forward strand.
 // This module converts SAM coordinates to bidirectional coordinates for distance calculation.
 
-use crate::alignment::finalization::sam_flags;
-use crate::alignment::finalization::Alignment;
 use super::insert_size::InsertSizeStats;
 use super::insert_size::erfc_fn as erfc;
+use crate::alignment::finalization::Alignment;
+use crate::alignment::finalization::sam_flags;
 use crate::utils::hash_64;
 
 /// Information about a single alignment for pair scoring.

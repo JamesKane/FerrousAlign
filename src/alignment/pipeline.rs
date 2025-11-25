@@ -11,6 +11,7 @@ use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::mark_secondary_alignments;
 use crate::alignment::finalization::remove_redundant_alignments;
 use crate::alignment::finalization::sam_flags;
+use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::seeding::SMEM;
 use crate::alignment::seeding::Seed;
 use crate::alignment::seeding::forward_only_seed_strategy;
@@ -21,7 +22,6 @@ use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::compute::ComputeBackend;
 use crate::index::index::BwaIndex;
-use crate::alignment::mem_opt::MemOpt;
 use crate::utils::hash_64;
 
 // ============================================================================

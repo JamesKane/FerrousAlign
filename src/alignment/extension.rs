@@ -397,7 +397,9 @@ pub(crate) fn execute_scalar_alignments(
 /// This reduces batch synchronization penalty for divergent sequences while
 /// maximizing SIMD utilization for similar sequences.
 fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
-    use crate::compute::simd_abstraction::simd::{detect_optimal_simd_engine, get_simd_batch_sizes};
+    use crate::compute::simd_abstraction::simd::{
+        detect_optimal_simd_engine, get_simd_batch_sizes,
+    };
 
     if jobs.is_empty() {
         return 16; // Default

@@ -8,8 +8,8 @@ pub mod defaults;
 pub mod utils;
 
 // New modules
-pub mod io;
 pub mod index;
+pub mod io;
 
 // Test modules
 #[cfg(test)]

@@ -1,6 +1,6 @@
+use crate::defaults::*;
 use clap::Args;
 use std::path::PathBuf;
-use crate::defaults::*;
 
 // bwa-mem2-rust/src/mem_opt.rs
 //
@@ -365,7 +365,7 @@ impl Default for MemOpt {
             // Filtering
             mask_level: 0.50, // No corresponding constant in defaults.rs
             drop_ratio: DROP_CHAIN_FRACTION,
-            xa_drop_ratio: 0.80, // No corresponding constant in defaults.rs
+            xa_drop_ratio: 0.80,    // No corresponding constant in defaults.rs
             mask_level_redun: 0.95, // No corresponding constant in defaults.rs
 
             // Output

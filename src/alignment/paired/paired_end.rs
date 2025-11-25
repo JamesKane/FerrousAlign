@@ -12,21 +12,21 @@
 // - Pairing: mem_pair() scores paired alignments
 // - Output: sam_output functions handle flag setting and formatting
 
+use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
+use super::mate_rescue::{
+    MateRescueJob, execute_mate_rescue_batch, prepare_mate_rescue_jobs_for_anchor,
+    result_to_alignment,
+};
+use super::pairing::mem_pair;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::mark_secondary_alignments;
 use crate::alignment::finalization::sam_flags;
+use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::pipeline::{align_read_deferred, generate_seeds_for_paired};
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
-use crate::io::fastq_reader::FastqReader;
 use crate::index::index::BwaIndex;
-use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
-use super::mate_rescue::{
-    execute_mate_rescue_batch, prepare_mate_rescue_jobs_for_anchor, result_to_alignment,
-    MateRescueJob,
-};
-use crate::alignment::mem_opt::MemOpt;
-use super::pairing::mem_pair;
+use crate::io::fastq_reader::FastqReader;
 use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
@@ -692,14 +692,7 @@ fn mate_rescue_batch(
 
                 for j in 0..num_anchors {
                     let jobs = prepare_mate_rescue_jobs_for_anchor(
-                        bwa_idx,
-                        pac,
-                        stats,
-                        &alns1[j],
-                        &mate_seq,
-                        name2,
-                        alns2,
-                        i,
+                        bwa_idx, pac, stats, &alns1[j], &mate_seq, name2, alns2, i,
                         false, // rescuing read2
                     );
                     pair_jobs.extend(jobs);
@@ -713,14 +706,7 @@ fn mate_rescue_batch(
 
                 for j in 0..num_anchors {
                     let jobs = prepare_mate_rescue_jobs_for_anchor(
-                        bwa_idx,
-                        pac,
-                        stats,
-                        &alns2[j],
-                        &mate_seq,
-                        name1,
-                        alns1,
-                        i,
+                        bwa_idx, pac, stats, &alns2[j], &mate_seq, name1, alns1, i,
                         true, // rescuing read1
                     );
                     pair_jobs.extend(jobs);
@@ -779,8 +765,10 @@ fn mate_rescue_batch(
         results.len(),
         results
             .iter()
-            .filter(|r| result_to_alignment(&jobs_for_execution[r.job_index], &r.aln, bwa_idx)
-                .is_some())
+            .filter(
+                |r| result_to_alignment(&jobs_for_execution[r.job_index], &r.aln, bwa_idx)
+                    .is_some()
+            )
             .count(),
         rescued_count
     );
