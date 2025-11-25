@@ -36,8 +36,16 @@ use std::thread;
 
 // Batch processing constants (matching C++ bwa-mem2)
 const CHUNK_SIZE_BASES: usize = 10_000_000;
+#[allow(dead_code)]
 const AVG_READ_LEN: usize = 101;
-const MIN_BATCH_SIZE: usize = 512;
+
+// Insert size bootstrap uses small batch (512 pairs) to avoid stalling
+const BOOTSTRAP_BATCH_SIZE: usize = 512;
+
+// Main processing uses large batches for better parallelization
+// Formula: CHUNK_SIZE_BASES / AVG_READ_LEN gives ~100K pairs per batch
+// This ensures enough work for all threads (100K / 16 = 6.25K pairs per thread)
+const PROCESSING_BATCH_SIZE: usize = 50_000;
 
 // Paired-end alignment constants
 #[allow(dead_code)] // Reserved for future use in alignment scoring
@@ -200,54 +208,58 @@ pub fn process_paired_end(
     let mut total_bases = 0usize;
     let mut pairs_processed = 0u64; // Global pair counter for deterministic hash tie-breaking
 
-    // Use fixed batch size matching BWA-MEM2 behavior
-    // CRITICAL FIX: The previous formula (CHUNK_SIZE_BASES * n_threads / AVG_READ_LEN)
-    // created massive batches (1.6M pairs with 16 threads), causing insert size
-    // stats to stall on 1.3M pairs. BWA-MEM2 uses fixed 512 read pairs per batch.
-    let reads_per_batch = MIN_BATCH_SIZE;
+    // Two-phase batch size strategy:
+    // - Phase 1 (bootstrap): Small batch for insert size estimation (512 pairs)
+    // - Phase 2 (main): Large batch for parallelization (50K pairs)
     log::debug!(
-        "Using batch size: {} read pairs (fixed, matching BWA-MEM2)",
-        reads_per_batch
+        "Using batch sizes: bootstrap={}, processing={}",
+        BOOTSTRAP_BATCH_SIZE,
+        PROCESSING_BATCH_SIZE
     );
 
-    // Create channel for pipeline communication
-    // Buffer size of 2 allows reader to stay 1 batch ahead
-    let (sender, receiver): (Sender<PairedBatchMessage>, Receiver<PairedBatchMessage>) = bounded(2);
-
-    // Spawn reader thread for pipeline parallelism
-    let read1_file_owned = read1_file.to_string();
-    let read2_file_owned = read2_file.to_string();
-    let reader_handle = thread::spawn(move || {
-        reader_thread(read1_file_owned, read2_file_owned, reads_per_batch, sender);
-    });
-
-    log::debug!("[Main] Pipeline started: reader thread spawned");
-
     // PAC data is already loaded into memory in bwa_idx.bns.pac_data
-    // Just reference it directly - no file I/O needed!
     let pac = &bwa_idx.bns.pac_data;
     log::debug!("Using in-memory PAC data: {} bytes", pac.len());
 
     // === PHASE 1: Bootstrap insert size statistics from first batch ===
+    // Read first batch INLINE (not in thread) with small batch size
     log::info!("Phase 1: Bootstrapping insert size statistics from first batch");
 
-    // Receive first batch
-    log::debug!("[Main] Waiting for first batch (batch 0)...");
-    let first_batch_msg = match receiver.recv() {
-        Ok(msg) => msg,
-        Err(_) => {
-            log::error!("Failed to receive first batch from reader");
+    let mut reader1 = match crate::fastq_reader::FastqReader::new(read1_file) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Error opening read1 file {}: {}", read1_file, e);
+            return;
+        }
+    };
+    let mut reader2 = match crate::fastq_reader::FastqReader::new(read2_file) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Error opening read2 file {}: {}", read2_file, e);
             return;
         }
     };
 
-    let (first_batch1, first_batch2) = match first_batch_msg {
-        Some((b1, b2)) => (b1, b2),
-        None => {
-            log::warn!("No data to process (empty input files)");
+    // Read first batch with small size for insert size bootstrap
+    let first_batch1 = match reader1.read_batch(BOOTSTRAP_BATCH_SIZE) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("Error reading first batch from read1: {}", e);
             return;
         }
     };
+    let first_batch2 = match reader2.read_batch(BOOTSTRAP_BATCH_SIZE) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("Error reading first batch from read2: {}", e);
+            return;
+        }
+    };
+
+    if first_batch1.names.is_empty() {
+        log::warn!("No data to process (empty input files)");
+        return;
+    }
 
     let first_batch_size = first_batch1.names.len();
     let first_batch_bp: usize = first_batch1.seqs.iter().map(|s| s.len()).sum::<usize>()
@@ -434,35 +446,38 @@ pub fn process_paired_end(
     });
     log::info!("First batch: {} records written", first_batch_records);
 
-    // === PHASE 2: Stream remaining batches ===
-    log::info!("Phase 2: Streaming remaining batches");
+    // === PHASE 2: Stream remaining batches with LARGE batch size ===
+    log::info!(
+        "Phase 2: Streaming remaining batches (batch_size={})",
+        PROCESSING_BATCH_SIZE
+    );
 
     let mut batch_num = 1u64;
     let mut total_rescued = rescued_first;
     let mut total_records = first_batch_records;
 
     loop {
-        // Receive batch from reader thread (blocks until batch available)
-        log::debug!("[Main] Waiting for batch {}...", batch_num);
-        let batch_msg = match receiver.recv() {
-            Ok(msg) => msg,
-            Err(_) => {
-                log::debug!("[Main] Reader channel closed (after {} batches)", batch_num);
+        // Read batch directly with large batch size for better parallelization
+        let batch1 = match reader1.read_batch(PROCESSING_BATCH_SIZE) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("Error reading batch {} from read1: {}", batch_num, e);
+                break;
+            }
+        };
+        let batch2 = match reader2.read_batch(PROCESSING_BATCH_SIZE) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("Error reading batch {} from read2: {}", batch_num, e);
                 break;
             }
         };
 
-        // Check for EOF or error signal
-        let (batch1, batch2) = match batch_msg {
-            Some((b1, b2)) => (b1, b2),
-            None => {
-                log::debug!(
-                    "[Main] Received EOF/error signal from reader (after {} batches)",
-                    batch_num
-                );
-                break;
-            }
-        };
+        // Check for EOF
+        if batch1.names.is_empty() {
+            log::debug!("[Main] EOF reached after {} batches", batch_num);
+            break;
+        }
 
         batch_num += 1;
 
@@ -588,7 +603,7 @@ pub fn process_paired_end(
             &stats,
             writer,
             &opt,
-            batch_num * reads_per_batch as u64,
+            batch_num * PROCESSING_BATCH_SIZE as u64,
             l_pac,
         )
         .unwrap_or_else(|e| {
@@ -609,13 +624,6 @@ pub fn process_paired_end(
 
         // batch_alignments and batch dropped here, memory freed
     }
-
-    // Wait for reader thread to finish
-    log::debug!("[Main] Waiting for reader thread to finish");
-    if let Err(e) = reader_handle.join() {
-        log::error!("[Main] Reader thread panicked: {:?}", e);
-    }
-    log::debug!("[Main] Reader thread finished, pipeline complete");
 
     // Print summary statistics
     let elapsed = start_time.elapsed();
@@ -650,98 +658,100 @@ fn mate_rescue_batch(
     bwa_idx: &BwaIndex,
     max_matesw: usize,
 ) -> usize {
-    let mut rescued = 0;
-
     if pac.is_empty() {
         return 0;
     }
 
-    for (i, (alns1, alns2)) in batch_pairs.iter_mut().enumerate() {
-        let (name1, seq1, qual1) = batch_seqs1[i];
-        let (name2, seq2, qual2) = batch_seqs2[i];
+    // Process pairs in parallel - each pair's rescue is independent
+    let rescued: usize = batch_pairs
+        .par_iter_mut()
+        .enumerate()
+        .map(|(i, (alns1, alns2))| {
+            let (name1, seq1, _qual1) = batch_seqs1[i];
+            let (name2, seq2, qual2) = batch_seqs2[i];
+            let (_, _, qual1) = batch_seqs1[i]; // Re-get qual1 since we need both
 
-        log::debug!(
-            "Pair {}: {} has {} alignments, {} has {} alignments",
-            i,
-            name1,
-            alns1.len(),
-            name2,
-            alns2.len()
-        );
+            log::debug!(
+                "Pair {}: {} has {} alignments, {} has {} alignments",
+                i,
+                name1,
+                alns1.len(),
+                name2,
+                alns2.len()
+            );
 
-        let mut pair_rescued = false;
+            let mut pair_rescued = false;
 
-        // BWA-MEM2 behavior: For each top alignment in read1, try to rescue read2
-        // This runs UNCONDITIONALLY, not just when read2 has no alignments
-        if !alns1.is_empty() {
-            let mate_seq = encode_sequence(seq2);
-            let num_anchors = alns1.len().min(max_matesw);
+            // BWA-MEM2 behavior: For each top alignment in read1, try to rescue read2
+            // This runs UNCONDITIONALLY, not just when read2 has no alignments
+            if !alns1.is_empty() {
+                let mate_seq = encode_sequence(seq2);
+                let num_anchors = alns1.len().min(max_matesw);
 
-            for j in 0..num_anchors {
-                let n = mem_matesw(
-                    bwa_idx, pac, stats, &alns1[j], &mate_seq, qual2, name2, alns2,
-                );
-                if n > 0 {
-                    pair_rescued = true;
-                    log::debug!(
-                        "Pair {}: Rescued {} alignments for {} using {} anchor {}",
-                        i,
-                        n,
-                        name2,
-                        name1,
-                        j
+                for j in 0..num_anchors {
+                    let n = mem_matesw(
+                        bwa_idx, pac, stats, &alns1[j], &mate_seq, qual2, name2, alns2,
                     );
-                }
-            }
-        }
-
-        // BWA-MEM2 behavior: For each top alignment in read2, try to rescue read1
-        if !alns2.is_empty() {
-            let mate_seq = encode_sequence(seq1);
-            let num_anchors = alns2.len().min(max_matesw);
-
-            // Trace: Log all anchor positions for debugging
-            if name1.contains("10009:11965") {
-                log::debug!(
-                    "MATE_RESCUE_DEBUG {}: Using {} anchors from R2 to rescue R1",
-                    name1,
-                    num_anchors
-                );
-                for (idx, aln) in alns2.iter().enumerate().take(num_anchors) {
-                    log::debug!(
-                        "MATE_RESCUE_DEBUG {}: R2 anchor[{}] = {}:{} (rev={}, score={})",
-                        name1,
-                        idx,
-                        aln.ref_name,
-                        aln.pos,
-                        (aln.flag & 0x10) != 0,
-                        aln.score
-                    );
+                    if n > 0 {
+                        pair_rescued = true;
+                        log::debug!(
+                            "Pair {}: Rescued {} alignments for {} using {} anchor {}",
+                            i,
+                            n,
+                            name2,
+                            name1,
+                            j
+                        );
+                    }
                 }
             }
 
-            for j in 0..num_anchors {
-                let n = mem_matesw(
-                    bwa_idx, pac, stats, &alns2[j], &mate_seq, qual1, name1, alns1,
-                );
-                if n > 0 {
-                    pair_rescued = true;
+            // BWA-MEM2 behavior: For each top alignment in read2, try to rescue read1
+            if !alns2.is_empty() {
+                let mate_seq = encode_sequence(seq1);
+                let num_anchors = alns2.len().min(max_matesw);
+
+                // Trace: Log all anchor positions for debugging
+                if name1.contains("10009:11965") {
                     log::debug!(
-                        "Pair {}: Rescued {} alignments for {} using {} anchor {}",
-                        i,
-                        n,
+                        "MATE_RESCUE_DEBUG {}: Using {} anchors from R2 to rescue R1",
                         name1,
-                        name2,
-                        j
+                        num_anchors
                     );
+                    for (idx, aln) in alns2.iter().enumerate().take(num_anchors) {
+                        log::debug!(
+                            "MATE_RESCUE_DEBUG {}: R2 anchor[{}] = {}:{} (rev={}, score={})",
+                            name1,
+                            idx,
+                            aln.ref_name,
+                            aln.pos,
+                            (aln.flag & 0x10) != 0,
+                            aln.score
+                        );
+                    }
+                }
+
+                for j in 0..num_anchors {
+                    let n = mem_matesw(
+                        bwa_idx, pac, stats, &alns2[j], &mate_seq, qual1, name1, alns1,
+                    );
+                    if n > 0 {
+                        pair_rescued = true;
+                        log::debug!(
+                            "Pair {}: Rescued {} alignments for {} using {} anchor {}",
+                            i,
+                            n,
+                            name1,
+                            name2,
+                            j
+                        );
+                    }
                 }
             }
-        }
 
-        if pair_rescued {
-            rescued += 1;
-        }
-    }
+            if pair_rescued { 1 } else { 0 }
+        })
+        .sum();
 
     rescued
 }
