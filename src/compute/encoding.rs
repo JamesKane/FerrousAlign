@@ -140,9 +140,7 @@ impl EncodingStrategy {
     ///   **Currently NO-OP: returns Classic encoding**
     pub fn encode_sequence(&self, seq: &[u8]) -> Vec<u8> {
         match self {
-            EncodingStrategy::Classic => {
-                seq.iter().map(|&b| classic_base_to_code(b)).collect()
-            }
+            EncodingStrategy::Classic => seq.iter().map(|&b| classic_base_to_code(b)).collect(),
             // ================================================================
             // ONE-HOT: NO-OP - Falls back to Classic encoding
             // ================================================================
@@ -161,21 +159,17 @@ impl EncodingStrategy {
     /// For ONE-HOT encoding, this reverses and swaps channels.
     pub fn reverse_complement(&self, encoded: &[u8]) -> Vec<u8> {
         match self {
-            EncodingStrategy::Classic => {
-                encoded
-                    .iter()
-                    .rev()
-                    .map(|&code| classic_complement_code(code))
-                    .collect()
-            }
+            EncodingStrategy::Classic => encoded
+                .iter()
+                .rev()
+                .map(|&code| classic_complement_code(code))
+                .collect(),
             // ONE-HOT: NO-OP - Falls back to Classic
-            EncodingStrategy::OneHot => {
-                encoded
-                    .iter()
-                    .rev()
-                    .map(|&code| classic_complement_code(code))
-                    .collect()
-            }
+            EncodingStrategy::OneHot => encoded
+                .iter()
+                .rev()
+                .map(|&code| classic_complement_code(code))
+                .collect(),
         }
     }
 

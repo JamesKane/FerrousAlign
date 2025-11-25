@@ -123,7 +123,8 @@ impl BntSeq {
         let mut hi = self.annotations.len();
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if start >= self.annotations[mid].offset + self.annotations[mid].sequence_length as u64 {
+            if start >= self.annotations[mid].offset + self.annotations[mid].sequence_length as u64
+            {
                 lo = mid + 1;
             } else {
                 hi = mid;

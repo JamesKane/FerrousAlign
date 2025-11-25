@@ -13,9 +13,9 @@
 // - Output: sam_output functions handle flag setting and formatting
 
 use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::sam_flags;
 use crate::alignment::finalization::mark_secondary_alignments;
-use crate::alignment::pipeline::{generate_seeds_for_paired, align_read_deferred};
+use crate::alignment::finalization::sam_flags;
+use crate::alignment::pipeline::{align_read_deferred, generate_seeds_for_paired};
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
@@ -25,9 +25,8 @@ use crate::mate_rescue::mem_matesw;
 use crate::mem_opt::MemOpt;
 use crate::pairing::mem_pair;
 use crate::sam_output::{
-    PairedFlagContext, create_unmapped_paired,
-    prepare_paired_alignment_read1, prepare_paired_alignment_read2,
-    write_sam_record,
+    PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
+    prepare_paired_alignment_read2, write_sam_record,
 };
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rayon::prelude::*;
@@ -201,19 +200,14 @@ pub fn process_paired_end(
     let mut total_bases = 0usize;
     let mut pairs_processed = 0u64; // Global pair counter for deterministic hash tie-breaking
 
-    // Calculate optimal batch size based on thread count (matching C++ bwa-mem2)
-    // Formula: (CHUNK_SIZE_BASES * n_threads) / AVG_READ_LEN
-    // C++ fastmap.cpp:947: aux.task_size = opt->chunk_size * opt->n_threads
-    // C++ fastmap.cpp:459: nreads = aux->actual_chunk_size / READ_LEN + 10
-    let num_threads = opt.n_threads as usize;
-    let batch_total_bases = CHUNK_SIZE_BASES * num_threads;
-    let reads_per_batch = (batch_total_bases / AVG_READ_LEN).max(MIN_BATCH_SIZE);
+    // Use fixed batch size matching BWA-MEM2 behavior
+    // CRITICAL FIX: The previous formula (CHUNK_SIZE_BASES * n_threads / AVG_READ_LEN)
+    // created massive batches (1.6M pairs with 16 threads), causing insert size
+    // stats to stall on 1.3M pairs. BWA-MEM2 uses fixed 512 read pairs per batch.
+    let reads_per_batch = MIN_BATCH_SIZE;
     log::debug!(
-        "Using batch size: {} reads ({} MB total, {} threads × {} MB/thread)",
-        reads_per_batch,
-        batch_total_bases / 1_000_000,
-        num_threads,
-        CHUNK_SIZE_BASES / 1_000_000
+        "Using batch size: {} read pairs (fixed, matching BWA-MEM2)",
+        reads_per_batch
     );
 
     // Create channel for pipeline communication
@@ -685,14 +679,17 @@ fn mate_rescue_batch(
 
             for j in 0..num_anchors {
                 let n = mem_matesw(
-                    bwa_idx, pac, stats, &alns1[j],
-                    &mate_seq, qual2, name2, alns2,
+                    bwa_idx, pac, stats, &alns1[j], &mate_seq, qual2, name2, alns2,
                 );
                 if n > 0 {
                     pair_rescued = true;
                     log::debug!(
                         "Pair {}: Rescued {} alignments for {} using {} anchor {}",
-                        i, n, name2, name1, j
+                        i,
+                        n,
+                        name2,
+                        name1,
+                        j
                     );
                 }
             }
@@ -707,27 +704,35 @@ fn mate_rescue_batch(
             if name1.contains("10009:11965") {
                 log::debug!(
                     "MATE_RESCUE_DEBUG {}: Using {} anchors from R2 to rescue R1",
-                    name1, num_anchors
+                    name1,
+                    num_anchors
                 );
                 for (idx, aln) in alns2.iter().enumerate().take(num_anchors) {
                     log::debug!(
                         "MATE_RESCUE_DEBUG {}: R2 anchor[{}] = {}:{} (rev={}, score={})",
-                        name1, idx, aln.ref_name, aln.pos,
-                        (aln.flag & 0x10) != 0, aln.score
+                        name1,
+                        idx,
+                        aln.ref_name,
+                        aln.pos,
+                        (aln.flag & 0x10) != 0,
+                        aln.score
                     );
                 }
             }
 
             for j in 0..num_anchors {
                 let n = mem_matesw(
-                    bwa_idx, pac, stats, &alns2[j],
-                    &mate_seq, qual1, name1, alns1,
+                    bwa_idx, pac, stats, &alns2[j], &mate_seq, qual1, name1, alns1,
                 );
                 if n > 0 {
                     pair_rescued = true;
                     log::debug!(
                         "Pair {}: Rescued {} alignments for {} using {} anchor {}",
-                        i, n, name1, name2, j
+                        i,
+                        n,
+                        name1,
+                        name2,
+                        j
                     );
                 }
             }
@@ -786,10 +791,7 @@ fn select_best_pair(
     let pair_result = mem_pair(stats, alignments1, alignments2, 2, pair_id, l_pac);
 
     if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
-        log::trace!(
-            "mem_pair selected best_idx1={}, best_idx2={}",
-            idx1, idx2
-        );
+        log::trace!("mem_pair selected best_idx1={}, best_idx2={}", idx1, idx2);
         (idx1, idx2, true)
     } else {
         // Fallback: even if mem_pair didn't find a valid pair, check if the top hits
@@ -961,7 +963,11 @@ fn output_batch_paired(
 
         log::debug!(
             "Processing pair {}: {} ({} alns), {} ({} alns)",
-            pair_id, name1, alignments1.len(), name2, alignments2.len()
+            pair_id,
+            name1,
+            alignments1.len(),
+            name2,
+            alignments2.len()
         );
 
         // Stage 1: Filter by score threshold
@@ -990,13 +996,17 @@ fn output_batch_paired(
         let best_idx2 = 0;
 
         // Stage 3: Build mate contexts for flag setting
-        let (mate2_ref, mate2_pos, mate2_flag, mate2_ref_len) = get_mate_info(&alignments2, best_idx2);
-        let (mate1_ref, mate1_pos, mate1_flag, mate1_ref_len) = get_mate_info(&alignments1, best_idx1);
+        let (mate2_ref, mate2_pos, mate2_flag, mate2_ref_len) =
+            get_mate_info(&alignments2, best_idx2);
+        let (mate1_ref, mate1_pos, mate1_flag, mate1_ref_len) =
+            get_mate_info(&alignments1, best_idx1);
 
-        let mate2_cigar = alignments2.get(best_idx2)
+        let mate2_cigar = alignments2
+            .get(best_idx2)
             .map(|a| a.cigar_string())
             .unwrap_or_else(|| "*".to_string());
-        let mate1_cigar = alignments1.get(best_idx1)
+        let mate1_cigar = alignments1
+            .get(best_idx1)
             .map(|a| a.cigar_string())
             .unwrap_or_else(|| "*".to_string());
 
@@ -1019,14 +1029,21 @@ fn output_batch_paired(
         };
 
         // Stage 4: Select which alignments to output
-        let output_indices1 = select_output_indices(&alignments1, best_idx1, opt.output_all_alignments, opt.t);
-        let output_indices2 = select_output_indices(&alignments2, best_idx2, opt.output_all_alignments, opt.t);
+        let output_indices1 =
+            select_output_indices(&alignments1, best_idx1, opt.output_all_alignments, opt.t);
+        let output_indices2 =
+            select_output_indices(&alignments2, best_idx2, opt.output_all_alignments, opt.t);
 
         // Stage 5: Write alignments for read1
         let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
         for idx in output_indices1 {
             let is_primary = idx == best_idx1;
-            prepare_paired_alignment_read1(&mut alignments1[idx], is_primary, &ctx_for_read1, rg_id.as_deref());
+            prepare_paired_alignment_read1(
+                &mut alignments1[idx],
+                is_primary,
+                &ctx_for_read1,
+                rg_id.as_deref(),
+            );
             write_sam_record(writer, &alignments1[idx], seq1_str, qual1)?;
             records_written += 1;
         }
@@ -1035,7 +1052,12 @@ fn output_batch_paired(
         let seq2_str = std::str::from_utf8(seq2).unwrap_or("");
         for idx in output_indices2 {
             let is_primary = idx == best_idx2;
-            prepare_paired_alignment_read2(&mut alignments2[idx], is_primary, &ctx_for_read2, rg_id.as_deref());
+            prepare_paired_alignment_read2(
+                &mut alignments2[idx],
+                is_primary,
+                &ctx_for_read2,
+                rg_id.as_deref(),
+            );
             write_sam_record(writer, &alignments2[idx], seq2_str, qual2)?;
             records_written += 1;
         }

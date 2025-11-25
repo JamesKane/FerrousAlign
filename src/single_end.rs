@@ -11,14 +11,14 @@
 // - Output: sam_output::write_sam_record() writes to stream
 
 use crate::alignment::finalization::Alignment;
-use crate::alignment::pipeline::{generate_seeds, align_read_deferred};
+use crate::alignment::pipeline::{align_read_deferred, generate_seeds};
 use crate::compute::ComputeContext;
 use crate::fastq_reader::FastqReader;
 use crate::index::BwaIndex;
 use crate::mem_opt::MemOpt;
 use crate::sam_output::{
-    select_single_end_alignments, prepare_single_end_alignment,
-    create_unmapped_single_end, write_sam_record,
+    create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
+    write_sam_record,
 };
 use rayon::prelude::*;
 use std::io::Write;
@@ -163,7 +163,15 @@ pub fn process_single_end(
                         )
                     } else {
                         // Standard pipeline
-                        generate_seeds(&bwa_idx_clone, &pac_data_clone, name, seq, qual, &opt_clone, read_id)
+                        generate_seeds(
+                            &bwa_idx_clone,
+                            &pac_data_clone,
+                            name,
+                            seq,
+                            qual,
+                            &opt_clone,
+                            read_id,
+                        )
                     }
                 })
                 .collect();
@@ -213,7 +221,9 @@ pub fn process_single_end(
                         rg_id.as_deref(),
                     );
 
-                    if let Err(e) = write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual) {
+                    if let Err(e) =
+                        write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual)
+                    {
                         log::error!("Error writing SAM record: {}", e);
                     }
                 }

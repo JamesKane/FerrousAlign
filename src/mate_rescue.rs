@@ -13,7 +13,7 @@
 
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
-use crate::alignment::ksw_affine_gap::{ksw_align2, Kswr, KSW_XBYTE, KSW_XSTART, KSW_XSUBO};
+use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
 use crate::index::BwaIndex;
 use crate::insert_size::InsertSizeStats;
 use crate::simd_abstraction::SimdEngine128;
@@ -21,11 +21,11 @@ use crate::simd_abstraction::SimdEngine128;
 /// Scoring matrix for mate rescue (5x5 for DNA: A=0, C=1, G=2, T=3, N=4)
 /// Match = 1, Mismatch = -4 (standard BWA-MEM2 defaults)
 const MATE_RESCUE_SCORING_MATRIX: [i8; 25] = [
-    1, -4, -4, -4, 0,   // A
-    -4, 1, -4, -4, 0,   // C
-    -4, -4, 1, -4, 0,   // G
-    -4, -4, -4, 1, 0,   // T
-    0, 0, 0, 0, 0,      // N
+    1, -4, -4, -4, 0, // A
+    -4, 1, -4, -4, 0, // C
+    -4, -4, 1, -4, 0, // G
+    -4, -4, -4, 1, 0, // T
+    0, 0, 0, 0, 0, // N
 ];
 
 /// Mate rescue using FULL Smith-Waterman alignment
@@ -108,8 +108,14 @@ pub fn mem_matesw(
     if is_debug_read {
         log::debug!(
             "MATE_RESCUE_SW {}: anchor {}:{} is_rev={}, ref_len={}, rb={}, stats[1]=[{},{}]",
-            mate_name, anchor.ref_name, anchor.pos, anchor_is_rev, anchor_ref_len, anchor_rb,
-            stats[1].low, stats[1].high
+            mate_name,
+            anchor.ref_name,
+            anchor.pos,
+            anchor_is_rev,
+            anchor_ref_len,
+            anchor_rb,
+            stats[1].low,
+            stats[1].high
         );
     }
 
@@ -124,8 +130,8 @@ pub fn mem_matesw(
         // Decode orientation bits (C++ lines 181-182)
         // r>>1 = anchor strand (0=forward, 1=reverse in bidirectional coords)
         // r&1 = mate strand (0=forward, 1=reverse in bidirectional coords)
-        let is_rev = (r >> 1) != (r & 1);  // Whether to reverse complement the mate
-        let is_larger = (r >> 1) == 0;      // Whether mate has larger coordinate
+        let is_rev = (r >> 1) != (r & 1); // Whether to reverse complement the mate
+        let is_larger = (r >> 1) == 0; // Whether mate has larger coordinate
 
         // Step 5: Prepare mate sequence (reverse complement if needed) (C++ lines 184-193)
         let mut seq: Vec<u8> = if is_rev {
@@ -175,7 +181,13 @@ pub fn mem_matesw(
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_SW {}: orientation {} is_rev={}, is_larger={}, search region [{}, {}), size={}",
-                mate_name, r, is_rev, is_larger, rb, re, re - rb
+                mate_name,
+                r,
+                is_rev,
+                is_larger,
+                rb,
+                re,
+                re - rb
             );
         }
 
@@ -192,7 +204,11 @@ pub fn mem_matesw(
             if is_debug_read {
                 log::debug!(
                     "MATE_RESCUE_SW {}: skipping orientation {} - rid={} (need {}), len={}",
-                    mate_name, r, rid, anchor.ref_id, adj_re - adj_rb
+                    mate_name,
+                    r,
+                    rid,
+                    anchor.ref_id,
+                    adj_re - adj_rb
                 );
             }
             continue;
@@ -202,9 +218,14 @@ pub fn mem_matesw(
 
         // Step 9: Perform FULL Smith-Waterman (NOT banded!) using ksw_align2 (C++ lines 217-223)
         // Build xtra flags matching BWA-MEM2
-        let xtra = KSW_XSUBO | KSW_XSTART |
-            if (l_ms * match_score) < 250 { KSW_XBYTE } else { 0 } |
-            (min_seed_len * match_score) as u32;
+        let xtra = KSW_XSUBO
+            | KSW_XSTART
+            | if (l_ms * match_score) < 250 {
+                KSW_XBYTE
+            } else {
+                0
+            }
+            | (min_seed_len * match_score) as u32;
 
         let aln: Kswr = unsafe {
             ksw_align2::<SimdEngine128>(
@@ -212,7 +233,7 @@ pub fn mem_matesw(
                 &mut seq,
                 ref_len,
                 &mut ref_seq,
-                5,  // m (alphabet size)
+                5, // m (alphabet size)
                 &MATE_RESCUE_SCORING_MATRIX,
                 o_del,
                 e_del,
@@ -225,7 +246,13 @@ pub fn mem_matesw(
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_SW {}: orientation {} SW result score={}, qb={}, qe={}, tb={}, te={}",
-                mate_name, r, aln.score, aln.qb, aln.qe, aln.tb, aln.te
+                mate_name,
+                r,
+                aln.score,
+                aln.qb,
+                aln.qe,
+                aln.tb,
+                aln.te
             );
         }
 
@@ -258,7 +285,9 @@ pub fn mem_matesw(
             if is_debug_read {
                 log::debug!(
                     "MATE_RESCUE_SW {}: skipping - rid mismatch: rescued_rid={}, anchor.ref_id={}",
-                    mate_name, rescued_rid, anchor.ref_id
+                    mate_name,
+                    rescued_rid,
+                    anchor.ref_id
                 );
             }
             continue;
@@ -325,7 +354,10 @@ pub fn mem_matesw(
         if is_debug_read {
             log::debug!(
                 "MATE_RESCUE_SW {}: RESCUED! pos={}, score={}, cigar={:?}",
-                mate_name, chr_pos, aln.score, rescued_aln.cigar
+                mate_name,
+                chr_pos,
+                aln.score,
+                rescued_aln.cigar
             );
         }
 
@@ -351,11 +383,7 @@ fn mem_infer_dir(l_pac: i64, b1: i64, b2: i64) -> (usize, i64) {
     let r2 = if b2 >= l_pac { 1 } else { 0 };
 
     // Project b2 onto b1's strand
-    let p2 = if r1 == r2 {
-        b2
-    } else {
-        (l_pac << 1) - 1 - b2
-    };
+    let p2 = if r1 == r2 { b2 } else { (l_pac << 1) - 1 - b2 };
 
     // Calculate absolute distance
     let dist = if p2 > b1 { p2 - b1 } else { b1 - p2 };

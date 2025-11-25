@@ -443,8 +443,6 @@ pub unsafe fn _mm_max_epu16(a: __m128i, b: __m128i) -> __m128i {
     }
 }
 
-
-
 // ===== Additional intrinsics for Smith-Waterman optimization =====
 
 #[inline]
@@ -597,12 +595,6 @@ pub unsafe fn _mm_andnot_si128(a: __m128i, b: __m128i) -> __m128i {
 // Note: For x86 intrinsics, shift amounts must be compile-time constants.
 // We provide wrapper macros for variable shift amounts, but the trait methods
 // use fixed values that match the C++ bwa-mem2 implementation.
-
-
-
-
-
-
 
 // Note: For x86 intrinsics, shift amounts must be compile-time constants.
 // We provide wrapper macros for variable shift amounts, but the trait methods

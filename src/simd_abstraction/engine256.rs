@@ -155,7 +155,6 @@ impl SimdEngine for SimdEngine256 {
         }
     }
 
-
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn extract_epi16(a: Self::Vec16, imm8: i32) -> i16 {
@@ -173,13 +172,11 @@ impl SimdEngine for SimdEngine256 {
         }
     }
 
-
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn movemask_epi8(a: Self::Vec8) -> i32 {
         simd_arch::_mm256_movemask_epi8(a)
     }
-
 
     #[inline]
     #[target_feature(enable = "avx2")]
@@ -204,13 +201,11 @@ impl SimdEngine for SimdEngine256 {
 
     // ===== Variable Shift Operations =====
 
-
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn slli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
         mm256_match_shift_bytes!(a, num_bytes, _mm256_slli_si256)
     }
-
 
     #[inline]
     #[target_feature(enable = "avx2")]
@@ -218,13 +213,11 @@ impl SimdEngine for SimdEngine256 {
         Self::slli_bytes(a, num_bytes)
     }
 
-
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn srli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
         mm256_match_shift_bytes!(a, num_bytes, _mm256_srli_si256)
     }
-
 
     #[inline]
     #[target_feature(enable = "avx2")]
@@ -232,13 +225,11 @@ impl SimdEngine for SimdEngine256 {
         Self::srli_bytes(a, num_bytes)
     }
 
-
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn alignr_bytes(a: Self::Vec8, b: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
         mm256_alignr_bytes_match!(a, b, num_bytes)
     }
-
 
     #[inline]
     #[target_feature(enable = "avx2")]

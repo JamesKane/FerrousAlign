@@ -135,7 +135,8 @@ pub fn mem_pair(
 
     // Build sorted array of alignment positions in bidirectional coordinates
     // This matches BWA-MEM2's `v` array in mem_pair()
-    let mut alignments_sorted: Vec<AlignmentForPairing> = Vec::with_capacity(alns1.len() + alns2.len());
+    let mut alignments_sorted: Vec<AlignmentForPairing> =
+        Vec::with_capacity(alns1.len() + alns2.len());
 
     // Add alignments from read1
     for (alignment_idx, aln) in alns1.iter().enumerate() {
@@ -159,10 +160,19 @@ pub fn mem_pair(
 
         log::trace!(
             "mem_pair R1[{}]: sam_pos={}, ref_len={}, is_rev={}, bidir_pos={}, fwd_norm={}, ref_id={}",
-            alignment_idx, aln.pos, alignment_length, is_reverse, bidir_pos, fwd_normalized_pos, aln.ref_id
+            alignment_idx,
+            aln.pos,
+            alignment_length,
+            is_reverse,
+            bidir_pos,
+            fwd_normalized_pos,
+            aln.ref_id
         );
 
-        alignments_sorted.push(AlignmentForPairing { sort_key, packed_info });
+        alignments_sorted.push(AlignmentForPairing {
+            sort_key,
+            packed_info,
+        });
     }
 
     // Add alignments from read2
@@ -182,10 +192,19 @@ pub fn mem_pair(
 
         log::trace!(
             "mem_pair R2[{}]: sam_pos={}, ref_len={}, is_rev={}, bidir_pos={}, fwd_norm={}, ref_id={}",
-            alignment_idx, aln.pos, alignment_length, is_reverse, bidir_pos, fwd_normalized_pos, aln.ref_id
+            alignment_idx,
+            aln.pos,
+            alignment_length,
+            is_reverse,
+            bidir_pos,
+            fwd_normalized_pos,
+            aln.ref_id
         );
 
-        alignments_sorted.push(AlignmentForPairing { sort_key, packed_info });
+        alignments_sorted.push(AlignmentForPairing {
+            sort_key,
+            packed_info,
+        });
     }
 
     // Sort by position (matches BWA-MEM2's ks_introsort_128)
@@ -251,19 +270,30 @@ pub fn mem_pair(
 
                 log::trace!(
                     "mem_pair: Checking pair current_idx={}, search_idx={}, orientation={}, distance={}, bounds=[{}, {}]",
-                    current_idx, search_idx, orientation_idx, distance, stats[orientation_idx].low, stats[orientation_idx].high
+                    current_idx,
+                    search_idx,
+                    orientation_idx,
+                    distance,
+                    stats[orientation_idx].low,
+                    stats[orientation_idx].high
                 );
 
                 // Check distance bounds
                 if distance > stats[orientation_idx].high as i64 {
-                    log::trace!("mem_pair: Distance {} exceeds upper bound {}, stopping search",
-                        distance, stats[orientation_idx].high);
+                    log::trace!(
+                        "mem_pair: Distance {} exceeds upper bound {}, stopping search",
+                        distance,
+                        stats[orientation_idx].high
+                    );
                     break; // Too far apart, stop searching
                 }
 
                 if distance < stats[orientation_idx].low as i64 {
-                    log::trace!("mem_pair: Distance {} below lower bound {}, continuing",
-                        distance, stats[orientation_idx].low);
+                    log::trace!(
+                        "mem_pair: Distance {} below lower bound {}, continuing",
+                        distance,
+                        stats[orientation_idx].low
+                    );
                     if search_idx == 0 {
                         break;
                     }
@@ -280,7 +310,8 @@ pub fn mem_pair(
                 // - ns = (distance - mean) / stddev (normalized insert size)
                 // - 0.721 = 1/log(4) converts natural log to base-4
                 // - erfc is the complementary error function
-                let normalized_insert_size = (distance as f64 - stats[orientation_idx].avg) / stats[orientation_idx].std;
+                let normalized_insert_size =
+                    (distance as f64 - stats[orientation_idx].avg) / stats[orientation_idx].std;
 
                 let insert_size_log_penalty = 0.721
                     * (2.0 * erfc(normalized_insert_size.abs() / std::f64::consts::SQRT_2)).ln()
@@ -288,7 +319,8 @@ pub fn mem_pair(
 
                 let current_score = (current.packed_info >> 32) as i32;
                 let mate_score = (candidate_mate.packed_info >> 32) as i32;
-                let mut combined_score = current_score + mate_score + (insert_size_log_penalty + 0.499) as i32;
+                let mut combined_score =
+                    current_score + mate_score + (insert_size_log_penalty + 0.499) as i32;
 
                 if combined_score < 0 {
                     combined_score = 0;
@@ -318,7 +350,9 @@ pub fn mem_pair(
 
                 log::trace!(
                     "mem_pair: Valid pair found! orientation={}, distance={}, combined_score={}",
-                    orientation_idx, distance, combined_score
+                    orientation_idx,
+                    distance,
+                    combined_score
                 );
 
                 if search_idx == 0 {
@@ -336,17 +370,16 @@ pub fn mem_pair(
     if candidate_pairs.is_empty() {
         log::trace!(
             "mem_pair: No valid pairs found. alignments_sorted.len()={}, last_seen={:?}",
-            alignments_sorted.len(), last_seen_idx
+            alignments_sorted.len(),
+            last_seen_idx
         );
         return None;
     }
 
     // Sort by score (descending), then by hash for deterministic tie-breaking
-    candidate_pairs.sort_by(|a, b| {
-        match b.combined_score.cmp(&a.combined_score) {
-            std::cmp::Ordering::Equal => b.tiebreak_hash.cmp(&a.tiebreak_hash),
-            other => other,
-        }
+    candidate_pairs.sort_by(|a, b| match b.combined_score.cmp(&a.combined_score) {
+        std::cmp::Ordering::Equal => b.tiebreak_hash.cmp(&a.tiebreak_hash),
+        other => other,
     });
 
     let best_pair = &candidate_pairs[0];

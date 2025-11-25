@@ -142,8 +142,8 @@ impl BandedPairWiseSW {
             mat,
             w_match,
             w_mismatch, // Keep negative: caller passes -opt.b (e.g., -4), SIMD adds this to subtract
-            w_open: o_del as i8,         // Cast to i8
-            w_extend: e_del as i8,       // Cast to i8
+            w_open: o_del as i8, // Cast to i8
+            w_extend: e_del as i8, // Cast to i8
             w_ambig: DEFAULT_AMBIG,
         }
     }
@@ -1233,11 +1233,7 @@ impl BandedPairWiseSW {
             let mut prev_h = h0_val;
             for j in 1..(qlen[lane] as usize).min(MAX_SEQ_LEN) {
                 let new_h = if j == 1 {
-                    if prev_h > oe_ins {
-                        prev_h - oe_ins
-                    } else {
-                        0
-                    }
+                    if prev_h > oe_ins { prev_h - oe_ins } else { 0 }
                 } else if prev_h > self.e_ins as i16 {
                     prev_h - self.e_ins as i16
                 } else {
@@ -1255,8 +1251,7 @@ impl BandedPairWiseSW {
 
         // Main DP loop using SIMD (16-bit operations)
         unsafe {
-            let mut max_score_vec =
-                _mm_loadu_si128(max_scores.as_ptr() as *const __m128i);
+            let mut max_score_vec = _mm_loadu_si128(max_scores.as_ptr() as *const __m128i);
 
             for i in 0..max_tlen as usize {
                 // Load target base for this row
@@ -1320,7 +1315,9 @@ impl BandedPairWiseSW {
                     // Compute match/mismatch score
                     let mut match_scores = [0i16; SIMD_WIDTH];
                     for lane in 0..SIMD_WIDTH {
-                        if terminated[lane] || j >= current_end[lane] as usize || j < current_beg[lane] as usize
+                        if terminated[lane]
+                            || j >= current_end[lane] as usize
+                            || j < current_beg[lane] as usize
                         {
                             match_scores[lane] = 0;
                             continue;
@@ -1346,14 +1343,20 @@ impl BandedPairWiseSW {
                     let h11_vec = _mm_max_epi16(h11_vec, zero_vec);
 
                     // Store H(i, j-1) for next iteration
-                    _mm_storeu_si128(h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i, h1_vec);
+                    _mm_storeu_si128(
+                        h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i,
+                        h1_vec,
+                    );
 
                     // Compute E(i+1, j) = max(M - oe_del, E - e_del)
                     let e_from_m = _mm_subs_epi16(m_vec, oe_del_vec);
                     let e_from_e = _mm_subs_epi16(e_vec, e_del_vec);
                     let new_e_vec = _mm_max_epi16(e_from_m, e_from_e);
                     let new_e_vec = _mm_max_epi16(new_e_vec, zero_vec);
-                    _mm_storeu_si128(e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i, new_e_vec);
+                    _mm_storeu_si128(
+                        e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m128i,
+                        new_e_vec,
+                    );
 
                     // Compute F(i, j+1) = max(M - oe_ins, F - e_ins)
                     let f_from_m = _mm_subs_epi16(m_vec, oe_ins_vec);
@@ -1440,8 +1443,8 @@ impl BandedPairWiseSW {
         for i in 0..batch_size {
             results.push(OutScore {
                 score: max_scores[i] as i32,
-                target_end_pos: max_i[i] as i32 + 1,  // +1 to match scalar output (1-indexed)
-                query_end_pos: max_j[i] as i32 + 1,   // +1 to match scalar output (1-indexed)
+                target_end_pos: max_i[i] as i32 + 1, // +1 to match scalar output (1-indexed)
+                query_end_pos: max_j[i] as i32 + 1,  // +1 to match scalar output (1-indexed)
                 gtarget_end_pos: max_ie[i] as i32,
                 global_score: gscores[i] as i32,
                 max_offset: 0,
@@ -3377,8 +3380,14 @@ mod tests {
         let h0 = 0;
 
         // Scalar scoring
-        let (scalar_score, _, _, _) =
-            bsw.scalar_banded_swa(query.len() as i32, &query, target.len() as i32, &target, w, h0);
+        let (scalar_score, _, _, _) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            w,
+            h0,
+        );
 
         // SIMD scoring (batch of 1)
         let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = vec![(
@@ -3414,8 +3423,14 @@ mod tests {
         let h0 = 0;
 
         // Scalar scoring
-        let (scalar_score, _, _, _) =
-            bsw.scalar_banded_swa(query.len() as i32, &query, target.len() as i32, &target, w, h0);
+        let (scalar_score, _, _, _) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            w,
+            h0,
+        );
 
         // SIMD scoring
         let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = vec![(
@@ -3451,8 +3466,14 @@ mod tests {
         let h0 = 19; // Typical seed score: 19bp * 1 match = 19
 
         // Scalar scoring
-        let (scalar_score, _, _, _) =
-            bsw.scalar_banded_swa(query.len() as i32, &query, target.len() as i32, &target, w, h0);
+        let (scalar_score, _, _, _) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            w,
+            h0,
+        );
 
         // SIMD scoring
         let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = vec![(
@@ -3499,8 +3520,14 @@ mod tests {
         let h0 = 19; // Typical seed score
 
         // Scalar scoring
-        let (scalar_score, _, _, _) =
-            bsw.scalar_banded_swa(query.len() as i32, &query, target.len() as i32, &target, w, h0);
+        let (scalar_score, _, _, _) = bsw.scalar_banded_swa(
+            query.len() as i32,
+            &query,
+            target.len() as i32,
+            &target,
+            w,
+            h0,
+        );
 
         // SIMD scoring
         let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = vec![(
@@ -3533,10 +3560,10 @@ mod tests {
         // Prepare multiple alignment cases
         let cases: Vec<(Vec<u8>, Vec<u8>, i32, i32)> = vec![
             // (query, target, w, h0)
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3], 10, 0),       // Exact match
-            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3], 10, 0),       // One mismatch
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 2, 3], 10, 0), // Exact match
+            (vec![0u8, 1, 2, 3], vec![0u8, 1, 1, 3], 10, 0), // One mismatch
             (vec![0u8, 1, 2, 3, 0, 1], vec![0u8, 1, 2, 3, 0, 1], 10, 10), // With h0
-            (vec![0u8; 20], vec![0u8; 20], 10, 5),                 // All A's
+            (vec![0u8; 20], vec![0u8; 20], 10, 5),           // All A's
         ];
 
         // Get scalar scores
@@ -3590,17 +3617,24 @@ mod tests {
         let h0 = 0;
 
         // Match case
-        let (scalar_match, _, _, _) =
-            bsw.scalar_banded_swa(10, &query_aa, 10, &target_aa, w, h0);
-        let simd_match = bsw.simd_banded_swa_batch8_int16(&[(10, &query_aa[..], 10, &target_aa[..], w, h0)]);
+        let (scalar_match, _, _, _) = bsw.scalar_banded_swa(10, &query_aa, 10, &target_aa, w, h0);
+        let simd_match =
+            bsw.simd_banded_swa_batch8_int16(&[(10, &query_aa[..], 10, &target_aa[..], w, h0)]);
 
         // Mismatch case
         let (scalar_mismatch, _, _, _) =
             bsw.scalar_banded_swa(10, &query_ac, 10, &target_ac, w, h0);
-        let simd_mismatch = bsw.simd_banded_swa_batch8_int16(&[(10, &query_ac[..], 10, &target_ac[..], w, h0)]);
+        let simd_mismatch =
+            bsw.simd_banded_swa_batch8_int16(&[(10, &query_ac[..], 10, &target_ac[..], w, h0)]);
 
-        println!("All matches - Scalar: {}, SIMD: {}", scalar_match.score, simd_match[0].score);
-        println!("All mismatches - Scalar: {}, SIMD: {}", scalar_mismatch.score, simd_mismatch[0].score);
+        println!(
+            "All matches - Scalar: {}, SIMD: {}",
+            scalar_match.score, simd_match[0].score
+        );
+        println!(
+            "All mismatches - Scalar: {}, SIMD: {}",
+            scalar_mismatch.score, simd_mismatch[0].score
+        );
 
         assert_eq!(
             scalar_match.score, simd_match[0].score,

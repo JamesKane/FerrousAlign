@@ -376,7 +376,10 @@ AGCT
         // Position exactly at 2*l_pac should return -1
         let result = bns.pos_to_rid(l_pac * 2 - 10, l_pac * 2);
         // Either -1 or valid depending on boundary handling
-        assert!(result == -1 || result == 0, "Near-boundary position should be handled");
+        assert!(
+            result == -1 || result == 0,
+            "Near-boundary position should be handled"
+        );
 
         cleanup_test_files(&test_dir);
         Ok(())

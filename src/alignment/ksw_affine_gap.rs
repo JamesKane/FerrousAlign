@@ -782,8 +782,8 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
     };
 
     // Check if we need to find start positions
-    let should_find_start = (xtra & KSW_XSTART) != 0
-        && !((xtra & KSW_XSUBO) != 0 && r.score < (xtra & 0xffff) as i32);
+    let should_find_start =
+        (xtra & KSW_XSTART) != 0 && !((xtra & KSW_XSUBO) != 0 && r.score < (xtra & 0xffff) as i32);
 
     let final_result = if should_find_start && r.qe >= 0 && r.te >= 0 {
         // Reverse sequences to find start positions
@@ -1085,7 +1085,11 @@ pub fn ksw_extend2(
 
         // Check if entire query is aligned
         if (beg..end).contains(&(qlen - 1)) || end == qlen {
-            let h_end = if end == qlen { h1 } else { eh[(qlen - 1) as usize].h };
+            let h_end = if end == qlen {
+                h1
+            } else {
+                eh[(qlen - 1) as usize].h
+            };
             if gscore < h_end {
                 gscore = h_end;
                 max_ie = i;
@@ -1258,9 +1262,7 @@ mod tests {
         let target = encode_seq(b"ACCT");
         let mat = get_dna_scoring_matrix();
 
-        let result = ksw_extend(
-            4, &query, 4, &target, 5, &mat, 5, 1, 50, 0, 100, 10,
-        );
+        let result = ksw_extend(4, &query, 4, &target, 5, &mat, 5, 1, 50, 0, 100, 10);
 
         // Score should be lower due to mismatch
         assert!(result.score > 0, "Score should be positive");
@@ -1303,12 +1305,16 @@ mod tests {
         let mat = get_dna_scoring_matrix();
 
         let result = ksw_extend(
-            10, &query, 10, &target, 5, &mat, 5, 1, 50, 0, 5, // Small zdrop to trigger early termination
+            10, &query, 10, &target, 5, &mat, 5, 1, 50, 0,
+            5,  // Small zdrop to trigger early termination
             10, // h0
         );
 
         // With all mismatches and small zdrop, should terminate early
-        assert!(result.tle < 10 || result.score < 10, "Should terminate early due to zdrop");
+        assert!(
+            result.tle < 10 || result.score < 10,
+            "Should terminate early due to zdrop"
+        );
     }
 
     #[test]
@@ -1377,12 +1383,15 @@ mod tests {
                 &mut target,
                 5,
                 &mat,
-                5,  // gapo
-                1,  // gape
-                0,  // xtra (no special flags)
+                5, // gapo
+                1, // gape
+                0, // xtra (no special flags)
             );
 
-            assert!(result.score > 0, "Score should be positive for perfect match");
+            assert!(
+                result.score > 0,
+                "Score should be positive for perfect match"
+            );
             assert!(result.te >= 0, "Target end should be set");
             assert!(result.qe >= 0, "Query end should be set");
         }
@@ -1500,20 +1509,10 @@ mod tests {
 
         // Start with h0=20 (simulating a 10bp seed with match score 2)
         let result = ksw_extend2(
-            45,
-            &query,
-            30,
-            &target,
-            5,
-            &mat,
-            5,
-            1,
-            5,
-            1,
-            50, // Wide band
-            0,  // end_bonus
+            45, &query, 30, &target, 5, &mat, 5, 1, 5, 1, 50,  // Wide band
+            0,   // end_bonus
             200, // zdrop
-            20, // h0 from seed
+            20,  // h0 from seed
         );
 
         println!(
@@ -1551,20 +1550,8 @@ mod tests {
         let mat = get_dna_scoring_matrix();
 
         let result = ksw_extend2(
-            27,
-            &query,
-            16,
-            &target,
-            5,
-            &mat,
-            5,
-            1,
-            5,
-            1,
-            30, // Moderate band
-            0,
-            100,
-            10, // h0
+            27, &query, 16, &target, 5, &mat, 5, 1, 5, 1, 30, // Moderate band
+            0, 100, 10, // h0
         );
 
         println!(
@@ -1575,6 +1562,9 @@ mod tests {
         // Verify we get a reasonable alignment
         // With 8bp matching prefix + 8bp matching suffix - penalties
         // Expected: ~32 (16 matches * 2) - gap penalties
-        assert!(result.score > 5, "Should find alignment with positive score");
+        assert!(
+            result.score > 5,
+            "Should find alignment with positive score"
+        );
     }
 }

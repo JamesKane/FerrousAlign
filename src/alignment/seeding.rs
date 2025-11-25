@@ -278,9 +278,7 @@ pub fn generate_smems_for_strand(
                 }
 
                 // Keep condition: interval still above threshold AND unique interval size
-                if new_smem.interval_size >= min_intv
-                    && (new_smem.interval_size as i64) != curr_s
-                {
+                if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                     curr_s = new_smem.interval_size as i64;
                     curr_array_buf.push(new_smem);
                     if !is_reverse_complement {
@@ -336,9 +334,7 @@ pub fn generate_smems_for_strand(
                 }
 
                 // Keep if above threshold and unique interval size
-                if new_smem.interval_size >= min_intv
-                    && (new_smem.interval_size as i64) != curr_s
-                {
+                if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                     curr_s = new_smem.interval_size as i64;
                     curr_array_buf.push(new_smem);
                 }
@@ -508,9 +504,7 @@ pub fn generate_smems_from_position(
                 break;
             }
 
-            if new_smem.interval_size >= min_intv
-                && (new_smem.interval_size as i64) != curr_s
-            {
+            if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                 curr_s = new_smem.interval_size as i64;
                 curr_array_buf.push(new_smem);
                 break;
@@ -526,9 +520,7 @@ pub fn generate_smems_from_position(
             let mut new_smem = backward_ext(bwa_idx, smem, a);
             new_smem.query_start = j as i32;
 
-            if new_smem.interval_size >= min_intv
-                && (new_smem.interval_size as i64) != curr_s
-            {
+            if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                 curr_s = new_smem.interval_size as i64;
                 curr_array_buf.push(new_smem);
             }

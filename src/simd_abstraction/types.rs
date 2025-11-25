@@ -13,7 +13,7 @@
 //!
 //! Safety: all methods that reinterpret vector types are simple bitcasts (no
 //! lane reordering), implemented via NEON `vreinterpret` intrinsics.
- 
+
 #[cfg(target_arch = "x86_64")]
 pub(crate) use std::arch::x86_64 as simd_arch;
 

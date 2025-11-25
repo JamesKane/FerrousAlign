@@ -4,7 +4,7 @@
 // This module provides a clean separation between alignment computation
 // and I/O concerns.
 
-use crate::alignment::finalization::{sam_flags, Alignment};
+use crate::alignment::finalization::{Alignment, sam_flags};
 use crate::mem_opt::MemOpt;
 use std::io::Write;
 
@@ -27,10 +27,7 @@ pub struct SelectedAlignments {
 /// Implements bwa-mem2 output logic:
 /// - If best alignment score < threshold: output unmapped record
 /// - Otherwise: output primary, supplementary, and optionally secondary alignments
-pub fn select_single_end_alignments(
-    alignments: &[Alignment],
-    opt: &MemOpt,
-) -> SelectedAlignments {
+pub fn select_single_end_alignments(alignments: &[Alignment], opt: &MemOpt) -> SelectedAlignments {
     if alignments.is_empty() {
         return SelectedAlignments {
             output_indices: vec![],
@@ -73,7 +70,9 @@ pub fn select_single_end_alignments(
     let mut output_indices = Vec::new();
     log::debug!(
         "select_single_end_alignments: {} alignments, primary_idx={}, output_all={}",
-        alignments.len(), primary_idx, opt.output_all_alignments
+        alignments.len(),
+        primary_idx,
+        opt.output_all_alignments
     );
     for (idx, alignment) in alignments.iter().enumerate() {
         let is_unmapped = alignment.flag & sam_flags::UNMAPPED != 0;
@@ -82,7 +81,12 @@ pub fn select_single_end_alignments(
         let is_best = idx == primary_idx;
         log::debug!(
             "  align[{}]: flag={}, score={}, is_secondary={}, is_supp={}, is_best={}",
-            idx, alignment.flag, alignment.score, is_secondary, is_supplementary, is_best
+            idx,
+            alignment.flag,
+            alignment.score,
+            is_secondary,
+            is_supplementary,
+            is_best
         );
 
         let should_output = if opt.output_all_alignments {
@@ -311,10 +315,7 @@ pub fn prepare_paired_alignment_read2(
 // ============================================================================
 
 /// Create an unmapped alignment record for single-end reads
-pub fn create_unmapped_single_end(
-    query_name: &str,
-    seq_len: usize,
-) -> Alignment {
+pub fn create_unmapped_single_end(query_name: &str, seq_len: usize) -> Alignment {
     Alignment {
         query_name: query_name.to_string(),
         flag: sam_flags::UNMAPPED,
@@ -342,15 +343,16 @@ pub fn create_unmapped_single_end(
 }
 
 /// Create an unmapped alignment record for paired-end reads
-pub fn create_unmapped_paired(
-    query_name: &str,
-    seq: &[u8],
-    is_first_in_pair: bool,
-) -> Alignment {
+pub fn create_unmapped_paired(query_name: &str, seq: &[u8], is_first_in_pair: bool) -> Alignment {
     Alignment {
         query_name: query_name.to_string(),
-        flag: sam_flags::UNMAPPED | sam_flags::PAIRED |
-              if is_first_in_pair { sam_flags::FIRST_IN_PAIR } else { sam_flags::SECOND_IN_PAIR },
+        flag: sam_flags::UNMAPPED
+            | sam_flags::PAIRED
+            | if is_first_in_pair {
+                sam_flags::FIRST_IN_PAIR
+            } else {
+                sam_flags::SECOND_IN_PAIR
+            },
         ref_name: "*".to_string(),
         ref_id: 0,
         pos: 0,
@@ -490,9 +492,9 @@ mod tests {
         opt.output_all_alignments = false;
 
         let alignments = vec![
-            make_test_alignment("read1", 100, 0),                            // Primary
-            make_test_alignment("read1", 80, sam_flags::SUPPLEMENTARY),      // Supplementary
-            make_test_alignment("read1", 70, sam_flags::SECONDARY),          // Secondary
+            make_test_alignment("read1", 100, 0), // Primary
+            make_test_alignment("read1", 80, sam_flags::SUPPLEMENTARY), // Supplementary
+            make_test_alignment("read1", 70, sam_flags::SECONDARY), // Secondary
         ];
 
         let result = select_single_end_alignments(&alignments, &opt);
@@ -534,8 +536,8 @@ mod tests {
         // Alignment 0: lower score, not secondary (should be primary)
         // Alignment 1: higher score, but marked SECONDARY
         let alignments = vec![
-            make_test_alignment("read1", 100, 0),  // Not secondary
-            make_test_alignment("read1", 150, sam_flags::SECONDARY),  // Higher score but secondary
+            make_test_alignment("read1", 100, 0), // Not secondary
+            make_test_alignment("read1", 150, sam_flags::SECONDARY), // Higher score but secondary
         ];
 
         let result = select_single_end_alignments(&alignments, &opt);
@@ -564,7 +566,12 @@ mod tests {
         prepare_single_end_alignment(&mut alignment, true, Some("sample1"));
 
         // Should have RG tag
-        assert!(alignment.tags.iter().any(|(tag, val)| tag == "RG" && val == "Z:sample1"));
+        assert!(
+            alignment
+                .tags
+                .iter()
+                .any(|(tag, val)| tag == "RG" && val == "Z:sample1")
+        );
     }
 
     #[test]
@@ -587,7 +594,13 @@ mod tests {
         assert_eq!(unmapped_r1.flag & sam_flags::UNMAPPED, sam_flags::UNMAPPED);
 
         // R1 should be FIRST_IN_PAIR, R2 should be SECOND_IN_PAIR
-        assert_eq!(unmapped_r1.flag & sam_flags::FIRST_IN_PAIR, sam_flags::FIRST_IN_PAIR);
-        assert_eq!(unmapped_r2.flag & sam_flags::SECOND_IN_PAIR, sam_flags::SECOND_IN_PAIR);
+        assert_eq!(
+            unmapped_r1.flag & sam_flags::FIRST_IN_PAIR,
+            sam_flags::FIRST_IN_PAIR
+        );
+        assert_eq!(
+            unmapped_r2.flag & sam_flags::SECOND_IN_PAIR,
+            sam_flags::SECOND_IN_PAIR
+        );
     }
 }

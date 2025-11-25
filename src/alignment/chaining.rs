@@ -17,9 +17,9 @@ pub struct Chain {
     pub rid: i32,      // Reference sequence ID (chromosome)
     pos: u64,          // B-tree key: reference position of first seed
     // Last seed info for test_and_merge (matching C++ behavior)
-    last_qbeg: i32,    // Last seed's query begin
-    last_rbeg: u64,    // Last seed's reference begin
-    last_len: i32,     // Last seed's length
+    last_qbeg: i32, // Last seed's query begin
+    last_rbeg: u64, // Last seed's reference begin
+    last_len: i32,  // Last seed's length
 }
 
 // ============================================================================
@@ -80,7 +80,7 @@ fn test_and_merge(
     }
 
     // C++ lines 373-374: Calculate x and y from LAST SEED's position
-    let x = seed.query_pos - chain.last_qbeg;           // query distance from last seed
+    let x = seed.query_pos - chain.last_qbeg; // query distance from last seed
     let y = seed.ref_pos as i64 - chain.last_rbeg as i64; // reference distance from last seed
 
     // C++ line 375-377: All conditions for merging
@@ -127,7 +127,11 @@ const MAX_CHAINS_PER_READ: usize = 10_000;
 
 /// B-tree based seed chaining with explicit l_pac parameter
 /// l_pac is the length of the packed reference (for strand detection)
-pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) -> (Vec<Chain>, Vec<Seed>) {
+pub fn chain_seeds_with_l_pac(
+    mut seeds: Vec<Seed>,
+    opt: &MemOpt,
+    l_pac: u64,
+) -> (Vec<Chain>, Vec<Seed>) {
     if seeds.is_empty() {
         return (Vec::new(), seeds);
     }
@@ -142,7 +146,10 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
         seeds.truncate(MAX_SEEDS_PER_READ);
     }
 
-    log::debug!("chain_seeds: Input with {} seeds (B-tree algorithm)", seeds.len());
+    log::debug!(
+        "chain_seeds: Input with {} seeds (B-tree algorithm)",
+        seeds.len()
+    );
 
     // 1. Sort seeds by (query_pos, query_end) - CRITICAL for overlapping seed handling!
     // BWA-MEM2 sorts SMEMs by (query_start, query_end), which ensures that when
@@ -179,7 +186,9 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
                     merged = true;
                     log::trace!(
                         "  Seed {} merged into chain {} (pos={})",
-                        seed_idx, chain_idx, chain_pos
+                        seed_idx,
+                        chain_idx,
+                        chain_pos
                     );
                 }
             }
@@ -230,7 +239,9 @@ pub fn chain_seeds_with_l_pac(mut seeds: Vec<Seed>, opt: &MemOpt, l_pac: u64) ->
 
             log::trace!(
                 "  Seed {} created new chain {} (pos={})",
-                seed_idx, new_chain_idx, seed_rpos
+                seed_idx,
+                new_chain_idx,
+                seed_rpos
             );
         }
     }
@@ -566,9 +577,9 @@ mod tests {
     /// Helper to create default MemOpt for testing
     fn default_test_opt() -> MemOpt {
         let mut opt = MemOpt::default();
-        opt.w = 100;                // Band width
-        opt.max_chain_gap = 10000;  // Max gap in chain
-        opt.min_chain_weight = 0;   // Keep all chains for testing
+        opt.w = 100; // Band width
+        opt.max_chain_gap = 10000; // Max gap in chain
+        opt.min_chain_weight = 0; // Keep all chains for testing
         opt.min_seed_len = 19;
         opt.drop_ratio = 0.5;
         opt.mask_level = 0.5;
@@ -606,8 +617,8 @@ mod tests {
         // Two seeds that should chain together (close on both query and ref)
         let opt = default_test_opt();
         let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),   // First seed
-            make_seed(25, 1025, 20, false, 0),  // Second seed: 5bp gap on both
+            make_seed(0, 1000, 20, false, 0),  // First seed
+            make_seed(25, 1025, 20, false, 0), // Second seed: 5bp gap on both
         ];
         let (chains, _) = chain_seeds(seeds, &opt);
 
@@ -624,8 +635,8 @@ mod tests {
         // Seeds on different strands should not chain
         let opt = default_test_opt();
         let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),  // Forward
-            make_seed(25, 1025, 20, true, 0),  // Reverse
+            make_seed(0, 1000, 20, false, 0), // Forward
+            make_seed(25, 1025, 20, true, 0), // Reverse
         ];
         let (chains, _) = chain_seeds(seeds, &opt);
 
@@ -641,7 +652,7 @@ mod tests {
 
         let seeds = vec![
             make_seed(0, 1000, 20, false, 0),
-            make_seed(200, 1200, 20, false, 0),  // 180bp gap > 100
+            make_seed(200, 1200, 20, false, 0), // 180bp gap > 100
         ];
         let (chains, _) = chain_seeds(seeds, &opt);
 
@@ -654,8 +665,8 @@ mod tests {
         // Seeds on different chromosomes should not chain
         let opt = default_test_opt();
         let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),   // chr0
-            make_seed(25, 1025, 20, false, 1),  // chr1
+            make_seed(0, 1000, 20, false, 0),  // chr0
+            make_seed(25, 1025, 20, false, 1), // chr1
         ];
         let (chains, _) = chain_seeds(seeds, &opt);
 
@@ -670,8 +681,8 @@ mod tests {
         // A seed fully contained in existing chain should be merged (ignored)
         let opt = default_test_opt();
         let seeds = vec![
-            make_seed(0, 1000, 50, false, 0),   // Large seed
-            make_seed(10, 1010, 10, false, 0),  // Small seed contained in first
+            make_seed(0, 1000, 50, false, 0),  // Large seed
+            make_seed(10, 1010, 10, false, 0), // Small seed contained in first
         ];
         let (chains, _) = chain_seeds(seeds, &opt);
 
@@ -1064,7 +1075,7 @@ mod tests {
 
         let seeds = vec![
             make_seed(0, 1000, 20, false, 0),
-            make_seed(25, 900, 20, false, 0),  // Upstream on ref (y < 0)
+            make_seed(25, 900, 20, false, 0), // Upstream on ref (y < 0)
         ];
         let (chains, _) = chain_seeds(seeds, &opt);
 

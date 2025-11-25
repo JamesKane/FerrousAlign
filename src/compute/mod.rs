@@ -148,9 +148,7 @@ impl ComputeBackend {
             // TODO: When GPU is implemented, check for hardware availability
             // and return ComputeBackend::Gpu if available.
             ComputeBackend::Gpu => {
-                log::debug!(
-                    "GPU backend requested but not implemented, falling back to CPU SIMD"
-                );
+                log::debug!("GPU backend requested but not implemented, falling back to CPU SIMD");
                 ComputeBackend::CpuSimd(crate::simd::detect_optimal_simd_engine())
             }
 
@@ -160,9 +158,7 @@ impl ComputeBackend {
             // TODO: When NPU is implemented, check for hardware availability
             // and return ComputeBackend::Npu if available.
             ComputeBackend::Npu => {
-                log::debug!(
-                    "NPU backend requested but not implemented, falling back to CPU SIMD"
-                );
+                log::debug!("NPU backend requested but not implemented, falling back to CPU SIMD");
                 ComputeBackend::CpuSimd(crate::simd::detect_optimal_simd_engine())
             }
         }

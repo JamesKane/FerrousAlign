@@ -26,7 +26,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // - Gpu: Metal/CUDA/ROCm (NO-OP, falls back to CpuSimd)
     // - Npu: ANE/ONNX (NO-OP, falls back to CpuSimd)
     // ========================================================================
-    use crate::compute::{backend_description, detect_optimal_backend, ComputeContext};
+    use crate::compute::{ComputeContext, backend_description, detect_optimal_backend};
     let compute_backend = detect_optimal_backend();
     let compute_ctx = ComputeContext::with_backend(compute_backend);
     let backend_desc = backend_description(compute_backend);

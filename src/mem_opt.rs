@@ -477,10 +477,16 @@ impl MemOpt {
 
         // Seeding validation
         if self.min_seed_len < 1 {
-            errors.push(format!("min_seed_len must be >= 1, got {}", self.min_seed_len));
+            errors.push(format!(
+                "min_seed_len must be >= 1, got {}",
+                self.min_seed_len
+            ));
         }
         if self.split_factor <= 1.0 {
-            errors.push(format!("split_factor must be > 1.0, got {}", self.split_factor));
+            errors.push(format!(
+                "split_factor must be > 1.0, got {}",
+                self.split_factor
+            ));
         }
         if self.max_occ < 1 {
             errors.push(format!("max_occ must be >= 1, got {}", self.max_occ));
@@ -491,10 +497,16 @@ impl MemOpt {
             errors.push(format!("band_width must be >= 1, got {}", self.w));
         }
         if self.max_chain_gap < 1 {
-            errors.push(format!("max_chain_gap must be >= 1, got {}", self.max_chain_gap));
+            errors.push(format!(
+                "max_chain_gap must be >= 1, got {}",
+                self.max_chain_gap
+            ));
         }
         if !(0.0..=1.0).contains(&self.drop_ratio) {
-            errors.push(format!("drop_ratio must be in [0, 1], got {}", self.drop_ratio));
+            errors.push(format!(
+                "drop_ratio must be in [0, 1], got {}",
+                self.drop_ratio
+            ));
         }
 
         // Scoring validation
@@ -510,10 +522,16 @@ impl MemOpt {
             errors.push(format!("score_threshold must be >= 0, got {}", self.t));
         }
         if !(0.0..=1.0).contains(&self.xa_drop_ratio) {
-            errors.push(format!("xa_drop_ratio must be in [0, 1], got {}", self.xa_drop_ratio));
+            errors.push(format!(
+                "xa_drop_ratio must be in [0, 1], got {}",
+                self.xa_drop_ratio
+            ));
         }
         if !(0.0..=1.0).contains(&self.mask_level) {
-            errors.push(format!("mask_level must be in [0, 1], got {}", self.mask_level));
+            errors.push(format!(
+                "mask_level must be in [0, 1], got {}",
+                self.mask_level
+            ));
         }
 
         if errors.is_empty() {
@@ -867,7 +885,12 @@ mod tests {
         opt.min_seed_len = 0;
         let result = opt.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().iter().any(|e| e.contains("min_seed_len")));
+        assert!(
+            result
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("min_seed_len"))
+        );
 
         // Reset and try invalid drop_ratio
         opt = MemOpt::default();

@@ -22,7 +22,7 @@
 // ============================================================================
 
 use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
-use crate::alignment::chaining::{cal_max_gap, Chain};
+use crate::alignment::chaining::{Chain, cal_max_gap};
 use crate::alignment::seeding::Seed;
 use crate::compute::ComputeBackend;
 use crate::index::BwaIndex;
@@ -49,7 +49,6 @@ pub struct AlignmentRegion {
     // ========================================================================
     // Reference boundaries (FM-index coordinates)
     // ========================================================================
-
     /// Reference start position (inclusive, FM-index space)
     /// C++ equivalent: mem_alnreg_t.rb
     pub rb: u64,
@@ -61,7 +60,6 @@ pub struct AlignmentRegion {
     // ========================================================================
     // Query boundaries (0-based)
     // ========================================================================
-
     /// Query start position (inclusive, 0-based)
     /// C++ equivalent: mem_alnreg_t.qb
     pub qb: i32,
@@ -73,7 +71,6 @@ pub struct AlignmentRegion {
     // ========================================================================
     // Alignment metrics
     // ========================================================================
-
     /// Best local Smith-Waterman score
     /// C++ equivalent: mem_alnreg_t.score
     pub score: i32,
@@ -99,7 +96,6 @@ pub struct AlignmentRegion {
     // ========================================================================
     // Reference information
     // ========================================================================
-
     /// Reference sequence ID (-1 if spanning boundary)
     /// C++ equivalent: mem_alnreg_t.rid
     pub rid: i32,
@@ -116,7 +112,6 @@ pub struct AlignmentRegion {
     // ========================================================================
     // Paired-end and selection fields
     // ========================================================================
-
     /// Fraction of repetitive seeds in this alignment
     /// Used for MAPQ calculation
     /// C++ equivalent: mem_alnreg_t.frac_rep
@@ -406,9 +401,14 @@ pub fn extend_chains_to_regions(
                     if log::log_enabled!(log::Level::Debug) {
                         log::debug!(
                             "EXTENSION_JOB {}: Chain[{}] type=LEFT query=[0..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
-                            query_name, chain_idx, seed.query_pos,
-                            rmax_0, seed.ref_pos,
-                            seed.query_pos, seed.len, seed.is_rev
+                            query_name,
+                            chain_idx,
+                            seed.query_pos,
+                            rmax_0,
+                            seed.ref_pos,
+                            seed.query_pos,
+                            seed.len,
+                            seed.is_rev
                         );
                     }
 
@@ -441,14 +441,19 @@ pub fn extend_chains_to_regions(
                     if log::log_enabled!(log::Level::Debug) {
                         log::debug!(
                             "EXTENSION_JOB {}: Chain[{}] type=RIGHT query=[{}..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
-                            query_name, chain_idx, seed_query_end, query_len,
-                            seed.ref_pos + seed.len as u64, rmax_1,
-                            seed.query_pos, seed.len, seed.is_rev
+                            query_name,
+                            chain_idx,
+                            seed_query_end,
+                            query_len,
+                            seed.ref_pos + seed.len as u64,
+                            rmax_1,
+                            seed.query_pos,
+                            seed.len,
+                            seed.is_rev
                         );
                     }
 
-                    let query_seg: Vec<u8> =
-                        encoded_query[seed_query_end as usize..].to_vec();
+                    let query_seg: Vec<u8> = encoded_query[seed_query_end as usize..].to_vec();
                     let target_seg: Vec<u8> = rseq[re..].to_vec();
 
                     right_jobs.push(ExtensionJob {
@@ -577,7 +582,8 @@ pub fn extend_chains_to_regions(
     };
 
     // Log raw SIMD scores for debugging
-    if log::log_enabled!(log::Level::Debug) && (!left_scores.is_empty() || !right_scores.is_empty()) {
+    if log::log_enabled!(log::Level::Debug) && (!left_scores.is_empty() || !right_scores.is_empty())
+    {
         let left_raw: Vec<i32> = left_scores.iter().map(|s| s.score).collect();
         let right_raw: Vec<i32> = right_scores.iter().map(|s| s.score).collect();
         log::debug!("DEFERRED_CIGAR: raw left scores: {:?}", left_raw);
@@ -624,14 +630,16 @@ fn execute_simd_scoring(
     // Format: (qlen, &query, tlen, &target, w, h0)
     let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = jobs
         .iter()
-        .map(|job| (
-            job.query.len() as i32,
-            job.query.as_slice(),
-            job.target.len() as i32,
-            job.target.as_slice(),
-            band_width,
-            job.h0,
-        ))
+        .map(|job| {
+            (
+                job.query.len() as i32,
+                job.query.as_slice(),
+                job.target.len() as i32,
+                job.target.as_slice(),
+                band_width,
+                job.h0,
+            )
+        })
         .collect();
 
     // Use 16-bit SIMD for better score range (handles scores > 127)
@@ -733,11 +741,13 @@ fn merge_scores_to_regions(
                     {
                         // Local alignment
                         region.qe = seed.query_pos + seed.len + right_score.query_end_pos;
-                        region.re = seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
+                        region.re =
+                            seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
                     } else {
                         // Global alignment: extend to query end
                         region.qe = query_len;
-                        region.re = seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
+                        region.re =
+                            seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
                     }
                 }
             } else if seed.query_pos + seed.len == query_len {
@@ -796,8 +806,15 @@ fn merge_scores_to_regions(
         if let Some(ref region) = best_region {
             log::debug!(
                 "DEFERRED_REGION: chain_idx={} seed_idx={} qb={} qe={} rb={} re={} score={} chr_pos={} ref={}",
-                region.chain_idx, region.seed_idx, region.qb, region.qe,
-                region.rb, region.re, region.score, region.chr_pos, region.ref_name
+                region.chain_idx,
+                region.seed_idx,
+                region.qb,
+                region.qe,
+                region.rb,
+                region.re,
+                region.score,
+                region.chr_pos,
+                region.ref_name
             );
             regions.push(region.clone());
         }
@@ -845,7 +862,10 @@ pub fn generate_cigar_from_region(
     if region.rb >= region.re || region.qb >= region.qe {
         log::debug!(
             "Invalid region boundaries: rb={}, re={}, qb={}, qe={}",
-            region.rb, region.re, region.qb, region.qe
+            region.rb,
+            region.re,
+            region.qb,
+            region.qe
         );
         return None;
     }
@@ -862,7 +882,12 @@ pub fn generate_cigar_from_region(
     let qb = region.qb.max(0) as usize;
     let qe = (region.qe as usize).min(query.len());
     if qb >= qe || qe > query.len() {
-        log::debug!("Invalid query bounds: qb={}, qe={}, query_len={}", qb, qe, query.len());
+        log::debug!(
+            "Invalid query bounds: qb={}, qe={}, query_len={}",
+            qb,
+            qe,
+            query.len()
+        );
         return None;
     }
     let query_segment: Vec<u8> = query[qb..qe].to_vec();
@@ -879,8 +904,12 @@ pub fn generate_cigar_from_region(
 
     log::debug!(
         "CIGAR_GEN: qb={} qe={} rb={} re={} query_seg_len={} ref_len={}",
-        region.qb, region.qe, region.rb, region.re,
-        query_segment.len(), rseq.len()
+        region.qb,
+        region.qe,
+        region.rb,
+        region.re,
+        query_segment.len(),
+        rseq.len()
     );
 
     // Handle reverse strand: reverse both query and reference
@@ -979,16 +1008,22 @@ pub fn generate_cigar_from_region(
 
     // Validate that CIGAR has some aligned bases (not all clips)
     // CIGARs with only S/H clips are invalid and should be filtered out
-    let has_aligned_bases = final_cigar.iter().any(|&(op, _)| {
-        matches!(op, b'M' | b'=' | b'X' | b'I' | b'D')
-    });
+    let has_aligned_bases = final_cigar
+        .iter()
+        .any(|&(op, _)| matches!(op, b'M' | b'=' | b'X' | b'I' | b'D'));
     if !has_aligned_bases {
         log::debug!("CIGAR has no aligned bases, skipping region");
         return None;
     }
 
     // Compute NM (edit distance) and MD tag
-    let (nm, md) = compute_nm_and_md(&final_cigar, &ref_aligned, &query_aligned, &rseq, region.is_rev);
+    let (nm, md) = compute_nm_and_md(
+        &final_cigar,
+        &ref_aligned,
+        &query_aligned,
+        &rseq,
+        region.is_rev,
+    );
 
     Some((final_cigar, nm, md))
 }
@@ -1009,22 +1044,24 @@ fn infer_band_width(
     region_w: i32,
 ) -> i32 {
     // Infer band width from deletion penalty
-    let tmp_del = if l_query == l_ref && l_query * match_score - score < (o_del + e_del - match_score) * 2 {
-        0
-    } else {
-        let min_len = l_query.min(l_ref);
-        let w = ((min_len * match_score - score - o_del) as f64 / e_del as f64 + 2.0) as i32;
-        w.max((l_query - l_ref).abs())
-    };
+    let tmp_del =
+        if l_query == l_ref && l_query * match_score - score < (o_del + e_del - match_score) * 2 {
+            0
+        } else {
+            let min_len = l_query.min(l_ref);
+            let w = ((min_len * match_score - score - o_del) as f64 / e_del as f64 + 2.0) as i32;
+            w.max((l_query - l_ref).abs())
+        };
 
     // Infer band width from insertion penalty
-    let tmp_ins = if l_query == l_ref && l_query * match_score - score < (o_ins + e_ins - match_score) * 2 {
-        0
-    } else {
-        let min_len = l_query.min(l_ref);
-        let w = ((min_len * match_score - score - o_ins) as f64 / e_ins as f64 + 2.0) as i32;
-        w.max((l_query - l_ref).abs())
-    };
+    let tmp_ins =
+        if l_query == l_ref && l_query * match_score - score < (o_ins + e_ins - match_score) * 2 {
+            0
+        } else {
+            let min_len = l_query.min(l_ref);
+            let w = ((min_len * match_score - score - o_ins) as f64 / e_ins as f64 + 2.0) as i32;
+            w.max((l_query - l_ref).abs())
+        };
 
     let mut w2 = tmp_del.max(tmp_ins);
     if w2 > cmd_w {
