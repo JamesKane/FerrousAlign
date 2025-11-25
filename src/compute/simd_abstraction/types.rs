@@ -35,6 +35,18 @@ pub struct __m128i(pub simd_arch::uint8x16_t);
 /// Helper methods for common reinterpret casts on aarch64.
 #[cfg(target_arch = "aarch64")]
 impl __m128i {
+    /// View as unsigned 8‑bit lanes.
+    #[inline]
+    pub fn as_u8(self) -> simd_arch::uint8x16_t {
+        self.0
+    }
+
+    /// Construct from unsigned 8‑bit lanes.
+    #[inline]
+    pub fn from_u8(v: simd_arch::uint8x16_t) -> Self {
+        Self(v)
+    }
+
     /// View the underlying 128‑bit storage as signed 8‑bit lanes.
     #[inline]
     pub fn as_s8(self) -> simd_arch::int8x16_t {

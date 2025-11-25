@@ -115,6 +115,30 @@ pub struct BandedPairWiseSW {
 }
 
 impl BandedPairWiseSW {
+    /// Return whether SIMD is enabled at runtime based on environment and platform defaults.
+    ///
+    /// Control via FERROUS_ALIGN_SIMD env var:
+    /// - "0", "false", "off" => disable SIMD
+    /// - "1", "true", "on" => enable SIMD
+    /// - unset => defaults to enabled on x86_64, disabled on aarch64 (temporary until NEON fully vetted)
+    fn simd_runtime_enabled() -> bool {
+        if let Ok(val) = std::env::var("FERROUS_ALIGN_SIMD") {
+            match val.to_ascii_lowercase().as_str() {
+                "0" | "false" | "off" => return false,
+                "1" | "true" | "on" => return true,
+                _ => { /* fallthrough to default */ }
+            }
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            true
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            // Default to scalar on non‑x86_64 (e.g., aarch64/NEON) until SIMD path is fully validated
+            false
+        }
+    }
     pub fn new(
         o_del: i32,
         e_del: i32,
@@ -1625,6 +1649,17 @@ impl BandedPairWiseSW {
             return Vec::new();
         }
 
+        // Allow forcing scalar path via env var (temporary default on aarch64)
+        if !Self::simd_runtime_enabled() {
+            // Scalar fallback: process each alignment sequentially
+            let mut results = Vec::with_capacity(batch.len());
+            for &(qlen, query, tlen, target, w, h0) in batch.iter() {
+                let (out, _cigar, _q, _t) = self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
+                results.push(out);
+            }
+            return results;
+        }
+
         let engine = detect_optimal_simd_engine();
 
         // Determine batch size based on SIMD engine
@@ -1693,6 +1728,16 @@ impl BandedPairWiseSW {
 
         // 16-bit version processes 8 alignments per batch
         const SIMD_BATCH_SIZE: usize = 8;
+
+        // Allow forcing scalar path via env var (temporary default on aarch64)
+        if !Self::simd_runtime_enabled() {
+            let mut results = Vec::with_capacity(batch.len());
+            for &(qlen, query, tlen, target, w, h0) in batch.iter() {
+                let (out, _cigar, _q, _t) = self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
+                results.push(out);
+            }
+            return results;
+        }
 
         let mut all_results = Vec::with_capacity(batch.len());
 

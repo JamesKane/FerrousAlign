@@ -230,17 +230,22 @@ pub unsafe fn _mm_slli_si128_var(a: __m128i, num_bytes: i32) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        if num_bytes >= 16 {
-            _mm_setzero_si128()
-        } else {
-            // vextq_u8 extracts a sub-vector from two concatenated vectors.
-            // For left shift, we concatenate `a` with a zero vector and extract.
-            __m128i(simd_arch::vextq_u8(
-                simd_arch::vdupq_n_u8(0),
-                a.0,
-                16 - num_bytes as i32,
-            ))
+        // Implement via portable byte copies to avoid NEON immediates.
+        let shift = num_bytes.clamp(0, 16) as usize;
+        if shift == 0 {
+            return a;
         }
+        if shift >= 16 {
+            return _mm_setzero_si128();
+        }
+        let mut bytes = [0u8; 16];
+        let mut src = [0u8; 16];
+        simd_arch::vst1q_u8(src.as_mut_ptr(), a.0);
+        // Left shift by N bytes: move lower (16-N) bytes up, zero-fill bottom N bytes
+        for i in 0..(16 - shift) {
+            bytes[i + shift] = src[i];
+        }
+        __m128i(unsafe { simd_arch::vld1q_u8(bytes.as_ptr()) })
     }
 }
 
@@ -274,17 +279,22 @@ pub unsafe fn _mm_srli_si128_var(a: __m128i, num_bytes: i32) -> __m128i {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        if num_bytes >= 16 {
-            _mm_setzero_si128()
-        } else {
-            // vextq_u8 extracts a sub-vector from two concatenated vectors.
-            // For right shift, we concatenate a zero vector with `a` and extract.
-            __m128i(simd_arch::vextq_u8(
-                a.0,
-                simd_arch::vdupq_n_u8(0),
-                num_bytes as i32,
-            ))
+        // Implement via portable byte copies to avoid NEON immediates.
+        let shift = num_bytes.clamp(0, 16) as usize;
+        if shift == 0 {
+            return a;
         }
+        if shift >= 16 {
+            return _mm_setzero_si128();
+        }
+        let mut bytes = [0u8; 16];
+        let mut src = [0u8; 16];
+        simd_arch::vst1q_u8(src.as_mut_ptr(), a.0);
+        // Right shift by N bytes: move upper (16-N) bytes down, zero-fill top N bytes
+        for i in 0..(16 - shift) {
+            bytes[i] = src[i + shift];
+        }
+        __m128i(unsafe { simd_arch::vld1q_u8(bytes.as_ptr()) })
     }
 }
 
@@ -320,16 +330,32 @@ pub unsafe fn _mm_alignr_epi8_var(a: __m128i, b: __m128i, num_bytes: i32) -> __m
     }
     #[cfg(target_arch = "aarch64")]
     {
-        if num_bytes >= 16 {
-            // If shift is 16 or more, it means we're effectively shifting 'b' past its own length
-            // or past the combined length of 'b' and 'a'. So, result is zero.
-            _mm_setzero_si128()
-        } else {
-            // NEON's vextq_u8 concatenates the second argument (a) and then the first (b)
-            // and extracts `num_bytes` from the right.
-            // Example: vextq_u8(b, a, N) extracts bytes [N .. N+15] from [a | b] (where a is LSB, b is MSB)
-            __m128i(simd_arch::vextq_u8(a.0, b.0, num_bytes as i32))
+        // Implement via portable byte copies: result = concat(b|a) >> num_bytes
+        let shift = num_bytes.clamp(0, 32) as usize;
+        if shift >= 32 {
+            return _mm_setzero_si128();
         }
+        // Dump both vectors to bytes
+        let mut bytes_a = [0u8; 16];
+        let mut bytes_b = [0u8; 16];
+        simd_arch::vst1q_u8(bytes_a.as_mut_ptr(), a.0);
+        simd_arch::vst1q_u8(bytes_b.as_mut_ptr(), b.0);
+        // Build concatenation [b | a]
+        let mut cat = [0u8; 32];
+        cat[..16].copy_from_slice(&bytes_b);
+        cat[16..].copy_from_slice(&bytes_a);
+        // Extract 16 bytes starting at offset `shift`
+        let mut out = [0u8; 16];
+        let end = shift + 16;
+        if end <= 32 {
+            out.copy_from_slice(&cat[shift..end]);
+        } else {
+            // If shift > 16, some bytes would be beyond; fill remaining with zeros.
+            let available = 32usize.saturating_sub(shift);
+            out[..available].copy_from_slice(&cat[shift..(shift + available)]);
+            // rest remain zero
+        }
+        __m128i(unsafe { simd_arch::vld1q_u8(out.as_ptr()) })
     }
 }
 // ===== Additional intrinsics for Smith-Waterman =====

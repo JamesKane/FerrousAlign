@@ -60,6 +60,25 @@ cargo build --release
 ./target/release/ferrous-align --help
 ```
 
+### SIMD on Apple Silicon (NEON) and environment flag
+
+- The project includes a portable SIMD backend. On x86_64, SSE/AVX are used when available.
+- On Apple Silicon (aarch64/NEON), several fixes were added; however, until the NEON path is fully vetted, SIMD is disabled by default at runtime and the scalar path is used for correctness.
+
+You can control SIMD usage via an environment variable at runtime:
+
+```bash
+# Disable SIMD explicitly
+FERROUS_ALIGN_SIMD=0 cargo run --release -- …
+
+# Enable SIMD explicitly (use with caution on aarch64 for now)
+FERROUS_ALIGN_SIMD=1 cargo run --release -- …
+```
+
+Default behavior:
+- x86_64: SIMD enabled by default
+- aarch64 (Apple Silicon/NEON): SIMD disabled by default (temporary)
+
 ### Performance Optimization
 
 For best performance, build with native CPU optimizations:

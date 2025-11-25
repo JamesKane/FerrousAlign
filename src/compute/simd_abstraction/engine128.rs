@@ -22,6 +22,7 @@
 //!   (for the aligned variants) appropriately aligned.
 
 use super::portable_intrinsics::*;
+use super::portable_intrinsics::_mm_storeu_si128;
 
 use super::types::{__m128i, simd_arch};
 
@@ -86,14 +87,18 @@ impl SimdEngine for SimdEngine128 {
 
             let mut tmp = [0i8; 16];
 
-            simd_arch::_mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a); // Use simd_arch for consistency
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a); // Use portable intrinsic for consistency
 
             *tmp.get_unchecked(imm8 as usize)
         }
 
         #[cfg(target_arch = "aarch64")]
         {
-            simd_arch::vgetq_lane_s8(a.as_s8(), imm8 as i32)
+            // On NEON, vgetq_lane_* requires a compile-time constant lane index.
+            // Use a portable fallback: store to a temporary array and index at runtime.
+            let mut tmp = [0i8; 16];
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
+            *tmp.get_unchecked(imm8 as usize)
         }
     }
 
@@ -105,14 +110,17 @@ impl SimdEngine for SimdEngine128 {
 
             let mut tmp = [0i16; 8];
 
-            simd_arch::_mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a); // Use simd_arch for consistency
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a); // Use portable intrinsic for consistency
 
             *tmp.get_unchecked(imm8 as usize)
         }
 
         #[cfg(target_arch = "aarch64")]
         {
-            simd_arch::vgetq_lane_s16(a.as_s16(), imm8 as i32)
+            // NEON lane access requires a constant index. Fallback via temporary array.
+            let mut tmp = [0i16; 8];
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
+            *tmp.get_unchecked(imm8 as usize)
         }
     }
 
@@ -128,15 +136,15 @@ impl SimdEngine for SimdEngine128 {
         #[cfg(target_arch = "aarch64")]
         {
             // NEON equivalent for _mm_movemask_epi8
-
+            // Use portable path: store to array and check sign bits.
             let mut res = 0;
-
+            let mut tmp = [0i8; 16];
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
             for i in 0..16 {
-                if simd_arch::vgetq_lane_s8(a.as_s8(), i) < 0 {
+                if tmp[i as usize] < 0 {
                     res |= 1 << i;
                 }
             }
-
             res
         }
     }
@@ -153,7 +161,7 @@ impl SimdEngine for SimdEngine128 {
 
             let mut tmp = [0i16; 8];
 
-            simd_arch::_mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
 
             for i in 0..8 {
                 if tmp.get_unchecked(i) < &0 {
@@ -169,15 +177,15 @@ impl SimdEngine for SimdEngine128 {
         #[cfg(target_arch = "aarch64")]
         {
             // NEON equivalent for _mm_movemask_epi16
-
+            // Use portable path: store to array and check sign bits.
             let mut res = 0;
-
+            let mut tmp = [0i16; 8];
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
             for i in 0..8 {
-                if simd_arch::vgetq_lane_s16(a.as_s16(), i) < 0 {
+                if tmp[i as usize] < 0 {
                     res |= 1 << i;
                 }
             }
-
             res
         }
     }
@@ -411,9 +419,19 @@ impl SimdEngine for SimdEngine128 {
         #[cfg(target_arch = "aarch64")]
         unsafe {
             use std::arch::aarch64::*;
-            // NEON: vtbl1q_u8 - table lookup
-            let result = vqtbl1q_u8(a.as_u8(), b.as_u8());
-            __m128i::from_u8(result)
+            // Emulate SSSE3 _mm_shuffle_epi8 (pshufb) semantics on NEON.
+            // SSSE3 behavior:
+            //  - For each lane i, if control byte b[i] has high bit set (b[i] & 0x80), output is 0.
+            //  - Else, lower 4 bits select source byte from a (index 0..15).
+            let ctrl = b.as_u8();
+            let idx = vandq_u8(ctrl, vdupq_n_u8(0x0F));
+            let mut out = vqtbl1q_u8(a.as_u8(), idx);
+            // Build a per-lane mask of 0xFF where high bit is set in control
+            let high = vshrq_n_u8(ctrl, 7); // 0x00 or 0x01
+            let lane_mask = vmulq_u8(high, vdupq_n_u8(0xFF)); // 0x00 or 0xFF
+            // Clear lanes where mask is 0xFF
+            out = vbicq_u8(out, lane_mask);
+            __m128i::from_u8(out)
         }
     }
 
