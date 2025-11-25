@@ -47,68 +47,6 @@ use crate::utils::hash_64;
 // 3. For NPU: Use ONE-HOT encoding in find_seeds() (see compute::encoding)
 //
 // ============================================================================
-/// Generate alignments for a single read
-///
-/// If `skip_secondary_marking` is true, secondary/supplementary marking is skipped.
-/// This is used for paired-end processing where marking is deferred until after
-/// pair selection (matching BWA-MEM2 behavior).
-pub fn generate_seeds(
-    bwa_idx: &BwaIndex,
-    pac_data: &[u8], // Pre-loaded PAC data for MD tag generation
-    query_name: &str,
-    query_seq: &[u8],
-    query_qual: &str,
-    opt: &MemOpt,
-    read_id: u64, // Global read ID for deterministic hash tie-breaking (matches C++ bwa-mem2)
-) -> Vec<Alignment> {
-    generate_seeds_internal(
-        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, false,
-    )
-}
-
-/// Generate alignments for paired-end processing with deferred secondary marking
-///
-/// Returns alignments without secondary/supplementary flags set, allowing
-/// pair selection to influence which alignment becomes primary.
-pub fn generate_seeds_for_paired(
-    bwa_idx: &BwaIndex,
-    pac_data: &[u8],
-    query_name: &str,
-    query_seq: &[u8],
-    query_qual: &str,
-    opt: &MemOpt,
-    read_id: u64,
-) -> Vec<Alignment> {
-    generate_seeds_internal(
-        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, true,
-    )
-}
-
-fn generate_seeds_internal(
-    bwa_idx: &BwaIndex,
-    pac_data: &[u8],
-    query_name: &str,
-    query_seq: &[u8],
-    query_qual: &str,
-    opt: &MemOpt,
-    read_id: u64,
-    skip_secondary_marking: bool,
-) -> Vec<Alignment> {
-    // Default to CPU SIMD with auto-detected engine
-    // TODO: Accept ComputeBackend parameter when full integration is implemented
-    let compute_backend = crate::compute::detect_optimal_backend();
-    align_read(
-        bwa_idx,
-        pac_data,
-        query_name,
-        query_seq,
-        query_qual,
-        opt,
-        compute_backend,
-        read_id,
-        skip_secondary_marking,
-    )
-}
 
 // ============================================================================
 // REFACTORED PIPELINE
@@ -2032,19 +1970,20 @@ mod tests {
     use crate::index::index::BwaIndex;
 
     #[test]
-    fn test_generate_seeds_basic() {
+    fn test_align_read_basic() {
+        use crate::compute::detect_optimal_backend;
         use std::path::Path;
 
         let prefix = Path::new("test_data/test_ref.fa");
         if !prefix.exists() {
-            eprintln!("Skipping test_generate_seeds_basic - test data not found");
+            eprintln!("Skipping test_align_read_basic - test data not found");
             return;
         }
 
         let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
             Ok(idx) => idx,
             Err(_) => {
-                eprintln!("Skipping test_generate_seeds_basic - could not load index");
+                eprintln!("Skipping test_align_read_basic - could not load index");
                 return;
             }
         };
@@ -2059,8 +1998,10 @@ mod tests {
         // Test doesn't need real MD tags, use empty pac_data
         let pac_data: &[u8] = &[];
         let read_id = 0u64; // Test read ID
-        let alignments = super::generate_seeds(
-            &bwa_idx, pac_data, query_name, query_seq, query_qual, &opt, read_id,
+        let compute_backend = detect_optimal_backend();
+        let alignments = super::align_read_deferred(
+            &bwa_idx, pac_data, query_name, query_seq, query_qual, &opt,
+            compute_backend, read_id, false,
         );
 
         assert!(

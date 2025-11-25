@@ -170,15 +170,6 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     opt.smallest_coord_primary = opts.smallest_coord_primary;
     opt.output_all_alignments = opts.output_all;
 
-    // Pipeline architecture: Deferred CIGAR (default) vs Standard (legacy)
-    // CLI flag is --standard-cigar, but internal field is deferred_cigar
-    opt.deferred_cigar = !opts.standard_cigar;
-    if opts.standard_cigar {
-        log::info!("Using standard CIGAR pipeline (legacy mode)");
-    } else {
-        log::info!("Using deferred CIGAR pipeline (default, matches BWA-MEM2)");
-    }
-
     // Load the BWA index
     let bwa_idx = BwaIndex::bwa_idx_load(&opts.index)
         .map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
@@ -246,7 +237,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // hardware backend (CPU SIMD, GPU, NPU) is used for alignment.
     //
     // The compute context flows through:
-    //   main_mem() → process_single/paired_end() → align_read() → extension
+    //   main_mem() → process_single/paired_end() → align_read_deferred() → extension
     //
     // ========================================================================
 

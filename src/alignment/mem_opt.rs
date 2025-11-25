@@ -80,10 +80,6 @@ pub struct MemOpt {
     pub smallest_coord_primary: bool, // -5: For split alignment, take smallest coordinate as primary
     pub output_all_alignments: bool,  // -a: Output all alignments for SE or unpaired PE
 
-    // Experimental: Deferred CIGAR architecture (Session 40)
-    // When enabled, uses score-only SIMD extension followed by CIGAR regeneration
-    // for survivors only (~10-20%), reducing CIGAR computation by 80-90%
-    pub deferred_cigar: bool,
 }
 
 /// Manual insert size specification (overrides auto-inference)
@@ -299,12 +295,6 @@ pub struct MemCliOptions {
     #[arg(short = 't', long, value_name = "INT")]
     pub threads: Option<usize>,
 
-    // ===== Pipeline Options =====
-    /// Use original CIGAR pipeline (legacy mode)
-    /// By default, the deferred CIGAR pipeline is used (generates CIGARs only for
-    /// high-scoring alignments, reducing computation by 80-90% and matching BWA-MEM2)
-    #[arg(long)]
-    pub standard_cigar: bool,
 }
 
 /// Parse XA hits string "INT" or "INT,INT"
@@ -404,9 +394,6 @@ impl Default for MemOpt {
             treat_alt_as_primary: false,
             smallest_coord_primary: false,
             output_all_alignments: false, // Default: only output primary alignments (matching bwa-mem2)
-
-            // Pipeline architecture (Session 46)
-            deferred_cigar: true, // Default: enabled, use deferred CIGAR pipeline (matches BWA-MEM2)
         };
 
         // Calculate mapq_coef_fac as log of mapq_coef_len (matching C++)

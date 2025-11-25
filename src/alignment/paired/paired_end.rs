@@ -1,14 +1,13 @@
 // Paired-end read processing module
 //
 // This module handles paired-end FASTQ file processing, including:
-// - Reader thread for pipeline parallelism (Stage 0)
-// - Insert size statistics bootstrapping
+// - Insert size statistics bootstrapping from first batch
 // - Mate rescue using Smith-Waterman
 // - Paired alignment scoring
-// - SAM output with proper pair flags (Stage 2)
+// - SAM output with proper pair flags
 //
 // The pipeline is cleanly separated using sam_output module:
-// - Computation: generate_seeds_for_paired() returns Vec<Alignment>
+// - Computation: align_read_deferred() returns Vec<Alignment>
 // - Pairing: mem_pair() scores paired alignments
 // - Output: sam_output functions handle flag setting and formatting
 
@@ -22,7 +21,7 @@ use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::mark_secondary_alignments;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::pipeline::{align_read_deferred, generate_seeds_for_paired};
+use crate::alignment::pipeline::align_read_deferred;
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::index::index::BwaIndex;
@@ -31,11 +30,9 @@ use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
 };
-use crossbeam_channel::{Receiver, Sender, bounded};
 use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;
-use std::thread;
 
 // Batch processing constants (matching C++ bwa-mem2)
 const CHUNK_SIZE_BASES: usize = 10_000_000;
@@ -54,120 +51,6 @@ const PROCESSING_BATCH_SIZE: usize = 50_000;
 #[allow(dead_code)] // Reserved for future use in alignment scoring
 const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignment
 
-// Message type for pipeline communication
-type PairedBatchMessage = Option<(
-    crate::io::fastq_reader::ReadBatch,
-    crate::io::fastq_reader::ReadBatch,
-)>;
-
-pub(crate) fn reader_thread(
-    read1_file: String,
-    read2_file: String,
-    reads_per_batch: usize,
-    sender: Sender<PairedBatchMessage>,
-) {
-    // Open both FASTQ files
-    let mut reader1 = match FastqReader::new(&read1_file) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Error opening read1 file {}: {}", read1_file, e);
-            let _ = sender.send(None); // Signal error
-            return;
-        }
-    };
-    let mut reader2 = match FastqReader::new(&read2_file) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Error opening read2 file {}: {}", read2_file, e);
-            let _ = sender.send(None); // Signal error
-            return;
-        }
-    };
-
-    log::debug!(
-        "[Reader thread] Started, reading batches of {} read pairs",
-        reads_per_batch
-    );
-
-    let mut batch_count = 0usize;
-    let mut total_pairs_read = 0usize;
-
-    loop {
-        // Read batch from both files
-        let batch1 = match reader1.read_batch(reads_per_batch) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("Error reading batch from read1 file: {}", e);
-                let _ = sender.send(None); // Signal error
-                break;
-            }
-        };
-        let batch2 = match reader2.read_batch(reads_per_batch) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("Error reading batch from read2 file: {}", e);
-                let _ = sender.send(None); // Signal error
-                break;
-            }
-        };
-
-        // Check for EOF
-        if batch1.names.is_empty() && batch2.names.is_empty() {
-            log::debug!("[Reader thread] EOF reached, shutting down");
-            let _ = sender.send(None); // Signal EOF
-            break;
-        }
-
-        // Check for mismatched batch sizes
-        if batch1.names.len() != batch2.names.len() {
-            log::warn!("Warning: Paired-end files have different number of reads");
-            let _ = sender.send(None); // Signal error
-            break;
-        }
-
-        let batch_size = batch1.names.len();
-        total_pairs_read += batch_size;
-        log::debug!(
-            "[Reader thread] Batch {}: Read {} read pairs (cumulative: {})",
-            batch_count,
-            batch_size,
-            total_pairs_read
-        );
-
-        // Send batch through channel
-        log::debug!(
-            "[Reader thread] Batch {}: Sending to channel...",
-            batch_count
-        );
-        if sender.send(Some((batch1, batch2))).is_err() {
-            log::error!(
-                "[Reader thread] Batch {}: Channel closed, shutting down",
-                batch_count
-            );
-            break;
-        }
-        log::debug!("[Reader thread] Batch {}: Successfully sent", batch_count);
-        batch_count += 1;
-
-        // If this was a partial batch, it's the last one
-        if batch_size < reads_per_batch {
-            log::debug!(
-                "[Reader thread] Batch {} was partial ({}), sending EOF signal",
-                batch_count - 1,
-                batch_size
-            );
-            let _ = sender.send(None); // Signal EOF
-            break;
-        }
-    }
-
-    log::debug!(
-        "[Reader thread] Exiting - sent {} batches, {} total pairs",
-        batch_count,
-        total_pairs_read
-    );
-}
-
 // Process paired-end reads with parallel batching
 // ============================================================================
 // HETEROGENEOUS COMPUTE ENTRY POINT - PAIRED-END PROCESSING
@@ -177,11 +60,11 @@ pub(crate) fn reader_thread(
 // The compute_ctx parameter controls which hardware backend is used for
 // alignment computations.
 //
-// Compute flow: process_paired_end() → generate_seeds_for_paired() → align_read() → extension
+// Compute flow: process_paired_end() → align_read_deferred() → extension
 //
 // To add GPU/NPU acceleration:
-// 1. Pass compute_ctx through to generate_seeds_for_paired()
-// 2. In align_read(), route based on compute_ctx.backend
+// 1. Pass compute_ctx through to align_read_deferred()
+// 2. In extension, route based on compute_ctx.backend
 // 3. Implement backend-specific alignment kernel
 //
 // ============================================================================
@@ -287,7 +170,6 @@ pub fn process_paired_end(
     let opt_clone = Arc::clone(&opt);
     let batch_start_id = pairs_processed; // Capture for closure
 
-    let use_deferred = opt.deferred_cigar;
     let compute_backend = compute_ctx.backend.clone();
 
     let mut first_batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
@@ -297,54 +179,29 @@ pub fn process_paired_end(
             // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
             let pair_id = batch_start_id + i as u64;
 
-            let (aln1, aln2) = if use_deferred {
-                // Deferred CIGAR pipeline (experimental)
-                let a1 = align_read_deferred(
-                    &bwa_idx_clone,
-                    pac_clone,
-                    &first_batch1.names[i],
-                    &first_batch1.seqs[i],
-                    &first_batch1.quals[i],
-                    &opt_clone,
-                    compute_backend.clone(),
-                    (pair_id << 1) | 0,
-                    true, // skip secondary marking - done after pairing
-                );
-                let a2 = align_read_deferred(
-                    &bwa_idx_clone,
-                    pac_clone,
-                    &first_batch2.names[i],
-                    &first_batch2.seqs[i],
-                    &first_batch2.quals[i],
-                    &opt_clone,
-                    compute_backend.clone(),
-                    (pair_id << 1) | 1,
-                    true, // skip secondary marking - done after pairing
-                );
-                (a1, a2)
-            } else {
-                // Standard pipeline
-                let a1 = generate_seeds_for_paired(
-                    &bwa_idx_clone,
-                    pac_clone,
-                    &first_batch1.names[i],
-                    &first_batch1.seqs[i],
-                    &first_batch1.quals[i],
-                    &opt_clone,
-                    (pair_id << 1) | 0,
-                );
-                let a2 = generate_seeds_for_paired(
-                    &bwa_idx_clone,
-                    pac_clone,
-                    &first_batch2.names[i],
-                    &first_batch2.seqs[i],
-                    &first_batch2.quals[i],
-                    &opt_clone,
-                    (pair_id << 1) | 1,
-                );
-                (a1, a2)
-            };
-            (aln1, aln2)
+            let a1 = align_read_deferred(
+                &bwa_idx_clone,
+                pac_clone,
+                &first_batch1.names[i],
+                &first_batch1.seqs[i],
+                &first_batch1.quals[i],
+                &opt_clone,
+                compute_backend.clone(),
+                (pair_id << 1) | 0,
+                true, // skip secondary marking - done after pairing
+            );
+            let a2 = align_read_deferred(
+                &bwa_idx_clone,
+                pac_clone,
+                &first_batch2.names[i],
+                &first_batch2.seqs[i],
+                &first_batch2.quals[i],
+                &opt_clone,
+                compute_backend.clone(),
+                (pair_id << 1) | 1,
+                true, // skip secondary marking - done after pairing
+            );
+            (a1, a2)
         })
         .collect();
 
@@ -512,54 +369,29 @@ pub fn process_paired_end(
                 // BWA-MEM2 uses (pair_id << 1) | 0 for read1, (pair_id << 1) | 1 for read2
                 let pair_id = batch_start_id + i as u64;
 
-                let (aln1, aln2) = if use_deferred {
-                    // Deferred CIGAR pipeline (experimental)
-                    let a1 = align_read_deferred(
-                        &bwa_idx_clone,
-                        pac_clone,
-                        &batch1.names[i],
-                        &batch1.seqs[i],
-                        &batch1.quals[i],
-                        &opt_clone,
-                        compute_backend.clone(),
-                        (pair_id << 1) | 0,
-                        true, // skip secondary marking - done after pairing
-                    );
-                    let a2 = align_read_deferred(
-                        &bwa_idx_clone,
-                        pac_clone,
-                        &batch2.names[i],
-                        &batch2.seqs[i],
-                        &batch2.quals[i],
-                        &opt_clone,
-                        compute_backend.clone(),
-                        (pair_id << 1) | 1,
-                        true, // skip secondary marking - done after pairing
-                    );
-                    (a1, a2)
-                } else {
-                    // Standard pipeline
-                    let a1 = generate_seeds_for_paired(
-                        &bwa_idx_clone,
-                        pac_clone,
-                        &batch1.names[i],
-                        &batch1.seqs[i],
-                        &batch1.quals[i],
-                        &opt_clone,
-                        (pair_id << 1) | 0,
-                    );
-                    let a2 = generate_seeds_for_paired(
-                        &bwa_idx_clone,
-                        pac_clone,
-                        &batch2.names[i],
-                        &batch2.seqs[i],
-                        &batch2.quals[i],
-                        &opt_clone,
-                        (pair_id << 1) | 1,
-                    );
-                    (a1, a2)
-                };
-                (aln1, aln2)
+                let a1 = align_read_deferred(
+                    &bwa_idx_clone,
+                    pac_clone,
+                    &batch1.names[i],
+                    &batch1.seqs[i],
+                    &batch1.quals[i],
+                    &opt_clone,
+                    compute_backend.clone(),
+                    (pair_id << 1) | 0,
+                    true, // skip secondary marking - done after pairing
+                );
+                let a2 = align_read_deferred(
+                    &bwa_idx_clone,
+                    pac_clone,
+                    &batch2.names[i],
+                    &batch2.seqs[i],
+                    &batch2.quals[i],
+                    &opt_clone,
+                    compute_backend.clone(),
+                    (pair_id << 1) | 1,
+                    true, // skip secondary marking - done after pairing
+                );
+                (a1, a2)
             })
             .collect();
 

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### NOTICE: The C++ reference implementation's behavior and file formats are the technical specification.  Any deviation is a critical bug, which blocks all downstream tasks.  We must match the behavior even if that means rewriting the code.
 
-**Project Status**: v0.5.0 (~65% complete), ~85-95% of C++ bwa-mem2 performance, working single-end and paired-end alignment with complete SAM output. Session 29 achieved major milestone: **Rust-built indices now produce identical results to C++ bwa-mem2**. Recent sessions focused on alignment quality (MAPQ, supplementary marking, proper pairing).
+**Project Status**: v0.5.2 (~70% complete), alignment metrics approach bwa-mem2 parity but GATK ValidateSamFile reveals critical issues. Session 48 identified NM tag calculation errors (4.6M records), CIGAR validation failures (250K), and mate consistency issues requiring investigation before quality parity can be claimed.
 
 ## Build Commands
 
