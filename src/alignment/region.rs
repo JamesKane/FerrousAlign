@@ -23,6 +23,7 @@
 
 use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use crate::alignment::chaining::{Chain, cal_max_gap};
+use crate::alignment::finalization::Alignment;
 use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::seeding::Seed;
 use crate::compute::ComputeBackend;
@@ -1085,67 +1086,20 @@ fn infer_band_width(
 
 /// Compute NM (edit distance) and MD tag from alignment
 ///
-/// Matches BWA-MEM2's NM/MD computation in bwa_gen_cigar2 (bwa.cpp:309-338)
+/// Delegates to Alignment::generate_md_tag() and Alignment::calculate_exact_nm()
+/// to ensure consistent MD/NM computation across all code paths.
 fn compute_nm_and_md(
     cigar: &[(u8, i32)],
-    _ref_aligned: &[u8],
-    _query_aligned: &[u8],
-    rseq: &[u8],
+    ref_aligned: &[u8],
+    query_aligned: &[u8],
+    _rseq: &[u8],
     _is_rev: bool,
 ) -> (i32, String) {
-    let mut nm = 0;
-    let mut md = String::new();
-    let mut match_run = 0;
-    let mut ref_pos = 0usize;
+    // Use the canonical MD tag generation function
+    let md = Alignment::generate_md_tag(ref_aligned, query_aligned, cigar);
 
-    for &(op, len) in cigar {
-        match op {
-            b'M' | b'=' | b'X' => {
-                // Match/mismatch - need to check each position
-                // For now, assume all matches (MD tag generation needs ref comparison)
-                match_run += len;
-                ref_pos += len as usize;
-            }
-            b'I' => {
-                // Insertion in query
-                nm += len;
-            }
-            b'D' => {
-                // Deletion from reference
-                nm += len;
-
-                // MD tag: record deletion
-                if match_run > 0 {
-                    md.push_str(&match_run.to_string());
-                    match_run = 0;
-                }
-
-                md.push('^');
-                for i in 0..len as usize {
-                    if ref_pos + i < rseq.len() {
-                        let base = match rseq[ref_pos + i] {
-                            0 => 'A',
-                            1 => 'C',
-                            2 => 'G',
-                            3 => 'T',
-                            _ => 'N',
-                        };
-                        md.push(base);
-                    }
-                }
-                ref_pos += len as usize;
-            }
-            b'S' | b'H' => {
-                // Soft/hard clip - doesn't affect NM or MD
-            }
-            _ => {}
-        }
-    }
-
-    // Finalize MD tag
-    if match_run > 0 {
-        md.push_str(&match_run.to_string());
-    }
+    // Calculate NM from MD tag and CIGAR (consistent with other code paths)
+    let nm = Alignment::calculate_exact_nm(&md, cigar);
 
     (nm, md)
 }
