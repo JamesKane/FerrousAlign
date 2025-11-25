@@ -1764,31 +1764,13 @@ pub fn reverse_cigar(cigar: &[(u8, i32)]) -> Vec<(u8, i32)> {
 
 /// Merge consecutive identical CIGAR operations
 /// E.g., [(M, 10), (M, 5)] → [(M, 15)]
+///
+/// **Deprecated**: Use `crate::alignment::cigar::normalize()` instead.
+/// This function is kept for internal compatibility only.
 #[inline]
+#[deprecated(since = "0.5.3", note = "Use crate::alignment::cigar::normalize() instead")]
 pub fn merge_cigar_operations(cigar: Vec<(u8, i32)>) -> Vec<(u8, i32)> {
-    if cigar.is_empty() {
-        return cigar;
-    }
-
-    let mut merged = Vec::with_capacity(cigar.len());
-    let mut current_op = cigar[0].0;
-    let mut current_len = cigar[0].1;
-
-    for &(op, len) in &cigar[1..] {
-        if op == current_op {
-            // Same operation, merge
-            current_len += len;
-        } else {
-            // Different operation, push current and start new
-            merged.push((current_op, current_len));
-            current_op = op;
-            current_len = len;
-        }
-    }
-
-    // Push the last operation
-    merged.push((current_op, current_len));
-    merged
+    crate::alignment::cigar::normalize(cigar)
 }
 
 #[cfg(test)]

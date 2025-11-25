@@ -1,3 +1,4 @@
+use crate::alignment::edit_distance;
 use crate::alignment::mem_opt::MemOpt;
 
 /// SAM flag bit masks (SAM specification v1.6)
@@ -209,10 +210,18 @@ impl Alignment {
             .sum()
     }
 
-    /// Calculate edit distance (NM tag) from CIGAR string
+    /// Calculate edit distance (NM tag) from CIGAR string (APPROXIMATION)
+    ///
+    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` for exact calculation.
+    /// This method only counts indels and cannot detect mismatches in M operations.
+    ///
     /// NM = number of mismatches + insertions + deletions
     /// Approximation: counts I, D, X operations (M operations may contain mismatches)
-    /// For exact NM, would need to compare query and reference sequences
+    /// For exact NM, use `edit_distance::compute_nm_and_md()` with aligned sequences.
+    #[deprecated(
+        since = "0.5.3",
+        note = "Use edit_distance::compute_nm_and_md() for exact NM calculation"
+    )]
     pub fn calculate_edit_distance(&self) -> i32 {
         self.cigar
             .iter()
@@ -222,7 +231,6 @@ impl Alignment {
                     'M' => {
                         // M includes both matches and mismatches
                         // Approximate as 0 for now (would need sequence comparison for exact count)
-                        // In practice, bwa-mem2 calculates this from alignment score
                         None
                     }
                     _ => None,
@@ -231,16 +239,17 @@ impl Alignment {
             .sum()
     }
 
-    /// Calculate NM tag (edit distance) from alignment score
-    /// This is a better approximation than calculate_edit_distance() since it
-    /// estimates mismatches from the score, not just counting indels.
+    /// Calculate NM tag (edit distance) from alignment score (APPROXIMATION)
+    ///
+    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` for exact calculation.
+    /// This method estimates mismatches from score, which is not always accurate.
     ///
     /// Formula: NM = indels + estimated_mismatches
     /// Where: estimated_mismatches ≈ (perfect_score - actual_score) / mismatch_penalty
-    ///        perfect_score = query_length * match_score (1)
-    ///        mismatch_penalty = match_score (1) + mismatch_cost (4) = 5
-    ///
-    /// This will be replaced with exact NM calculation once MD tag is implemented.
+    #[deprecated(
+        since = "0.5.3",
+        note = "Use edit_distance::compute_nm_and_md() for exact NM calculation"
+    )]
     pub fn calculate_nm_from_score(&self) -> i32 {
         // Count indels from CIGAR
         let indels: i32 = self
@@ -263,6 +272,9 @@ impl Alignment {
 
     /// Generate MD tag from aligned sequences and CIGAR
     ///
+    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` instead, which
+    /// computes both NM and MD in a single pass.
+    ///
     /// The MD tag is a string representing the reference bases at mismatching positions
     /// and deleted reference bases. Format:
     /// - Numbers: count of matching bases
@@ -273,133 +285,42 @@ impl Alignment {
     /// - "100" = 100 perfect matches
     /// - "50A49" = 50 matches, mismatch at ref base A, 49 matches
     /// - "25^AC25" = 25 matches, deletion of AC, 25 matches
-    ///
-    /// This requires ref_aligned and query_aligned sequences from Smith-Waterman traceback.
+    #[deprecated(
+        since = "0.5.3",
+        note = "Use edit_distance::compute_nm_and_md() instead"
+    )]
     pub fn generate_md_tag(
         ref_aligned: &[u8],
         query_aligned: &[u8],
         cigar: &[(u8, i32)],
     ) -> String {
-        let mut md = String::new();
-        let mut match_count = 0;
-
-        // Base-to-char conversion for 2-bit encoding
-        let base_to_char = |b: u8| -> char {
-            match b {
-                0 => 'A',
-                1 => 'C',
-                2 => 'G',
-                3 => 'T',
-                _ => 'N',
-            }
-        };
-
-        let mut ref_idx = 0;
-        let mut query_idx = 0;
-
-        for &(op, len) in cigar {
-            match op as char {
-                'M' => {
-                    // Match/mismatch - compare bases
-                    for _ in 0..len {
-                        if ref_idx >= ref_aligned.len() || query_idx >= query_aligned.len() {
-                            break;
-                        }
-
-                        if ref_aligned[ref_idx] == query_aligned[query_idx] {
-                            // Match
-                            match_count += 1;
-                        } else {
-                            // Mismatch - emit match count (even if 0), then mismatch base
-                            // SAM spec requires consecutive mismatches separated by 0: "A0T" not "AT"
-                            md.push_str(&match_count.to_string());
-                            match_count = 0;
-                            md.push(base_to_char(ref_aligned[ref_idx]));
-                        }
-
-                        ref_idx += 1;
-                        query_idx += 1;
-                    }
-                }
-                'D' => {
-                    // Deletion from reference - emit match count, then ^DELETED_BASES
-                    if match_count > 0 {
-                        md.push_str(&match_count.to_string());
-                        match_count = 0;
-                    }
-                    md.push('^');
-                    for _ in 0..len {
-                        if ref_idx >= ref_aligned.len() {
-                            break;
-                        }
-                        md.push(base_to_char(ref_aligned[ref_idx]));
-                        ref_idx += 1;
-                    }
-                }
-                'I' => {
-                    // Insertion to query - skip query bases, no MD tag entry
-                    query_idx += len as usize;
-                }
-                'S' | 'H' => {
-                    // Soft/hard clips don't affect MD tag generation.
-                    // The input query_aligned is already trimmed to exclude soft clips
-                    // (passed as full_query[query_start..query_end] from pipeline.rs).
-                    // Hard clips aren't even in the original sequence.
-                    // Do NOT advance query_idx - the aligned portion starts at index 0.
-                }
-                _ => {
-                    // Unknown op - skip
-                }
-            }
-        }
-
-        // Emit final match count
-        if match_count > 0 {
-            md.push_str(&match_count.to_string());
-        }
-
-        // Handle empty MD tag (shouldn't happen, but be safe)
-        if md.is_empty() {
-            md.push('0');
-        }
-
+        // Delegate to the unified module
+        let (_nm, md) = edit_distance::compute_nm_and_md(ref_aligned, query_aligned, cigar);
         md
     }
 
     /// Calculate exact NM (edit distance) from MD tag and CIGAR
     ///
+    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` for exact calculation
+    /// from sequences, or `edit_distance::compute_nm_from_md()` if you only have the MD tag.
+    ///
     /// NM = mismatches + insertions + deletions
-    ///
-    /// Mismatches and deletions are counted from the MD tag:
-    /// - Each letter (A, C, G, T, N) = 1 mismatch
-    /// - Each ^LETTERS segment = length deletions
-    ///
-    /// Insertions are counted from the CIGAR string.
+    #[deprecated(
+        since = "0.5.3",
+        note = "Use edit_distance::compute_nm_from_md() instead"
+    )]
     pub fn calculate_exact_nm(md_tag: &str, cigar: &[(u8, i32)]) -> i32 {
-        let mut nm = 0;
-
-        // Count mismatches from MD tag (letters outside of deletion blocks)
-        // We count all base letters (A, C, G, T, N) as mismatches
-        for ch in md_tag.chars() {
-            if !ch.is_ascii_digit() && ch != '^' {
-                // It's a base letter (A, C, G, T, N)
-                nm += 1;
-            }
-        }
-
-        // Count insertions from CIGAR
-        for &(op, len) in cigar {
-            if op == b'I' {
-                nm += len;
-            }
-        }
-
-        nm
+        // Delegate to the unified module
+        edit_distance::compute_nm_from_md(md_tag, cigar)
     }
 
     /// Generate XA tag entry for this alignment (alternative alignment format)
     /// Format: RNAME,STRAND+POS,CIGAR,NM
     /// Example: chr1,+1000,50M,2
+    ///
+    /// Note: Uses the approximate `calculate_edit_distance()` for NM since XA tags
+    /// are for secondary alignments where we don't store aligned sequences.
+    #[allow(deprecated)]
     pub fn to_xa_entry(&self) -> String {
         let strand = if self.flag & sam_flags::REVERSE != 0 {
             '-'

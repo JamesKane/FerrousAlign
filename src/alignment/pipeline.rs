@@ -1,5 +1,6 @@
 use crate::alignment::banded_swa::BandedPairWiseSW;
-use crate::alignment::banded_swa::merge_cigar_operations;
+use crate::alignment::cigar;
+use crate::alignment::edit_distance;
 use crate::alignment::chaining::Chain;
 use crate::alignment::chaining::cal_max_gap;
 use crate::alignment::chaining::chain_seeds;
@@ -189,7 +190,7 @@ fn merge_cigars_for_chains(
             }
 
             // Merge adjacent operations and normalize CIGAR
-            let merged_cigar = merge_cigar_operations(combined_cigar);
+            let merged_cigar = cigar::normalize(combined_cigar);
 
             if combined_score > best_score {
                 best_score = combined_score;
@@ -1455,7 +1456,7 @@ fn build_candidate_alignments(
         // So we need:
         //   - Forward reference at chr_pos (not FM-index rev_comp ref)
         //   - rev_comp(query) for reverse strand comparison
-        let md_tag = if !pac_data.is_empty() {
+        let (nm, md_tag) = if !pac_data.is_empty() {
             let ref_len: i32 = merged
                 .cigar
                 .iter()
@@ -1486,17 +1487,19 @@ fn build_candidate_alignments(
                 query_segment.to_vec()
             };
 
-            Alignment::generate_md_tag(&ref_aligned, &query_for_md, &merged.cigar)
+            // Use unified NM/MD computation
+            edit_distance::compute_nm_and_md(&ref_aligned, &query_for_md, &merged.cigar)
         } else {
-            merged
+            // Fallback when pac_data is unavailable - generate simple MD from match count
+            let md_tag: String = merged
                 .cigar
                 .iter()
                 .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
                 .sum::<i32>()
-                .to_string()
+                .to_string();
+            let nm = edit_distance::compute_nm_from_md(&md_tag, &merged.cigar);
+            (nm, md_tag)
         };
-
-        let nm = Alignment::calculate_exact_nm(&md_tag, &merged.cigar);
 
         // Compute final strand based on FM-index position.
         // Since we only search with the original query (not reverse complement),

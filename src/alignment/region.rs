@@ -23,7 +23,7 @@
 
 use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use crate::alignment::chaining::{Chain, cal_max_gap};
-use crate::alignment::finalization::Alignment;
+use crate::alignment::edit_distance;
 use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::seeding::Seed;
 use crate::compute::ComputeBackend;
@@ -1090,10 +1090,10 @@ pub fn generate_cigar_from_region(
         // Use rev_comp(query) to match SAM SEQ field
         let query_for_md: Vec<u8> = query_segment.iter().rev().map(|&b| 3 - b).collect();
 
-        compute_nm_and_md(&final_cigar, &forward_ref, &query_for_md, &rseq, true)
+        compute_nm_and_md_local(&final_cigar, &forward_ref, &query_for_md, &rseq, true)
     } else {
         // Forward strand: use ref_aligned and query_aligned from SW directly
-        compute_nm_and_md(
+        compute_nm_and_md_local(
             &final_cigar,
             &ref_aligned,
             &query_aligned,
@@ -1151,22 +1151,17 @@ fn infer_band_width(
 
 /// Compute NM (edit distance) and MD tag from alignment
 ///
-/// Delegates to Alignment::generate_md_tag() and Alignment::calculate_exact_nm()
-/// to ensure consistent MD/NM computation across all code paths.
-fn compute_nm_and_md(
+/// Uses the unified edit_distance module for consistent MD/NM computation.
+#[inline]
+fn compute_nm_and_md_local(
     cigar: &[(u8, i32)],
     ref_aligned: &[u8],
     query_aligned: &[u8],
     _rseq: &[u8],
     _is_rev: bool,
 ) -> (i32, String) {
-    // Use the canonical MD tag generation function
-    let md = Alignment::generate_md_tag(ref_aligned, query_aligned, cigar);
-
-    // Calculate NM from MD tag and CIGAR (consistent with other code paths)
-    let nm = Alignment::calculate_exact_nm(&md, cigar);
-
-    (nm, md)
+    // Use the unified edit_distance module
+    edit_distance::compute_nm_and_md(ref_aligned, query_aligned, cigar)
 }
 
 // ============================================================================
