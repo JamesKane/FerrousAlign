@@ -699,6 +699,22 @@ pub fn result_to_alignment(
         })
         .sum();
 
+    // Validate alignment doesn't extend beyond reference bounds
+    // This prevents CIGAR_MAPS_OFF_REFERENCE errors from GATK ValidateSamFile
+    let ref_length = bwa_idx.bns.annotations[rescued_rid as usize].sequence_length as u64;
+    if chr_pos + ref_len_for_md as u64 > ref_length {
+        if is_debug_read {
+            log::debug!(
+                "MATE_RESCUE_RESULT {}: REJECTED - alignment extends beyond reference (pos {} + ref_len {} > ref_length {})",
+                job.mate_name,
+                chr_pos,
+                ref_len_for_md,
+                ref_length
+            );
+        }
+        return None;
+    }
+
     // Get reference sequence at chromosome position
     let forward_ref = bwa_idx.bns.get_forward_ref(
         pac,
