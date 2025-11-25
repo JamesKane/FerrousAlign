@@ -117,7 +117,7 @@ pub fn select_paired_end_alignments(
     alignments2: &[Alignment],
     best_idx1: usize,
     best_idx2: usize,
-    is_properly_paired: bool,
+    _is_properly_paired: bool,
     opt: &MemOpt,
 ) -> (Vec<usize>, Vec<usize>) {
     let select_for_read = |alignments: &[Alignment], best_idx: usize| -> Vec<usize> {

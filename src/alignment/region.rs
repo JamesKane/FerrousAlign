@@ -242,7 +242,9 @@ struct ExtensionJob {
     pub query: Vec<u8>,
     pub target: Vec<u8>,
     pub h0: i32,
+    #[allow(dead_code)] // Preserved for debugging
     pub chain_idx: usize,
+    #[allow(dead_code)] // Preserved for debugging
     pub seed_idx: usize,
 }
 
@@ -677,7 +679,7 @@ fn merge_scores_to_regions(
             Some(seg) => seg,
             None => continue,
         };
-        let (rmax_0, _rmax_1, _rseq) = ref_segment;
+        let (_rmax_0, _rmax_1, _rseq) = ref_segment;
 
         // Find best seed in chain (by score)
         let mut best_score = i32::MIN;
@@ -851,7 +853,7 @@ fn merge_scores_to_regions(
 /// Tuple of (cigar, NM, MD_string) for the alignment
 pub fn generate_cigar_from_region(
     bwa_idx: &BwaIndex,
-    pac_data: &[u8],
+    _pac_data: &[u8],
     query: &[u8],
     region: &AlignmentRegion,
     opt: &MemOpt,

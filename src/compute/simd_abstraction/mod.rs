@@ -221,8 +221,11 @@ pub mod simd;
 pub mod tests;
 pub mod types;
 
+// Re-exports for internal module use (may be used by submodules or tests)
+#[allow(unused_imports)]
 use portable_intrinsics::*;
-use types::__m128i; // Import __m128i from types // Import all portable intrinsics
+#[allow(unused_imports)]
+use types::__m128i;
 
 // Re-export the SimdEngine implementations
 pub use engine128::SimdEngine128;

@@ -60,6 +60,7 @@ pub(crate) struct AlignmentJob {
     pub band_width: i32,
     // C++ STRATEGY: Track query offset for seed-boundary-based alignment
     // Only align seed-covered region, soft-clip the rest like bwa-mem2
+    #[allow(dead_code)] // Reserved for soft-clipping implementation
     pub query_offset: i32, // Offset of query in full read (for soft-clipping)
     /// Extension direction: LEFT (seed → qb=0) or RIGHT (seed → qe=qlen)
     /// Used for separate left/right extensions matching C++ bwa-mem2
@@ -434,6 +435,7 @@ fn determine_optimal_batch_size(jobs: &[AlignmentJob]) -> usize {
 /// Classify jobs as low-divergence or high-divergence for routing
 ///
 /// Returns (low_divergence_jobs, high_divergence_jobs)
+#[allow(dead_code)] // Used in tests
 fn partition_jobs_by_divergence(jobs: &[AlignmentJob]) -> (Vec<AlignmentJob>, Vec<AlignmentJob>) {
     const DIVERGENCE_THRESHOLD: f64 = 0.7; // Route to scalar if > 0.7
 
@@ -479,6 +481,7 @@ fn estimate_divergence_score(query_len: usize, target_len: usize) -> f64 {
 /// Execute alignments using batched SIMD (processes up to 16 at a time)
 /// Now includes CIGAR generation via hybrid approach
 /// NOTE: This function is deprecated - use execute_adaptive_alignments instead
+#[allow(dead_code)] // Used in tests
 pub(crate) fn execute_batched_alignments(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],
@@ -556,6 +559,7 @@ pub(crate) fn execute_batched_alignments(
 ///
 /// Returns `Some((score, extended_result))` if ksw_extend2 found a better alignment,
 /// `None` if the original scalar result should be used.
+#[allow(dead_code)] // Used in tests
 fn try_ksw_extend2_fallback(
     sw_params: &BandedPairWiseSW,
     query: &[u8],
@@ -628,6 +632,7 @@ fn try_ksw_extend2_fallback(
 ///
 /// This creates an approximate CIGAR based on the alignment length difference.
 /// For more accurate CIGARs, a full traceback would be needed.
+#[allow(dead_code)] // Used in tests
 fn generate_cigar_from_extend_result(
     qle: i32,
     tle: i32,
@@ -695,6 +700,7 @@ fn generate_cigar_from_extend_result(
 ///
 /// Returns a vector of scores in the same order as input jobs.
 /// This is used for the first phase of deferred CIGAR optimization.
+#[allow(dead_code)] // Used in tests
 pub(crate) fn execute_simd_scoring_only(
     sw_params: &BandedPairWiseSW,
     jobs: &[AlignmentJob],

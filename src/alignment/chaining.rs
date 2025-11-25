@@ -15,6 +15,7 @@ pub struct Chain {
     pub kept: i32,     // Chain status: 0=discarded, 1=shadowed, 2=partial_overlap, 3=primary
     pub frac_rep: f32, // Fraction of repetitive seeds in this chain
     pub rid: i32,      // Reference sequence ID (chromosome)
+    #[allow(dead_code)] // B-tree key used internally
     pos: u64,          // B-tree key: reference position of first seed
     // Last seed info for test_and_merge (matching C++ behavior)
     last_qbeg: i32, // Last seed's query begin

@@ -1,7 +1,6 @@
 // bwa-mem2-rust/src/banded_swa.rs
 
 use crate::compute::simd_abstraction::portable_intrinsics::*;
-use crate::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
 use crate::compute::simd_abstraction::types::__m128i;
 
 // Rust equivalent of dnaSeqPair (C++ bandedSWA.h:90-99)
@@ -735,7 +734,7 @@ impl BandedPairWiseSW {
         }
 
         // Clamp to MAX_SEQ_LEN
-        max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
+        let _max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
         max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
         // Allocate Structure-of-Arrays (SoA) buffers for SIMD-friendly access
@@ -1119,8 +1118,6 @@ impl BandedPairWiseSW {
         &self,
         batch: &[(i32, &[u8], i32, &[u8], i32, i32)], // (qlen, query, tlen, target, w, h0)
     ) -> Vec<OutScore> {
-        use crate::compute::simd_abstraction::*;
-
         const SIMD_WIDTH: usize = 8; // Process 8 alignments in parallel (128-bit / 16-bit)
         const MAX_SEQ_LEN: usize = 512; // 16-bit supports longer sequences
 
@@ -1160,7 +1157,7 @@ impl BandedPairWiseSW {
         }
 
         // Clamp to MAX_SEQ_LEN
-        max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
+        let _max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
         max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
         // Allocate Structure-of-Arrays (SoA) buffers for SIMD-friendly access
@@ -1196,7 +1193,7 @@ impl BandedPairWiseSW {
         // Allocate DP matrices in SoA layout (using i16)
         let mut h_matrix = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
         let mut e_matrix = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
-        let mut f_matrix = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
+        let _f_matrix = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
 
         // Initialize scores and tracking arrays (using i16)
         // Note: max_i/max_j initialized to -1 to match scalar ksw_extend2 behavior

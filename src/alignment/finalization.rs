@@ -374,14 +374,10 @@ impl Alignment {
     pub fn calculate_exact_nm(md_tag: &str, cigar: &[(u8, i32)]) -> i32 {
         let mut nm = 0;
 
-        // Count mismatches and deletions from MD tag
-        let mut in_deletion = false;
+        // Count mismatches from MD tag (letters outside of deletion blocks)
+        // We count all base letters (A, C, G, T, N) as mismatches
         for ch in md_tag.chars() {
-            if ch == '^' {
-                in_deletion = true;
-            } else if ch.is_ascii_digit() {
-                in_deletion = false;
-            } else {
+            if !ch.is_ascii_digit() && ch != '^' {
                 // It's a base letter (A, C, G, T, N)
                 nm += 1;
             }
@@ -563,7 +559,7 @@ impl Alignment {
     pub fn create_unmapped(
         query_name: String,
         seq: &[u8],
-        qual: String,
+        _qual: String,
         is_first_in_pair: bool,
         mate_ref: &str,
         mate_pos: u64,

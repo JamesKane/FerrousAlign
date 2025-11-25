@@ -367,7 +367,7 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
                 current_f_loop_h_val = S::max_epu8(current_f_loop_h_val, f); // h = H'(i,j) update
                 S::store_si128(q.h1.add(j) as *mut S::Vec8, current_f_loop_h_val);
 
-                let h_minus_oe_ins = S::subs_epu8(current_f_loop_h_val, oe_ins);
+                let _h_minus_oe_ins = S::subs_epu8(current_f_loop_h_val, oe_ins);
                 f = S::subs_epu8(f, e_ins);
 
                 // Check if any lane value was different after max(h,f) operation
@@ -522,10 +522,10 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
     } else {
         0x10000
     };
-    let tcov = if (xtra & KSW_XCOV) != 0 { 1 } else { 0 }; // Only for AVX2/AVX-512, but include for now.
+    let _tcov = if (xtra & KSW_XCOV) != 0 { 1 } else { 0 }; // Only for AVX2/AVX-512, but include for now.
 
     let m_val = q.mdiff as i16;
-    let max_score_range = S::set1_epi16(m_val);
+    let _max_score_range = S::set1_epi16(m_val);
 
     // b is used to track scores for secondary alignments / score tracking
     let mut b: Vec<u64> = Vec::new();
@@ -616,7 +616,7 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
                 current_f_loop_h_val = S::max_epi16(current_f_loop_h_val, f); // h = H'(i,j) update
                 S::store_si128_16(q.h1.add(j) as *mut S::Vec16, current_f_loop_h_val);
 
-                let h_minus_oe_ins = S::subs_epi16(current_f_loop_h_val, oe_ins_v);
+                let _h_minus_oe_ins = S::subs_epi16(current_f_loop_h_val, oe_ins_v);
                 f = S::subs_epi16(f, e_ins_v);
 
                 // Check if any lane value was different after max(h,f) operation

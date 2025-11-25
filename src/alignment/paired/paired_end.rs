@@ -25,7 +25,6 @@ use crate::alignment::pipeline::align_read_deferred;
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::index::index::BwaIndex;
-use crate::io::fastq_reader::FastqReader;
 use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
@@ -35,6 +34,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 // Batch processing constants (matching C++ bwa-mem2)
+#[allow(dead_code)]
 const CHUNK_SIZE_BASES: usize = 10_000_000;
 #[allow(dead_code)]
 const AVG_READ_LEN: usize = 101;

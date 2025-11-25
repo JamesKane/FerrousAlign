@@ -17,7 +17,6 @@ use crate::alignment::seeding::Seed;
 use crate::alignment::seeding::forward_only_seed_strategy;
 use crate::alignment::seeding::generate_smems_for_strand;
 use crate::alignment::seeding::generate_smems_from_position;
-use crate::alignment::seeding::get_sa_entries;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::compute::ComputeBackend;
@@ -97,8 +96,10 @@ struct ExtensionResult {
     /// Pre-merged chain results (Phase 2 - CIGAR merge moved to extension)
     merged_chain_results: Vec<MergedChainResult>,
     filtered_chains: Vec<Chain>,
+    #[allow(dead_code)] // Preserved for debugging
     sorted_seeds: Vec<Seed>,
     encoded_query: Vec<u8>,
+    #[allow(dead_code)] // Preserved for reverse complement alignments
     encoded_query_rc: Vec<u8>,
 }
 
@@ -1414,8 +1415,8 @@ fn finalize_alignments(
     bwa_idx: &BwaIndex,
     pac_data: &[u8],
     query_name: &str,
-    query_seq: &[u8],
-    query_qual: &str,
+    _query_seq: &[u8],
+    _query_qual: &str,
     opt: &MemOpt,
     read_id: u64,
     skip_secondary_marking: bool,
@@ -1460,7 +1461,6 @@ fn build_candidate_alignments(
         merged_chain_results,
         filtered_chains,
         encoded_query,
-        encoded_query_rc,
         ..
     } = extension_result;
 
@@ -1592,7 +1592,6 @@ fn finalize_candidates(
         // For paired-end mode, skip this filtering - it's done after mate rescue
         // in output_batch_paired() to allow mate rescue to work with low-scoring alignments
         if !skip_score_filtering {
-            let before_filter = alignments.len();
             alignments.retain(|a| a.score >= opt.t);
             log::debug!(
                 "{}: STANDARD_CIGAR: {} alignments after score filter (threshold={})",
@@ -1699,7 +1698,7 @@ pub fn align_read_deferred(
     pac_data: &[u8],
     query_name: &str,
     query_seq: &[u8],
-    query_qual: &str,
+    _query_qual: &str,
     opt: &MemOpt,
     compute_backend: ComputeBackend,
     read_id: u64,
@@ -1898,7 +1897,7 @@ pub fn align_read_deferred(
 ///
 /// Matches BWA-MEM2's mem_sort_dedup_patch behavior for regions.
 fn remove_redundant_regions(
-    mut regions: Vec<crate::alignment::region::AlignmentRegion>,
+    regions: Vec<crate::alignment::region::AlignmentRegion>,
     mask_level: f32,
 ) -> Vec<crate::alignment::region::AlignmentRegion> {
     if regions.len() <= 1 {

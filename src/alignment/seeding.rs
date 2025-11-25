@@ -413,7 +413,7 @@ pub fn generate_smems_for_strand(
 /// This is used for re-seeding long unique MEMs to find split alignments
 pub fn generate_smems_from_position(
     bwa_idx: &BwaIndex,
-    query_name: &str,
+    _query_name: &str,
     query_len: usize,
     encoded_query: &[u8],
     is_reverse_complement: bool,
@@ -445,14 +445,11 @@ pub fn generate_smems_from_position(
 
     // Phase 1: Forward extension
     let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
-    let mut next_x = start_pos + 1;
 
     for j in (start_pos + 1)..query_len {
         let a = encoded_query[j];
-        next_x = j + 1;
 
         if a >= 4 {
-            next_x = j;
             break;
         }
 

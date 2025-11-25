@@ -302,7 +302,7 @@ pub fn mem_matesw(
 
         // Step 11: Convert coordinates (C++ lines 229-238)
         // This matches BWA-MEM2's exact coordinate transformation
-        let (rescued_rb, rescued_re, query_start, query_end) = if is_rev {
+        let (rescued_rb, _rescued_re, query_start, query_end) = if is_rev {
             // Reverse strand coordinate conversion
             let rb_result = (l_pac << 1) - (adj_rb + aln.te as i64 + 1);
             let re_result = (l_pac << 1) - (adj_rb + aln.tb as i64);
