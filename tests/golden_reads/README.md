@@ -19,18 +19,18 @@
 - **Reference**: GRCh38 no-alt analysis set
 - **Read length**: 148bp paired-end
 
-## Baseline Statistics (2025-11-22)
+## Baseline Statistics (2025-11-25)
 
-### Ferrous-align (current)
+### Ferrous-align (v0.6.0+)
 
 ```
-20116 total alignments
+20104 total alignments
 20000 primary
-116 supplementary
+104 supplementary
 0 secondary
-19929 mapped (99.07%)
-18056 properly paired (90.28%)
-137 singletons (0.69%)
+19991 mapped (99.44%)
+19530 properly paired (97.65%)
+83 singletons (0.41%)
 ```
 
 ### BWA-MEM2 (reference)
@@ -49,12 +49,12 @@
 
 | Metric | Ferrous | BWA-MEM2 | Delta |
 |--------|---------|----------|-------|
-| Mapped | 99.07% | 99.50% | -0.43% |
-| Properly paired | 90.28% | 97.11% | -6.83% |
-| Supplementary | 116 | 140 | -24 |
-| Singletons | 137 | 60 | +77 |
+| Mapped | 99.44% | 99.50% | -0.06% |
+| Properly paired | 97.65% | 97.11% | **+0.54%** |
+| Supplementary | 104 | 140 | -36 |
+| Singletons | 83 | 60 | +23 |
 
-**Note**: The 6.83% gap in proper pairing rate suggests differences in insert size estimation or pair scoring. This is a known area for improvement.
+**Note**: As of v0.6.0, ferrous-align now **exceeds** BWA-MEM2's proper pairing rate (97.65% vs 97.11%)! The remaining gap is primarily in supplementary alignment detection.
 
 ## Usage
 
