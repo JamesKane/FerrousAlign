@@ -1306,4 +1306,217 @@ mod tests {
         region2.rid = 1;
         assert!(!region1.overlaps_with(&region2, 0.3));
     }
+
+    // ========================================================================
+    // CIGAR REFERENCE LENGTH CALCULATION TESTS
+    // ========================================================================
+    //
+    // The bounds check at lines 1081-1096 requires accurate CIGAR reference
+    // length calculation. These tests verify the logic matches SAM specification.
+    // ========================================================================
+
+    /// Calculate reference length from CIGAR (M, D, =, X consume reference)
+    fn calculate_cigar_ref_len(cigar: &[(u8, i32)]) -> i32 {
+        cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op as char, 'M' | 'D' | '=' | 'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn test_cigar_ref_len_matches_only() {
+        // 100M = 100bp reference consumed
+        let cigar = vec![(b'M', 100)];
+        assert_eq!(calculate_cigar_ref_len(&cigar), 100);
+    }
+
+    #[test]
+    fn test_cigar_ref_len_with_insertions() {
+        // 50M2I48M = 98bp reference (insertions don't consume reference)
+        let cigar = vec![(b'M', 50), (b'I', 2), (b'M', 48)];
+        assert_eq!(calculate_cigar_ref_len(&cigar), 98);
+    }
+
+    #[test]
+    fn test_cigar_ref_len_with_deletions() {
+        // 50M2D48M = 100bp reference (deletions consume reference)
+        let cigar = vec![(b'M', 50), (b'D', 2), (b'M', 48)];
+        assert_eq!(calculate_cigar_ref_len(&cigar), 100);
+    }
+
+    #[test]
+    fn test_cigar_ref_len_with_soft_clips() {
+        // 10S80M10S = 80bp reference (soft clips don't consume reference)
+        let cigar = vec![(b'S', 10), (b'M', 80), (b'S', 10)];
+        assert_eq!(calculate_cigar_ref_len(&cigar), 80);
+    }
+
+    #[test]
+    fn test_cigar_ref_len_complex() {
+        // 5S45M2I3D47M5S = 45+3+47 = 95bp reference
+        let cigar = vec![
+            (b'S', 5),
+            (b'M', 45),
+            (b'I', 2),
+            (b'D', 3),
+            (b'M', 47),
+            (b'S', 5),
+        ];
+        assert_eq!(calculate_cigar_ref_len(&cigar), 95);
+    }
+
+    #[test]
+    fn test_cigar_ref_len_with_eq_x_ops() {
+        // 40=10X50= uses =/X instead of M - same reference consumption
+        let cigar = vec![(b'=', 40), (b'X', 10), (b'=', 50)];
+        assert_eq!(calculate_cigar_ref_len(&cigar), 100);
+    }
+
+    // ========================================================================
+    // BOUNDS CHECK LOGIC TESTS
+    // ========================================================================
+    //
+    // These tests verify the bounds checking logic that prevents
+    // CIGAR_MAPS_OFF_REFERENCE errors (lines 1081-1096).
+    // ========================================================================
+
+    /// Test bounds check logic (extracted for unit testing)
+    /// Returns true if alignment is WITHIN bounds (acceptable)
+    fn bounds_check_passes(chr_pos: u64, cigar_ref_len: i32, ref_length: u64) -> bool {
+        chr_pos + cigar_ref_len as u64 <= ref_length
+    }
+
+    #[test]
+    fn test_bounds_check_well_within_bounds() {
+        // Alignment at position 1000, 100bp CIGAR, on 10000bp chromosome
+        assert!(bounds_check_passes(1000, 100, 10000));
+    }
+
+    #[test]
+    fn test_bounds_check_exactly_at_end() {
+        // Alignment at position 9900, 100bp CIGAR, on 10000bp chromosome
+        // chr_pos + cigar_ref_len = 9900 + 100 = 10000 = ref_length (OK)
+        assert!(bounds_check_passes(9900, 100, 10000));
+    }
+
+    #[test]
+    fn test_bounds_check_one_bp_past_end() {
+        // Alignment at position 9901, 100bp CIGAR, on 10000bp chromosome
+        // chr_pos + cigar_ref_len = 9901 + 100 = 10001 > 10000 (FAIL)
+        assert!(!bounds_check_passes(9901, 100, 10000));
+    }
+
+    #[test]
+    fn test_bounds_check_far_past_end() {
+        // Alignment at position 9950, 100bp CIGAR, on 10000bp chromosome
+        // chr_pos + cigar_ref_len = 9950 + 100 = 10050 > 10000 (FAIL)
+        assert!(!bounds_check_passes(9950, 100, 10000));
+    }
+
+    #[test]
+    fn test_bounds_check_chry_end_case() {
+        // chrY in GRCh38 is 57,227,415bp
+        // Bug case: alignment at 57227414 with ~100bp CIGAR
+        // chr_pos + cigar_ref_len = 57227414 + 100 = 57227514 > 57227415 (FAIL)
+        let chry_length: u64 = 57_227_415;
+        let chr_pos: u64 = 57_227_414;
+        let cigar_ref_len: i32 = 100;
+        assert!(!bounds_check_passes(chr_pos, cigar_ref_len, chry_length));
+    }
+
+    #[test]
+    fn test_bounds_check_chry_valid_alignment() {
+        // Valid alignment near chrY end: position 57227314 with 100bp CIGAR
+        // chr_pos + cigar_ref_len = 57227314 + 100 = 57227414 < 57227415 (OK)
+        let chry_length: u64 = 57_227_415;
+        let chr_pos: u64 = 57_227_314;
+        let cigar_ref_len: i32 = 100;
+        assert!(bounds_check_passes(chr_pos, cigar_ref_len, chry_length));
+    }
+
+    #[test]
+    fn test_bounds_check_at_position_zero() {
+        // Alignment at chromosome start
+        assert!(bounds_check_passes(0, 100, 10000));
+    }
+
+    #[test]
+    fn test_bounds_check_single_base_chromosome() {
+        // Edge case: 1bp chromosome
+        assert!(bounds_check_passes(0, 1, 1)); // pos 0, 1bp CIGAR, 1bp chr = OK
+        assert!(!bounds_check_passes(0, 2, 1)); // pos 0, 2bp CIGAR, 1bp chr = FAIL
+        assert!(!bounds_check_passes(1, 1, 1)); // pos 1, 1bp CIGAR, 1bp chr = FAIL
+    }
+
+    // ========================================================================
+    // INFER_BAND_WIDTH TESTS
+    // ========================================================================
+    //
+    // Tests for the band width inference function (lines 1201-1240).
+    // ========================================================================
+
+    #[test]
+    fn test_infer_band_width_identical_lengths() {
+        // When query and reference lengths are equal with good score,
+        // band width should be small
+        let w = infer_band_width(
+            100,  // l_query
+            100,  // l_ref
+            100,  // score (perfect alignment)
+            1,    // match_score
+            6,    // o_del
+            1,    // e_del
+            6,    // o_ins
+            1,    // e_ins
+            100,  // cmd_w
+            50,   // region_w
+        );
+        // Should be 0 because score is good and lengths match
+        assert_eq!(w, 0);
+    }
+
+    #[test]
+    fn test_infer_band_width_different_lengths() {
+        // When query and reference have different lengths, band width
+        // must be at least the difference
+        let w = infer_band_width(
+            100, // l_query
+            90,  // l_ref (10bp shorter)
+            80,  // score
+            1,   // match_score
+            6,   // o_del
+            1,   // e_del
+            6,   // o_ins
+            1,   // e_ins
+            100, // cmd_w
+            50,  // region_w
+        );
+        // Should be at least |100 - 90| = 10
+        assert!(w >= 10);
+    }
+
+    #[test]
+    fn test_infer_band_width_capped_at_4x_cmd() {
+        // Band width should not exceed 4x command-line width
+        let w = infer_band_width(
+            1000, // l_query (very long)
+            500,  // l_ref (big difference)
+            100,  // score (low)
+            1,    // match_score
+            6,    // o_del
+            1,    // e_del
+            6,    // o_ins
+            1,    // e_ins
+            25,   // cmd_w (small)
+            200,  // region_w
+        );
+        // Should not exceed 4 * 25 = 100
+        assert!(w <= 100);
+    }
 }

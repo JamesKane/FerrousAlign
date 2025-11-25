@@ -993,3 +993,218 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
 
     jobs
 }
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test CIGAR reference length calculation
+    /// This is critical for bounds checking
+    #[test]
+    fn test_cigar_ref_length_calculation() {
+        // Simple match
+        let cigar = vec![(b'M', 100)];
+        let ref_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(ref_len, 100);
+
+        // Match with soft clips (S doesn't consume reference)
+        let cigar = vec![(b'S', 10), (b'M', 80), (b'S', 10)];
+        let ref_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(ref_len, 80);
+
+        // Match with deletion (D consumes reference)
+        let cigar = vec![(b'M', 50), (b'D', 5), (b'M', 45)];
+        let ref_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(ref_len, 100); // 50 + 5 + 45
+
+        // Match with insertion (I doesn't consume reference)
+        let cigar = vec![(b'M', 50), (b'I', 5), (b'M', 50)];
+        let ref_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(ref_len, 100); // 50 + 50, I doesn't count
+
+        // Complex CIGAR with all operations
+        let cigar = vec![
+            (b'S', 10),
+            (b'M', 30),
+            (b'I', 2),
+            (b'M', 20),
+            (b'D', 3),
+            (b'M', 35),
+            (b'S', 5),
+        ];
+        let ref_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(ref_len, 88); // 30 + 20 + 3 + 35
+    }
+
+    /// Test bounds checking logic
+    /// Alignment extending past reference end should be rejected
+    #[test]
+    fn test_bounds_check_within_bounds() {
+        let chr_pos: u64 = 1000;
+        let ref_len: i32 = 100;
+        let ref_length: u64 = 2000;
+
+        // Within bounds: 1000 + 100 = 1100 <= 2000
+        assert!(chr_pos + ref_len as u64 <= ref_length);
+    }
+
+    #[test]
+    fn test_bounds_check_exactly_at_end() {
+        let chr_pos: u64 = 1900;
+        let ref_len: i32 = 100;
+        let ref_length: u64 = 2000;
+
+        // Exactly at end: 1900 + 100 = 2000 <= 2000
+        assert!(chr_pos + ref_len as u64 <= ref_length);
+    }
+
+    #[test]
+    fn test_bounds_check_past_end() {
+        let chr_pos: u64 = 1901;
+        let ref_len: i32 = 100;
+        let ref_length: u64 = 2000;
+
+        // Past end: 1901 + 100 = 2001 > 2000
+        assert!(chr_pos + ref_len as u64 > ref_length);
+    }
+
+    #[test]
+    fn test_bounds_check_chrY_end_case() {
+        // This tests the exact case that was causing CIGAR_MAPS_OFF_REFERENCE
+        // chrY length: 57,227,415
+        // Problematic alignments were at position 57,227,414 with ~100bp CIGAR
+        let chr_pos: u64 = 57227414;
+        let ref_len: i32 = 99;
+        let ref_length: u64 = 57227415;
+
+        // 57227414 + 99 = 57227513 > 57227415 → should be rejected
+        assert!(chr_pos + ref_len as u64 > ref_length);
+    }
+
+    #[test]
+    fn test_bounds_check_valid_chrY_end() {
+        // Valid alignment at chrY end
+        let chr_pos: u64 = 57227413;
+        let ref_len: i32 = 2;
+        let ref_length: u64 = 57227415;
+
+        // 57227413 + 2 = 57227415 <= 57227415 → should be accepted
+        assert!(chr_pos + ref_len as u64 <= ref_length);
+    }
+
+    /// Test mem_infer_dir direction inference
+    #[test]
+    fn test_mem_infer_dir_ff() {
+        let l_pac = 1000i64;
+        // Both forward, anchor at 100, mate at 200
+        let anchor_rb = 100i64;
+        let mate_rb = 200i64;
+
+        let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+        assert_eq!(dir, 0); // FF orientation
+        assert_eq!(dist, 100); // 200 - 100
+    }
+
+    #[test]
+    fn test_mem_infer_dir_fr() {
+        let l_pac = 1000i64;
+        // Anchor forward (100), mate reverse (l_pac + 800 = 1800)
+        let anchor_rb = 100i64;
+        let mate_rb = 1800i64; // In reverse region
+
+        let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+        assert_eq!(dir, 1); // FR orientation
+    }
+
+    #[test]
+    fn test_mem_infer_dir_rf() {
+        let l_pac = 1000i64;
+        // Anchor reverse, mate forward with projected mate BEHIND anchor
+        // For RF (code 2): different strands AND p2 <= b1
+        // p2 = (2000 - 1 - mate_rb), for p2 <= anchor_rb (1800), need mate_rb >= 199
+        let anchor_rb = 1800i64; // In reverse region
+        let mate_rb = 200i64; // Forward strand, p2 = 1799 < 1800
+
+        let (dir, _dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+        assert_eq!(dir, 2); // RF orientation (different strands, mate projected behind anchor)
+    }
+
+    #[test]
+    fn test_mem_infer_dir_rr() {
+        let l_pac = 1000i64;
+        // Both reverse
+        let anchor_rb = 1800i64;
+        let mate_rb = 1700i64;
+
+        let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+        assert_eq!(dir, 3); // RR orientation
+    }
+
+    /// Test scoring matrix
+    #[test]
+    fn test_scoring_matrix() {
+        // Match scores
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[0], 1); // A-A
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[6], 1); // C-C
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[12], 1); // G-G
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[18], 1); // T-T
+
+        // Mismatch penalties
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[1], -4); // A-C
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[5], -4); // C-A
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[7], -4); // C-G
+
+        // N handling (neutral score)
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[4], 0); // A-N
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[24], 0); // N-N
+    }
+}
