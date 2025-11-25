@@ -468,10 +468,13 @@ impl BntSeq {
 
         if start >= self.packed_sequence_length {
             // Reverse complement strand: convert to forward coordinates
-            // C++ formula: beg_f = (l_pac<<1) - 1 - end, end_f = (l_pac<<1) - 1 - beg
-            // CRITICAL: Must match C++ exactly - was using (end - 1) which added +1 error
-            let beg_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(end);
-            let end_f = ((self.packed_sequence_length << 1) - 1).saturating_sub(start);
+            // For position p in FM-index reverse strand space [l_pac, 2*l_pac):
+            // - Position p corresponds to forward position (2*l_pac - 1 - p)
+            // - A pattern [p, p+len) in FM-index covers forward positions:
+            //   [2*l_pac - (p+len), 2*l_pac - p) = [2*l_pac - end, 2*l_pac - start)
+            // Formula: beg_f = 2*l_pac - end, end_f = 2*l_pac - start
+            let beg_f = (self.packed_sequence_length << 1).saturating_sub(end);
+            let end_f = (self.packed_sequence_length << 1).saturating_sub(start);
 
             log::debug!(
                 "get_reference_segment: RC strand start={}, len={}, l_pac={}, beg_f={}, end_f={}",
@@ -483,7 +486,10 @@ impl BntSeq {
             );
 
             // Read from memory in reverse order with complementation
-            for k in (beg_f + 1..=end_f).rev() {
+            // C++ bwa-mem2 reads j from (beg_f + len - 1) down to beg_f
+            // Since end_f - beg_f = len, this is (end_f - 1) down to beg_f
+            // Using exclusive range: (beg_f..end_f).rev() gives end_f-1, end_f-2, ..., beg_f
+            for k in (beg_f..end_f).rev() {
                 let byte_idx = (k / 4) as usize;
                 let byte_val = self.pac_data[byte_idx];
 
