@@ -9,11 +9,9 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-
-use ferrous_align::{
-    alignment::{mem, mem_opt::MemCliOptions},
-    index::bwa_index,
-};
+use ferrous_align::alignment;
+use ferrous_align::alignment::mem_opt::MemCliOptions;
+use ferrous_align::index::bwa_index;
 
 #[derive(Parser)]
 #[command(name = "ferrous-align")]
@@ -103,7 +101,7 @@ fn main() {
             }
 
             // The mem::main_mem function now directly accepts MemCliOptions
-            mem::main_mem(&options).expect("FerrousAlign encountered a fatal error.");
+            alignment::mem::main_mem(&options).expect("FerrousAlign encountered a fatal error.");
         }
     }
 }
