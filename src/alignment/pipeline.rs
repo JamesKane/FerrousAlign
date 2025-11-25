@@ -1469,6 +1469,25 @@ fn build_candidate_alignments(
                 })
                 .sum();
 
+            // Bounds check: reject alignments that extend past reference end
+            // This prevents CIGAR_MAPS_OFF_REFERENCE errors from GATK ValidateSamFile
+            // (Same check as in mate_rescue.rs)
+            if merged.ref_id < bwa_idx.bns.annotations.len() {
+                let ref_length =
+                    bwa_idx.bns.annotations[merged.ref_id].sequence_length as u64;
+                if merged.chr_pos + ref_len as u64 > ref_length {
+                    log::debug!(
+                        "CIGAR_BOUNDS_CHECK: Rejecting alignment extending past reference end \
+                        (chr_pos {} + ref_len {} > ref_length {}, ref={})",
+                        merged.chr_pos,
+                        ref_len,
+                        ref_length,
+                        merged.ref_name
+                    );
+                    continue;
+                }
+            }
+
             // Always fetch FORWARD reference at chromosome coordinates
             let ref_aligned = bwa_idx.bns.get_forward_ref(
                 pac_data,

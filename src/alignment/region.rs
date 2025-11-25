@@ -1078,6 +1078,23 @@ pub fn generate_cigar_from_region(
         })
         .sum();
 
+    // Bounds check: reject alignments that extend past reference end
+    // This prevents CIGAR_MAPS_OFF_REFERENCE errors from GATK ValidateSamFile
+    if region.rid >= 0 && (region.rid as usize) < bwa_idx.bns.annotations.len() {
+        let ref_length = bwa_idx.bns.annotations[region.rid as usize].sequence_length as u64;
+        if region.chr_pos + cigar_ref_len as u64 > ref_length {
+            log::debug!(
+                "CIGAR_BOUNDS_CHECK: Rejecting region extending past reference end \
+                (chr_pos {} + cigar_ref_len {} > ref_length {}, ref={})",
+                region.chr_pos,
+                cigar_ref_len,
+                ref_length,
+                region.ref_name
+            );
+            return None;
+        }
+    }
+
     // Get aligned query length from final CIGAR (M/I/=/X operations)
     let aligned_query_len: i32 = final_cigar
         .iter()
