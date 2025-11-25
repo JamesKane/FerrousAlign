@@ -310,11 +310,10 @@ impl Alignment {
                             // Match
                             match_count += 1;
                         } else {
-                            // Mismatch - emit match count, then mismatch base
-                            if match_count > 0 {
-                                md.push_str(&match_count.to_string());
-                                match_count = 0;
-                            }
+                            // Mismatch - emit match count (even if 0), then mismatch base
+                            // SAM spec requires consecutive mismatches separated by 0: "A0T" not "AT"
+                            md.push_str(&match_count.to_string());
+                            match_count = 0;
                             md.push(base_to_char(ref_aligned[ref_idx]));
                         }
 

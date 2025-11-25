@@ -1053,13 +1053,54 @@ pub fn generate_cigar_from_region(
     }
 
     // Compute NM (edit distance) and MD tag
-    let (nm, md) = compute_nm_and_md(
-        &final_cigar,
-        &ref_aligned,
-        &query_aligned,
-        &rseq,
-        region.is_rev,
-    );
+    //
+    // SAM format MD tag describes differences between SEQ and FORWARD reference.
+    // For reverse strand alignments:
+    //   - SEQ in SAM = rev_comp(original_read)
+    //   - MD compares SEQ to forward reference at POS
+    //
+    // The SW alignment used:
+    //   - For reverse strand: query vs rev_comp(forward_ref)
+    //   - The ref_aligned/query_aligned from SW are in the alignment orientation
+    //
+    // For correct MD generation, we need:
+    //   - Forward reference at chr_pos
+    //   - rev_comp(query) for reverse strand comparison
+    let (nm, md) = if is_reverse_strand {
+        // Get reference length from final CIGAR (M+D operations)
+        let cigar_ref_len: i32 = final_cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op as char, 'M' | 'D' | '=' | 'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+
+        // Get forward reference at chromosome position
+        let forward_ref = bwa_idx.bns.get_forward_ref(
+            &bwa_idx.bns.pac_data,
+            region.rid as usize,
+            region.chr_pos,
+            cigar_ref_len as usize,
+        );
+
+        // Use rev_comp(query) to match SAM SEQ field
+        let query_for_md: Vec<u8> = query_segment.iter().rev().map(|&b| 3 - b).collect();
+
+        compute_nm_and_md(&final_cigar, &forward_ref, &query_for_md, &rseq, true)
+    } else {
+        // Forward strand: use ref_aligned and query_aligned from SW directly
+        compute_nm_and_md(
+            &final_cigar,
+            &ref_aligned,
+            &query_aligned,
+            &rseq,
+            region.is_rev,
+        )
+    };
 
     Some((final_cigar, nm, md))
 }

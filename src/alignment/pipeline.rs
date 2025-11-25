@@ -1445,12 +1445,16 @@ fn build_candidate_alignments(
 
     for merged in merged_chain_results {
         let chain = &filtered_chains[merged.chain_idx];
-        // Always use original query since we only search with original query
-        let full_query = encoded_query;
-
         // Generate MD tag and calculate NM
-        // NOTE: We use fm_index_pos (not chr_pos) for MD tag generation because
-        // bns_get_seq expects FM-index coordinates
+        //
+        // SAM format MD tag describes differences between SEQ and FORWARD reference.
+        // For reverse strand alignments:
+        //   - SEQ in SAM = rev_comp(original_read)
+        //   - MD compares SEQ to forward reference at POS
+        //
+        // So we need:
+        //   - Forward reference at chr_pos (not FM-index rev_comp ref)
+        //   - rev_comp(query) for reverse strand comparison
         let md_tag = if !pac_data.is_empty() {
             let ref_len: i32 = merged
                 .cigar
@@ -1463,16 +1467,26 @@ fn build_candidate_alignments(
                     }
                 })
                 .sum();
-            let ref_aligned = bwa_idx.bns.bns_get_seq(
+
+            // Always fetch FORWARD reference at chromosome coordinates
+            let ref_aligned = bwa_idx.bns.get_forward_ref(
                 pac_data,
-                merged.fm_index_pos as i64,
-                merged.fm_index_pos as i64 + ref_len as i64,
+                merged.ref_id,
+                merged.chr_pos,
+                ref_len as usize,
             );
-            Alignment::generate_md_tag(
-                &ref_aligned,
-                &full_query[merged.query_start as usize..merged.query_end as usize],
-                &merged.cigar,
-            )
+
+            // For reverse strand: use rev_comp(query) to match SAM SEQ field
+            // For forward strand: use original query
+            let query_segment = &encoded_query[merged.query_start as usize..merged.query_end as usize];
+            let query_for_md: Vec<u8> = if merged.fm_is_rev {
+                // Reverse complement: reverse the slice and complement each base
+                query_segment.iter().rev().map(|&b| 3 - b).collect()
+            } else {
+                query_segment.to_vec()
+            };
+
+            Alignment::generate_md_tag(&ref_aligned, &query_for_md, &merged.cigar)
         } else {
             merged
                 .cigar

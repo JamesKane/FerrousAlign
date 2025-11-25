@@ -625,6 +625,49 @@ impl BntSeq {
         }
     }
 
+    /// Get forward reference sequence at chromosome coordinates.
+    ///
+    /// This function ALWAYS returns forward strand reference, regardless of strand.
+    /// This is needed for MD tag generation which describes differences relative
+    /// to the forward reference in SAM format.
+    ///
+    /// # Arguments
+    /// * `pac` - Packed reference sequence
+    /// * `ref_id` - Reference sequence ID (chromosome index)
+    /// * `chr_pos` - 0-based position within the chromosome
+    /// * `len` - Length of sequence to fetch
+    ///
+    /// # Returns
+    /// Forward reference sequence at the specified position
+    pub fn get_forward_ref(&self, pac: &[u8], ref_id: usize, chr_pos: u64, len: usize) -> Vec<u8> {
+        if ref_id >= self.annotations.len() {
+            return Vec::new();
+        }
+
+        let ann = &self.annotations[ref_id];
+        let offset = ann.offset;
+        let chr_len = ann.sequence_length as u64;
+
+        // Clamp to chromosome boundaries
+        let start = chr_pos.min(chr_len);
+        let end = (chr_pos + len as u64).min(chr_len);
+
+        if start >= end {
+            return Vec::new();
+        }
+
+        // Compute forward FM-index position (always in [0, l_pac) range)
+        let fm_start = offset + start;
+        let fm_end = offset + end;
+
+        // Fetch sequence using forward strand path
+        let mut seq = Vec::with_capacity((end - start) as usize);
+        for k in fm_start..fm_end {
+            seq.push(Self::get_pac(pac, k as i64));
+        }
+        seq
+    }
+
     /// Fetch reference sequence for a region (with reference boundary checking)
     /// Equivalent to C's bns_fetch_seq
     /// Returns (sequence, adjusted_beg, adjusted_end, rid)
