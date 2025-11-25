@@ -777,8 +777,16 @@ fn merge_scores_to_regions(
             }
 
             // Convert FM-index position to chromosome coordinates
-            let fm_pos = region.rb;
-            let is_rev = fm_pos >= l_pac;
+            // BWA-MEM2 reference: bwamem.cpp:1783-1785
+            // For forward strand (rb < l_pac): use rb
+            // For reverse strand (rb >= l_pac): use re - 1
+            // This ensures bns_depos returns the leftmost chromosome position
+            let is_rev = region.rb >= l_pac;
+            let fm_pos = if is_rev {
+                region.re.saturating_sub(1)
+            } else {
+                region.rb
+            };
             region.is_rev = is_rev;
 
             // Get reference ID and chromosome position
