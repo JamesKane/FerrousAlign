@@ -18,6 +18,7 @@
 // 3. Distribution phase: Create alignments and add to pairs (distribute_rescue_results)
 
 use super::insert_size::InsertSizeStats;
+use crate::alignment::edit_distance;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
@@ -368,6 +369,67 @@ pub fn mem_matesw(
             flag |= sam_flags::REVERSE;
         }
 
+        // Compute NM and MD tags for the rescued alignment
+        let ref_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+
+        // Get aligned query length
+        let aligned_query_len: i32 = cigar
+            .iter()
+            .filter_map(|&(op, len)| {
+                if matches!(op, b'M' | b'I' | b'=' | b'X') {
+                    Some(len)
+                } else {
+                    None
+                }
+            })
+            .sum();
+
+        // Calculate leading soft clips
+        let mut left_clip = 0i32;
+        for &(op, len) in cigar.iter() {
+            if op == b'S' || op == b'H' {
+                left_clip += len;
+            } else {
+                break;
+            }
+        }
+
+        // Get reference sequence at chromosome position
+        let forward_ref = bwa_idx.bns.get_forward_ref(
+            pac,
+            anchor.ref_id,
+            chr_pos,
+            ref_len.max(0) as usize,
+        );
+
+        // Get aligned query portion
+        // For reverse strand, need to handle coordinate transformation
+        let (nm, md_tag) = if is_rev {
+            // For reverse strand: SEQ = revcomp(original)
+            // CIGAR describes SEQ, so aligned portion is SEQ[left_clip..left_clip+aligned_query_len]
+            // This maps to original[len-left_clip-aligned_query_len..len-left_clip]
+            let orig_start = (l_ms - left_clip - aligned_query_len).max(0) as usize;
+            let orig_end = (l_ms - left_clip).max(0) as usize;
+            let aligned_query = &mate_seq[orig_start..orig_end.min(mate_seq.len())];
+            let query_for_md: Vec<u8> = aligned_query.iter().rev().map(|&b| 3 - b).collect();
+            edit_distance::compute_nm_and_md(&forward_ref, &query_for_md, &cigar)
+        } else {
+            // Forward strand: use query directly
+            let start = query_start.max(0) as usize;
+            let end = query_end.max(0) as usize;
+            let aligned_query = &mate_seq[start..end.min(mate_seq.len())];
+            edit_distance::compute_nm_and_md(&forward_ref, aligned_query, &cigar)
+        };
+
         let rescued_aln = Alignment {
             query_name: mate_name.to_string(),
             flag,
@@ -382,7 +444,11 @@ pub fn mem_matesw(
             tlen: 0,
             seq: String::new(),
             qual: String::new(),
-            tags: Vec::new(),
+            tags: vec![
+                ("AS".to_string(), format!("i:{}", aln.score)),
+                ("NM".to_string(), format!("i:{}", nm)),
+                ("MD".to_string(), format!("Z:{}", md_tag)),
+            ],
             query_start,
             query_end,
             seed_coverage: (ref_aligned_len.min(query_aligned) >> 1) as i32,
@@ -504,6 +570,7 @@ pub fn result_to_alignment(
     job: &MateRescueJob,
     aln: &Kswr,
     bwa_idx: &BwaIndex,
+    pac: &[u8],
 ) -> Option<Alignment> {
     let l_pac = bwa_idx.bns.packed_sequence_length as i64;
     let l_ms = job.mate_len;
@@ -619,6 +686,41 @@ pub fn result_to_alignment(
         flag |= sam_flags::REVERSE;
     }
 
+    // Compute NM and MD tags for the rescued alignment
+    // Get reference length from CIGAR (M/D/=/X operations)
+    let ref_len_for_md: i32 = cigar
+        .iter()
+        .filter_map(|&(op, len)| {
+            if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                Some(len)
+            } else {
+                None
+            }
+        })
+        .sum();
+
+    // Get reference sequence at chromosome position
+    let forward_ref = bwa_idx.bns.get_forward_ref(
+        pac,
+        job.anchor_ref_id,
+        chr_pos,
+        ref_len_for_md.max(0) as usize,
+    );
+
+    // Get aligned query portion from job.query_seq
+    // IMPORTANT: Use SAM coordinates (query_start/query_end), NOT SW coordinates (aln.qb/qe)
+    // For reverse strand, these are different - the CIGAR uses SAM coordinates
+    // The aligned portion in SAM SEQ is [query_start..query_end]
+    let qb_sam = query_start.max(0) as usize;
+    let qe_sam = query_end.max(0) as usize;
+    let aligned_query = if qe_sam <= job.query_seq.len() {
+        &job.query_seq[qb_sam..qe_sam]
+    } else {
+        &job.query_seq[qb_sam..]
+    };
+
+    let (nm, md_tag) = edit_distance::compute_nm_and_md(&forward_ref, aligned_query, &cigar);
+
     Some(Alignment {
         query_name: job.mate_name.clone(),
         flag,
@@ -633,7 +735,11 @@ pub fn result_to_alignment(
         tlen: 0,
         seq: String::new(),
         qual: String::new(),
-        tags: Vec::new(),
+        tags: vec![
+            ("AS".to_string(), format!("i:{}", aln.score)),
+            ("NM".to_string(), format!("i:{}", nm)),
+            ("MD".to_string(), format!("Z:{}", md_tag)),
+        ],
         query_start,
         query_end,
         seed_coverage: (ref_aligned_len.min(query_aligned) >> 1) as i32,

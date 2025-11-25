@@ -317,10 +317,6 @@ impl Alignment {
     /// Generate XA tag entry for this alignment (alternative alignment format)
     /// Format: RNAME,STRAND+POS,CIGAR,NM
     /// Example: chr1,+1000,50M,2
-    ///
-    /// Note: Uses the approximate `calculate_edit_distance()` for NM since XA tags
-    /// are for secondary alignments where we don't store aligned sequences.
-    #[allow(deprecated)]
     pub fn to_xa_entry(&self) -> String {
         let strand = if self.flag & sam_flags::REVERSE != 0 {
             '-'
@@ -329,7 +325,15 @@ impl Alignment {
         };
         let pos = self.pos + 1; // XA uses 1-based position
         let cigar = self.cigar_string();
-        let nm = self.calculate_edit_distance();
+
+        // Extract exact NM from the stored NM tag if available
+        let nm = self
+            .tags
+            .iter()
+            .find(|(tag_name, _)| tag_name == "NM")
+            .and_then(|(_, val)| val.strip_prefix("i:"))
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
 
         format!("{},{}{},{},{}", self.ref_name, strand, pos, cigar, nm)
     }

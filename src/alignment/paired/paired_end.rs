@@ -575,7 +575,7 @@ fn mate_rescue_batch(
         let job = &jobs_for_execution[result.job_index];
 
         // Try to convert the SW result to an Alignment
-        if let Some(alignment) = result_to_alignment(job, &result.aln, bwa_idx) {
+        if let Some(alignment) = result_to_alignment(job, &result.aln, bwa_idx, pac) {
             let pair_idx = job.pair_index;
 
             // Add to the appropriate alignment list
@@ -598,7 +598,7 @@ fn mate_rescue_batch(
         results
             .iter()
             .filter(
-                |r| result_to_alignment(&jobs_for_execution[r.job_index], &r.aln, bwa_idx)
+                |r| result_to_alignment(&jobs_for_execution[r.job_index], &r.aln, bwa_idx, pac)
                     .is_some()
             )
             .count(),

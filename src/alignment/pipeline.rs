@@ -1477,14 +1477,33 @@ fn build_candidate_alignments(
                 ref_len as usize,
             );
 
-            // For reverse strand: use rev_comp(query) to match SAM SEQ field
-            // For forward strand: use original query
-            let query_segment = &encoded_query[merged.query_start as usize..merged.query_end as usize];
+            // For reverse strand: extract the aligned portion accounting for coordinate inversion
+            // SAM SEQ = revcomp(original_query), and CIGAR describes SEQ left-to-right
+            // So query_start/query_end are positions in SEQ, not in original_query
+            //
+            // For reverse strand with CIGAR like 84S64M on 148bp read:
+            // - SEQ positions 84-147 are aligned (last 64 bases of SEQ)
+            // - SEQ = revcomp(original), so SEQ[84..148] = revcomp(original[0..64])
+            // - We need to extract original[0..64] and revcomp it
+            //
+            // General formula: for reverse strand, SEQ[a..b] = revcomp(original[L-b..L-a])
+            // where L = read length
             let query_for_md: Vec<u8> = if merged.fm_is_rev {
-                // Reverse complement: reverse the slice and complement each base
-                query_segment.iter().rev().map(|&b| 3 - b).collect()
+                let read_len = encoded_query.len();
+                let orig_start = read_len - merged.query_end as usize;
+                let orig_end = read_len - merged.query_start as usize;
+                log::debug!(
+                    "NM_COORD_FIX: rev strand read_len={} query_start={} query_end={} -> orig_start={} orig_end={}",
+                    read_len, merged.query_start, merged.query_end, orig_start, orig_end
+                );
+                // Take the portion from original coordinates and reverse-complement
+                encoded_query[orig_start..orig_end]
+                    .iter()
+                    .rev()
+                    .map(|&b| 3 - b)
+                    .collect()
             } else {
-                query_segment.to_vec()
+                encoded_query[merged.query_start as usize..merged.query_end as usize].to_vec()
             };
 
             // Use unified NM/MD computation

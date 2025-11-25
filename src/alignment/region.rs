@@ -1066,19 +1066,52 @@ pub fn generate_cigar_from_region(
     // For correct MD generation, we need:
     //   - Forward reference at chr_pos
     //   - rev_comp(query) for reverse strand comparison
-    let (nm, md) = if is_reverse_strand {
-        // Get reference length from final CIGAR (M+D operations)
-        let cigar_ref_len: i32 = final_cigar
-            .iter()
-            .filter_map(|&(op, len)| {
-                if matches!(op as char, 'M' | 'D' | '=' | 'X') {
-                    Some(len)
-                } else {
-                    None
-                }
-            })
-            .sum();
+    // Get reference length from final CIGAR (M+D operations)
+    let cigar_ref_len: i32 = final_cigar
+        .iter()
+        .filter_map(|&(op, len)| {
+            if matches!(op as char, 'M' | 'D' | '=' | 'X') {
+                Some(len)
+            } else {
+                None
+            }
+        })
+        .sum();
 
+    // Get aligned query length from final CIGAR (M/I/=/X operations)
+    let aligned_query_len: i32 = final_cigar
+        .iter()
+        .filter_map(|&(op, len)| {
+            if matches!(op, b'M' | b'I' | b'=' | b'X') {
+                Some(len)
+            } else {
+                None
+            }
+        })
+        .sum();
+
+    // Sum leading soft/hard clips
+    let mut left_clip = 0i32;
+    for &(op, len) in final_cigar.iter() {
+        if op == b'S' || op == b'H' {
+            left_clip += len;
+        } else {
+            break;
+        }
+    }
+
+    log::debug!(
+        "NM_CALC_REGION: is_rev={} qb={} qe={} query_seg_len={} aligned_query_len={} left_clip={} final_cigar={:?}",
+        is_reverse_strand,
+        region.qb,
+        region.qe,
+        query_segment.len(),
+        aligned_query_len,
+        left_clip,
+        final_cigar
+    );
+
+    let (nm, md) = if is_reverse_strand {
         // Get forward reference at chromosome position
         let forward_ref = bwa_idx.bns.get_forward_ref(
             &bwa_idx.bns.pac_data,
@@ -1087,16 +1120,56 @@ pub fn generate_cigar_from_region(
             cigar_ref_len as usize,
         );
 
-        // Use rev_comp(query) to match SAM SEQ field
-        let query_for_md: Vec<u8> = query_segment.iter().rev().map(|&b| 3 - b).collect();
+        // For reverse strand, calculate the aligned portion of original query from CIGAR
+        // CIGAR describes SEQ left-to-right, where SEQ = revcomp(original)
+        // For CIGAR like "84S64M":
+        //   - SEQ[0..84] is soft-clipped
+        //   - SEQ[84..148] is aligned (64 bases)
+        //   - SEQ[84..148] = revcomp(original)[84..148] = revcomp(original[0..64])
+        // So we need original[0..64] and revcomp it
+        let query_len = query.len() as i32;
+        let orig_start = (query_len - left_clip - aligned_query_len).max(0) as usize;
+        let orig_end = (query_len - left_clip).max(0) as usize;
+        let aligned_original = &query[orig_start..orig_end.min(query.len())];
+
+        log::debug!(
+            "NM_CALC_REGION_REV: orig_start={} orig_end={} aligned_original_len={}",
+            orig_start,
+            orig_end,
+            aligned_original.len()
+        );
+
+        let query_for_md: Vec<u8> = aligned_original.iter().rev().map(|&b| 3 - b).collect();
 
         compute_nm_and_md_local(&final_cigar, &forward_ref, &query_for_md, &rseq, true)
     } else {
-        // Forward strand: use ref_aligned and query_aligned from SW directly
+        // Forward strand: extract correct portions based on CIGAR
+        // We can't use ref_aligned/query_aligned from SW directly because
+        // global extension may have added extra M operations without capturing bases
+        let forward_ref = bwa_idx.bns.get_forward_ref(
+            &bwa_idx.bns.pac_data,
+            region.rid as usize,
+            region.chr_pos,
+            cigar_ref_len as usize,
+        );
+
+        // Extract aligned query portion based on CIGAR
+        // For forward strand, the aligned portion is query[left_clip..left_clip+aligned_query_len]
+        let query_start = left_clip.max(0) as usize;
+        let query_end = (left_clip + aligned_query_len).max(0) as usize;
+        let aligned_query = &query[query_start..query_end.min(query.len())];
+
+        log::debug!(
+            "NM_CALC_REGION_FWD: query_start={} query_end={} aligned_query_len={}",
+            query_start,
+            query_end,
+            aligned_query.len()
+        );
+
         compute_nm_and_md_local(
             &final_cigar,
-            &ref_aligned,
-            &query_aligned,
+            &forward_ref,
+            aligned_query,
             &rseq,
             region.is_rev,
         )
