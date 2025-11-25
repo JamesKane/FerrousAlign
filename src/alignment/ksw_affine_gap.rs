@@ -10,8 +10,8 @@ use std::alloc::{Layout, alloc};
 use std::ptr; // For `ptr::copy_nonoverlapping`
 
 // Import the abstraction layer components and specific SIMD types
-use crate::simd_abstraction::SimdEngine;
-use crate::simd_abstraction::types::__m128i;
+use crate::compute::simd_abstraction::SimdEngine;
+use crate::compute::simd_abstraction::types::__m128i;
 
 // Constants from ksw.h
 pub const KSW_XBYTE: u32 = 0x10000;
@@ -1174,7 +1174,7 @@ pub fn ksw_extend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simd_abstraction::SimdEngine128;
+    use crate::compute::simd_abstraction::SimdEngine128;
 
     /// Standard DNA scoring matrix: +1 for match, -1 for mismatch
     /// 5x5 matrix for alphabet {A=0, C=1, G=2, T=3, N=4}

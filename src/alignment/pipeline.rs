@@ -20,8 +20,8 @@ use crate::alignment::seeding::get_sa_entries;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::compute::ComputeBackend;
-use crate::index::BwaIndex;
-use crate::mem_opt::MemOpt;
+use crate::index::index::BwaIndex;
+use crate::alignment::mem_opt::MemOpt;
 use crate::utils::hash_64;
 
 // ============================================================================
@@ -2027,12 +2027,12 @@ fn create_unmapped_alignment(query_name: &str) -> Alignment {
 
 #[cfg(test)]
 mod tests {
+    use crate::alignment::mem_opt::MemOpt;
     use crate::alignment::pipeline::sam_flags;
-    use crate::index::BwaIndex;
+    use crate::index::index::BwaIndex;
 
     #[test]
     fn test_generate_seeds_basic() {
-        use crate::mem_opt::MemOpt;
         use std::path::Path;
 
         let prefix = Path::new("test_data/test_ref.fa");
@@ -2087,7 +2087,6 @@ mod tests {
     #[test]
     fn test_deferred_cigar_pipeline() {
         use crate::compute::detect_optimal_backend;
-        use crate::mem_opt::MemOpt;
         use std::path::Path;
 
         let prefix = Path::new("test_data/test_ref.fa");

@@ -20,9 +20,9 @@
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
-use crate::index::BwaIndex;
-use crate::insert_size::InsertSizeStats;
-use crate::simd_abstraction::SimdEngine128;
+use crate::index::index::BwaIndex;
+use super::insert_size::InsertSizeStats;
+use crate::compute::simd_abstraction::SimdEngine128;
 use rayon::prelude::*;
 
 /// A mate rescue SW job prepared for batch execution
@@ -505,8 +505,22 @@ pub fn result_to_alignment(
     let l_pac = bwa_idx.bns.packed_sequence_length as i64;
     let l_ms = job.mate_len;
 
+    let is_debug_read = job.mate_name.contains("10009:11965");
+    if is_debug_read {
+        log::debug!(
+            "MATE_RESCUE_RESULT {}: orientation={} adj_rb={} score={} tb={} te={} qb={} qe={} min_seed_len={}",
+            job.mate_name, job.orientation, job.adj_rb, aln.score, aln.tb, aln.te, aln.qb, aln.qe, job.min_seed_len
+        );
+    }
+
     // Check if alignment is good enough (C++ lines 226-227)
     if aln.score < job.min_seed_len || aln.qb < 0 {
+        if is_debug_read {
+            log::debug!(
+                "MATE_RESCUE_RESULT {}: REJECTED - score {} < min_seed_len {} or qb {} < 0",
+                job.mate_name, aln.score, job.min_seed_len, aln.qb
+            );
+        }
         return None;
     }
 
@@ -529,11 +543,31 @@ pub fn result_to_alignment(
     let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(rescued_rb);
     let rescued_rid = bwa_idx.bns.bns_pos2rid(pos_f);
 
+    if is_debug_read {
+        log::debug!(
+            "MATE_RESCUE_RESULT {}: rescued_rb={} pos_f={} rescued_rid={} anchor_ref_id={}",
+            job.mate_name, rescued_rb, pos_f, rescued_rid, job.anchor_ref_id
+        );
+    }
+
     if rescued_rid < 0 || rescued_rid as usize != job.anchor_ref_id {
+        if is_debug_read {
+            log::debug!(
+                "MATE_RESCUE_RESULT {}: REJECTED - rid mismatch ({} vs {})",
+                job.mate_name, rescued_rid, job.anchor_ref_id
+            );
+        }
         return None;
     }
 
     let chr_pos = (pos_f - bwa_idx.bns.annotations[rescued_rid as usize].offset as i64) as u64;
+
+    if is_debug_read {
+        log::debug!(
+            "MATE_RESCUE_RESULT {}: SUCCESS - chr_pos={} (target ~50141532)",
+            job.mate_name, chr_pos
+        );
+    }
 
     // Build CIGAR from alignment endpoints
     let ref_aligned_len = (aln.te - aln.tb + 1).max(0);
@@ -626,6 +660,14 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
         genome_pos
     };
 
+    let is_debug_read = mate_name.contains("10009:11965");
+    if is_debug_read {
+        log::debug!(
+            "MATE_RESCUE_PREP {}: anchor={}:{} is_rev={} anchor_rb={} rescuing_read1={} existing_alns={}",
+            mate_name, anchor.ref_name, anchor.pos, anchor_is_rev, anchor_rb, rescuing_read1, existing_alignments.len()
+        );
+    }
+
     // Check which orientations already have consistent pairs
     for aln in existing_alignments.iter() {
         if aln.ref_name == anchor.ref_name {
@@ -641,6 +683,14 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
             };
 
             let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+            if is_debug_read {
+                log::debug!(
+                    "MATE_RESCUE_PREP {}: existing aln {}:{} mate_rb={} dir={} dist={} range=[{},{}] in_range={}",
+                    mate_name, aln.ref_name, aln.pos, mate_rb, dir, dist,
+                    stats[dir].low, stats[dir].high,
+                    dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64
+                );
+            }
             if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
                 skip[dir] = true;
             }
@@ -649,7 +699,14 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
 
     // Early exit if all orientations already have pairs
     if skip.iter().all(|&x| x) {
+        if is_debug_read {
+            log::debug!("MATE_RESCUE_PREP {}: EARLY EXIT - all orientations have pairs", mate_name);
+        }
         return jobs;
+    }
+
+    if is_debug_read {
+        log::debug!("MATE_RESCUE_PREP {}: skip array = {:?}", mate_name, skip);
     }
 
     // Try each non-skipped orientation
@@ -703,7 +760,17 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
         let rb = rb.max(0);
         let re = re.min(l_pac << 1);
 
+        if is_debug_read {
+            log::debug!(
+                "MATE_RESCUE_PREP {}: orientation r={} is_rev={} is_larger={} rb={} re={} range=[{},{}]",
+                mate_name, r, is_rev, is_larger, rb, re, stats[r].low, stats[r].high
+            );
+        }
+
         if rb >= re {
+            if is_debug_read {
+                log::debug!("MATE_RESCUE_PREP {}: SKIP r={} - rb >= re", mate_name, r);
+            }
             continue;
         }
 
@@ -711,9 +778,26 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
         let (ref_seq, adj_rb, adj_re, rid) =
             bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
 
+        if is_debug_read {
+            log::debug!(
+                "MATE_RESCUE_PREP {}: r={} fetched ref: adj_rb={} adj_re={} rid={} anchor.ref_id={} len={}",
+                mate_name, r, adj_rb, adj_re, rid, anchor.ref_id, adj_re - adj_rb
+            );
+        }
+
         // Check if on same reference and region is large enough
         if rid as usize != anchor.ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
+            if is_debug_read {
+                log::debug!(
+                    "MATE_RESCUE_PREP {}: SKIP r={} - rid mismatch ({} vs {}) or too small ({})",
+                    mate_name, r, rid, anchor.ref_id, adj_re - adj_rb
+                );
+            }
             continue;
+        }
+
+        if is_debug_read {
+            log::debug!("MATE_RESCUE_PREP {}: CREATING JOB r={}", mate_name, r);
         }
 
         jobs.push(MateRescueJob {

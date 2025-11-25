@@ -78,10 +78,7 @@ pub struct BntSeq {
     pub pac_data: Vec<u8>,
 }
 
-#[path = "bntseq_test.rs"]
-mod bntseq_test;
-
-use crate::fasta_reader::FastaReader;
+use crate::io::fasta_reader::FastaReader;
 
 impl BntSeq {
     pub fn new() -> Self {

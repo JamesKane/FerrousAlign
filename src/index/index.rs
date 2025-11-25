@@ -3,9 +3,9 @@
 // This module handles BWA index loading, dumping, and the main BwaIndex structure
 // that combines BWT, reference sequences, and FM-Index checkpoints.
 
-use crate::bntseq::BntSeq;
-use crate::bwt::Bwt;
-use crate::fm_index::{CP_SHIFT, CpOcc};
+use super::bntseq::BntSeq;
+use super::bwt::Bwt;
+use super::fm_index::{CP_SHIFT, CpOcc};
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};

@@ -5,7 +5,7 @@
 // and I/O concerns.
 
 use crate::alignment::finalization::{Alignment, sam_flags};
-use crate::mem_opt::MemOpt;
+use crate::alignment::mem_opt::MemOpt;
 use std::io::Write;
 
 // ============================================================================

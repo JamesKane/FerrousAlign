@@ -3,30 +3,17 @@
 #![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
 
 pub mod alignment;
-pub mod bntseq;
-pub mod bwa_index;
-pub mod bwt;
 pub mod compute; // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
 pub mod defaults;
-pub mod fastq_reader; // FASTQ reader using bio::io::fastq (used for query reads)
-pub mod fasta_reader; // FASTA reader using bio::io::fasta (used for reference genome)
-pub mod fm_index; // FM-Index operations (BWT search, occurrence counting)
-pub mod index; // Index management (BwaIndex loading/dumping)
-pub mod insert_size; // Insert size statistics
-pub mod mate_rescue; // Mate rescue using Smith-Waterman
-pub mod mem;
-pub mod mem_opt;
-pub mod paired_end; // Paired-end read processing
-pub mod pairing; // Paired-end alignment scoring
-pub mod sam_output; // SAM output formatting and flag management
-pub mod simd;
-pub mod simd_abstraction;
-pub mod single_end; // Single-end read processing
 pub mod utils;
+
+// New modules
+pub mod io;
+pub mod index;
 
 // Test modules
 #[cfg(test)]
-#[path = "fastq_reader_test.rs"]
+#[path = "io/fastq_reader_test.rs"]
 mod fastq_reader_test;
 
 // Note: SAIS implementation removed - we use the `bio` crate's suffix array construction instead

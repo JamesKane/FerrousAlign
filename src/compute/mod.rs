@@ -25,8 +25,9 @@
 //! ```
 
 pub mod encoding;
+pub mod simd_abstraction;
 
-use crate::simd::SimdEngineType;
+use simd_abstraction::simd::SimdEngineType;
 
 // ============================================================================
 // HETEROGENEOUS COMPUTE BACKEND ENUM
@@ -149,7 +150,7 @@ impl ComputeBackend {
             // and return ComputeBackend::Gpu if available.
             ComputeBackend::Gpu => {
                 log::debug!("GPU backend requested but not implemented, falling back to CPU SIMD");
-                ComputeBackend::CpuSimd(crate::simd::detect_optimal_simd_engine())
+                ComputeBackend::CpuSimd(simd_abstraction::simd::detect_optimal_simd_engine())
             }
 
             // ================================================================
@@ -159,7 +160,7 @@ impl ComputeBackend {
             // and return ComputeBackend::Npu if available.
             ComputeBackend::Npu => {
                 log::debug!("NPU backend requested but not implemented, falling back to CPU SIMD");
-                ComputeBackend::CpuSimd(crate::simd::detect_optimal_simd_engine())
+                ComputeBackend::CpuSimd(simd_abstraction::simd::detect_optimal_simd_engine())
             }
         }
     }
@@ -234,14 +235,14 @@ pub fn detect_optimal_backend() -> ComputeBackend {
     // ========================================================================
     // CPU SIMD DETECTION (DEFAULT - ALWAYS AVAILABLE)
     // ========================================================================
-    let simd_engine = crate::simd::detect_optimal_simd_engine();
+    let simd_engine = simd_abstraction::simd::detect_optimal_simd_engine();
     ComputeBackend::CpuSimd(simd_engine)
 }
 
 /// Returns a human-readable description of the compute backend.
 pub fn backend_description(backend: ComputeBackend) -> &'static str {
     match backend {
-        ComputeBackend::CpuSimd(engine) => crate::simd::simd_engine_description(engine),
+        ComputeBackend::CpuSimd(engine) => simd_abstraction::simd::simd_engine_description(engine),
         ComputeBackend::Gpu => "GPU (not implemented - using CPU SIMD fallback)",
         ComputeBackend::Npu => "NPU (not implemented - using CPU SIMD fallback)",
     }

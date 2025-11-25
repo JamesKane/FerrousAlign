@@ -1,4 +1,4 @@
-use crate::fm_index::{CP_SHIFT, CpOcc};
+use super::fm_index::{CP_SHIFT, CpOcc};
 use crate::utils::BinaryWrite;
 use std::io::{self, Write};
 use std::path::Path;

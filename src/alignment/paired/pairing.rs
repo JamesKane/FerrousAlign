@@ -14,10 +14,10 @@
 // SAM coordinates always use the leftmost position on the forward strand.
 // This module converts SAM coordinates to bidirectional coordinates for distance calculation.
 
-use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
-use crate::insert_size::InsertSizeStats;
-use crate::insert_size::erfc_fn as erfc;
+use crate::alignment::finalization::Alignment;
+use super::insert_size::InsertSizeStats;
+use super::insert_size::erfc_fn as erfc;
 use crate::utils::hash_64;
 
 /// Information about a single alignment for pair scoring.
@@ -314,7 +314,7 @@ pub fn mem_pair(
                     (distance as f64 - stats[orientation_idx].avg) / stats[orientation_idx].std;
 
                 let insert_size_log_penalty = 0.721
-                    * (2.0 * erfc(normalized_insert_size.abs() / std::f64::consts::SQRT_2)).ln()
+                    * (2.0f64 * erfc(normalized_insert_size.abs() / std::f64::consts::SQRT_2)).ln()
                     * (match_score as f64);
 
                 let current_score = (current.packed_info >> 32) as i32;

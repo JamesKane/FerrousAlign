@@ -13,7 +13,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     );
 
     // Step 1: Parse FASTA and generate BntSeq and PAC array
-    let bns = crate::bntseq::BntSeq::bns_fasta2bntseq(
+    let bns = super::bntseq::BntSeq::bns_fasta2bntseq(
         fasta_file,
         prefix,
         false, // for_only is false
@@ -214,7 +214,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     eprintln!("=== END RUST INDEX BUILD TRACE ===\n");
 
     // Create Bwt struct
-    let mut bwt = crate::bwt::Bwt::new_from_bwt_data(
+    let mut bwt = super::bwt::Bwt::new_from_bwt_data(
         packed_bwt_data,
         l2,
         seq_len_with_sentinel as u64,
@@ -229,7 +229,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     let cp_occ = bwt.calculate_cp_occ(sentinel_index as u64);
 
     // Create BwaIndex and dump it
-    let bwa_index_to_dump = crate::index::BwaIndex {
+    let bwa_index_to_dump = super::index::BwaIndex {
         bwt,
         bns,
         cp_occ,

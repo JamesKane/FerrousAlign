@@ -13,10 +13,10 @@
 use crate::alignment::finalization::Alignment;
 use crate::alignment::pipeline::{align_read_deferred, generate_seeds};
 use crate::compute::ComputeContext;
-use crate::fastq_reader::FastqReader;
-use crate::index::BwaIndex;
-use crate::mem_opt::MemOpt;
-use crate::sam_output::{
+use crate::io::fastq_reader::FastqReader;
+use crate::index::index::BwaIndex;
+use crate::alignment::mem_opt::MemOpt;
+use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
     write_sam_record,
 };
@@ -184,7 +184,7 @@ pub fn process_single_end(
             let rg_id = opt
                 .read_group
                 .as_ref()
-                .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
+                .and_then(|rg| crate::alignment::mem_opt::MemOpt::extract_rg_id(rg));
 
             for (read_idx, mut alignment_vec) in alignments.into_iter().enumerate() {
                 // Get original seq/qual from batch

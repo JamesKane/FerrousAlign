@@ -1,9 +1,9 @@
-use crate::fm_index::CP_SHIFT;
-use crate::fm_index::CpOcc;
-use crate::fm_index::backward_ext;
-use crate::fm_index::forward_ext;
-use crate::fm_index::get_occ;
-use crate::index::BwaIndex;
+use crate::index::fm_index::CP_SHIFT;
+use crate::index::fm_index::CpOcc;
+use crate::index::fm_index::backward_ext;
+use crate::index::fm_index::forward_ext;
+use crate::index::fm_index::get_occ;
+use crate::index::index::BwaIndex;
 
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]

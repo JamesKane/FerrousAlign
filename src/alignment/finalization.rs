@@ -1,4 +1,4 @@
-use crate::mem_opt::MemOpt;
+use crate::alignment::mem_opt::MemOpt;
 
 /// SAM flag bit masks (SAM specification v1.6)
 /// Used for setting and querying alignment flags in SAM/BAM format

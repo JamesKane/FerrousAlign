@@ -219,9 +219,8 @@ pub mod engine512;
 pub mod portable_intrinsics;
 pub mod tests;
 pub mod types;
+pub mod simd;
 
-#[allow(unused_imports)]
-use super::simd as _simd_dispatch; // For detecting features
 use portable_intrinsics::*;
 use types::__m128i; // Import __m128i from types // Import all portable intrinsics
 

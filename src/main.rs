@@ -10,7 +10,10 @@ static GLOBAL: Jemalloc = Jemalloc;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use ferrous_align::{bwa_index, mem, mem_opt::MemCliOptions};
+use ferrous_align::{
+    alignment::{mem, mem_opt::MemCliOptions},
+    index::bwa_index,
+};
 
 #[derive(Parser)]
 #[command(name = "ferrous-align")]

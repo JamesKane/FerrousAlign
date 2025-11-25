@@ -18,16 +18,16 @@ use crate::alignment::finalization::sam_flags;
 use crate::alignment::pipeline::{align_read_deferred, generate_seeds_for_paired};
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
-use crate::fastq_reader::FastqReader;
-use crate::index::BwaIndex;
-use crate::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
-use crate::mate_rescue::{
+use crate::io::fastq_reader::FastqReader;
+use crate::index::index::BwaIndex;
+use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
+use super::mate_rescue::{
     execute_mate_rescue_batch, prepare_mate_rescue_jobs_for_anchor, result_to_alignment,
     MateRescueJob,
 };
-use crate::mem_opt::MemOpt;
-use crate::pairing::mem_pair;
-use crate::sam_output::{
+use crate::alignment::mem_opt::MemOpt;
+use super::pairing::mem_pair;
+use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
 };
@@ -56,8 +56,8 @@ const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignment
 
 // Message type for pipeline communication
 type PairedBatchMessage = Option<(
-    crate::fastq_reader::ReadBatch,
-    crate::fastq_reader::ReadBatch,
+    crate::io::fastq_reader::ReadBatch,
+    crate::io::fastq_reader::ReadBatch,
 )>;
 
 pub(crate) fn reader_thread(
@@ -228,14 +228,14 @@ pub fn process_paired_end(
     // Read first batch INLINE (not in thread) with small batch size
     log::info!("Phase 1: Bootstrapping insert size statistics from first batch");
 
-    let mut reader1 = match crate::fastq_reader::FastqReader::new(read1_file) {
+    let mut reader1 = match crate::io::fastq_reader::FastqReader::new(read1_file) {
         Ok(r) => r,
         Err(e) => {
             log::error!("Error opening read1 file {}: {}", read1_file, e);
             return;
         }
     };
-    let mut reader2 = match crate::fastq_reader::FastqReader::new(read2_file) {
+    let mut reader2 = match crate::io::fastq_reader::FastqReader::new(read2_file) {
         Ok(r) => r,
         Err(e) => {
             log::error!("Error opening read2 file {}: {}", read2_file, e);
@@ -902,7 +902,7 @@ fn check_proper_pair_fallback(
     };
 
     // Use infer_orientation which matches BWA-MEM2's mem_infer_dir()
-    use crate::insert_size::infer_orientation;
+    use super::insert_size::infer_orientation;
     let (orientation, dist) = infer_orientation(l_pac, bidir_pos1, bidir_pos2);
 
     // Check if this orientation has valid statistics
@@ -996,7 +996,7 @@ fn output_batch_paired(
     let rg_id = opt
         .read_group
         .as_ref()
-        .and_then(|rg| crate::mem_opt::MemOpt::extract_rg_id(rg));
+        .and_then(|rg| crate::alignment::mem_opt::MemOpt::extract_rg_id(rg));
 
     for (pair_idx, (mut alignments1, mut alignments2)) in batch_pairs.into_iter().enumerate() {
         let (name1, seq1, qual1) = &batch_seqs1[pair_idx];

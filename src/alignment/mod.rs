@@ -1,3 +1,5 @@
+pub mod single_end;
+pub mod paired;
 pub mod banded_swa;
 pub mod chaining;
 pub mod extension;
@@ -7,6 +9,8 @@ pub mod pipeline;
 pub mod region;
 pub mod seeding;
 pub mod utils;
+pub mod mem;
+pub mod mem_opt;
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

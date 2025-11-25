@@ -6,7 +6,7 @@
 // - Checkpoint data structures for efficient occurrence queries
 
 use crate::alignment::seeding::SMEM;
-use crate::index::BwaIndex;
+use super::index::BwaIndex;
 
 // Constants from FMI_search.h
 const CP_MASK: u64 = 63;

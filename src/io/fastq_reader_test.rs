@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::fastq_reader::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+    use crate::io::fastq_reader::FastqReader;
 
     #[test]
     fn test_read_batch() {

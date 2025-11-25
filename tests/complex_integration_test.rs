@@ -56,7 +56,21 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCT
     let ref_fasta_path = create_fasta_file(&temp_dir, "ref.fa", ref_fasta_content)?;
 
     // 2. Build the index
-    ferrous_align::bwa_index::bwa_index(&ref_fasta_path, &ref_prefix)?;
+    let binary_path = PathBuf::from("target/debug/ferrous-align");
+    let index_output = Command::new(&binary_path)
+        .arg("index")
+        .arg(ref_fasta_path.to_str().unwrap())
+        .arg("-p")
+        .arg(ref_prefix.to_str().unwrap())
+        .output()?;
+
+    assert!(
+        index_output.status.success(),
+        "Index command failed with: {:?}\nStdout: {}\nStderr: {}",
+        index_output,
+        String::from_utf8_lossy(&index_output.stdout),
+        String::from_utf8_lossy(&index_output.stderr)
+    );
 
     // Verify index files are created
     // Note: bwa-mem2 format embeds SA data in .bwt.2bit.64, doesn't create separate .sa file
