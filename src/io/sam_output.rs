@@ -203,27 +203,57 @@ pub fn prepare_paired_alignment_read1(
         alignment.flag |= sam_flags::PROPER_PAIR;
     }
 
+    // Determine if mate is unmapped (check both ref_name and flag)
+    let mate_is_unmapped =
+        ctx.mate_ref == "*" || (ctx.mate_flag & sam_flags::UNMAPPED) != 0;
+
     // Set mate unmapped flag if mate is unmapped
-    if ctx.mate_ref == "*" {
+    if mate_is_unmapped {
         alignment.flag |= sam_flags::MATE_UNMAPPED;
     }
 
-    // Set mate position and TLEN for mapped reads with mapped mates
-    if !is_unmapped && ctx.mate_ref != "*" {
-        alignment.rnext = if alignment.ref_name == ctx.mate_ref {
-            "=".to_string()
+    // Set mate reverse flag if mate is reverse-complemented (and mapped)
+    if !mate_is_unmapped && (ctx.mate_flag & sam_flags::REVERSE) != 0 {
+        alignment.flag |= sam_flags::MATE_REVERSE;
+    }
+
+    // Set mate position info - needed for BOTH mapped and unmapped reads
+    // SAM spec: unmapped reads with mapped mates should have RNAME/POS/RNEXT/PNEXT set
+    if !mate_is_unmapped {
+        // Mate is mapped - set position info
+        if is_unmapped {
+            // This read is unmapped but mate is mapped:
+            // SAM spec says RNAME/POS should be same as mate's position
+            alignment.ref_name = ctx.mate_ref.clone();
+            alignment.pos = ctx.mate_pos;
+            alignment.rnext = "=".to_string();
+            alignment.pnext = ctx.mate_pos + 1;
+            // Unmapped reads don't have TLEN
         } else {
-            ctx.mate_ref.clone()
-        };
-        alignment.pnext = ctx.mate_pos + 1;
+            // Both reads are mapped
+            alignment.rnext = if alignment.ref_name == ctx.mate_ref {
+                "=".to_string()
+            } else {
+                ctx.mate_ref.clone()
+            };
+            alignment.pnext = ctx.mate_pos + 1;
 
-        if ctx.mate_flag & sam_flags::REVERSE != 0 {
-            alignment.flag |= sam_flags::MATE_REVERSE;
+            // TLEN only for reads on same reference
+            if alignment.ref_name == ctx.mate_ref {
+                alignment.tlen = alignment.calculate_tlen(ctx.mate_pos, ctx.mate_ref_len);
+            }
         }
-
-        if alignment.ref_name == ctx.mate_ref {
-            alignment.tlen = alignment.calculate_tlen(ctx.mate_pos, ctx.mate_ref_len);
-        }
+    } else if is_unmapped {
+        // Both reads are unmapped
+        alignment.ref_name = "*".to_string();
+        alignment.pos = 0;
+        alignment.rnext = "*".to_string();
+        alignment.pnext = 0;
+    } else {
+        // This read is mapped but mate is unmapped
+        // Unmapped mate will be placed at our position, so point RNEXT/PNEXT to ourselves
+        alignment.rnext = "=".to_string();
+        alignment.pnext = alignment.pos + 1; // Our own 1-based position
     }
 
     // Clear or set secondary/supplementary flags based on primary status
@@ -239,7 +269,8 @@ pub fn prepare_paired_alignment_read1(
         alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
     }
 
-    if !ctx.mate_cigar.is_empty() {
+    // MC tag only for mapped mates
+    if !mate_is_unmapped && !ctx.mate_cigar.is_empty() && ctx.mate_cigar != "*" {
         alignment
             .tags
             .push(("MC".to_string(), format!("Z:{}", ctx.mate_cigar)));
@@ -267,27 +298,57 @@ pub fn prepare_paired_alignment_read2(
         alignment.flag |= sam_flags::PROPER_PAIR;
     }
 
+    // Determine if mate is unmapped (check both ref_name and flag)
+    let mate_is_unmapped =
+        ctx.mate_ref == "*" || (ctx.mate_flag & sam_flags::UNMAPPED) != 0;
+
     // Set mate unmapped flag if mate is unmapped
-    if ctx.mate_ref == "*" {
+    if mate_is_unmapped {
         alignment.flag |= sam_flags::MATE_UNMAPPED;
     }
 
-    // Set mate position and TLEN for mapped reads with mapped mates
-    if !is_unmapped && ctx.mate_ref != "*" {
-        alignment.rnext = if alignment.ref_name == ctx.mate_ref {
-            "=".to_string()
+    // Set mate reverse flag if mate is reverse-complemented (and mapped)
+    if !mate_is_unmapped && (ctx.mate_flag & sam_flags::REVERSE) != 0 {
+        alignment.flag |= sam_flags::MATE_REVERSE;
+    }
+
+    // Set mate position info - needed for BOTH mapped and unmapped reads
+    // SAM spec: unmapped reads with mapped mates should have RNAME/POS/RNEXT/PNEXT set
+    if !mate_is_unmapped {
+        // Mate is mapped - set position info
+        if is_unmapped {
+            // This read is unmapped but mate is mapped:
+            // SAM spec says RNAME/POS should be same as mate's position
+            alignment.ref_name = ctx.mate_ref.clone();
+            alignment.pos = ctx.mate_pos;
+            alignment.rnext = "=".to_string();
+            alignment.pnext = ctx.mate_pos + 1;
+            // Unmapped reads don't have TLEN
         } else {
-            ctx.mate_ref.clone()
-        };
-        alignment.pnext = ctx.mate_pos + 1;
+            // Both reads are mapped
+            alignment.rnext = if alignment.ref_name == ctx.mate_ref {
+                "=".to_string()
+            } else {
+                ctx.mate_ref.clone()
+            };
+            alignment.pnext = ctx.mate_pos + 1;
 
-        if ctx.mate_flag & sam_flags::REVERSE != 0 {
-            alignment.flag |= sam_flags::MATE_REVERSE;
+            // TLEN only for reads on same reference
+            if alignment.ref_name == ctx.mate_ref {
+                alignment.tlen = alignment.calculate_tlen(ctx.mate_pos, ctx.mate_ref_len);
+            }
         }
-
-        if alignment.ref_name == ctx.mate_ref {
-            alignment.tlen = alignment.calculate_tlen(ctx.mate_pos, ctx.mate_ref_len);
-        }
+    } else if is_unmapped {
+        // Both reads are unmapped
+        alignment.ref_name = "*".to_string();
+        alignment.pos = 0;
+        alignment.rnext = "*".to_string();
+        alignment.pnext = 0;
+    } else {
+        // This read is mapped but mate is unmapped
+        // Unmapped mate will be placed at our position, so point RNEXT/PNEXT to ourselves
+        alignment.rnext = "=".to_string();
+        alignment.pnext = alignment.pos + 1; // Our own 1-based position
     }
 
     // Clear or set secondary/supplementary flags based on primary status
@@ -303,7 +364,8 @@ pub fn prepare_paired_alignment_read2(
         alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
     }
 
-    if !ctx.mate_cigar.is_empty() {
+    // MC tag only for mapped mates
+    if !mate_is_unmapped && !ctx.mate_cigar.is_empty() && ctx.mate_cigar != "*" {
         alignment
             .tags
             .push(("MC".to_string(), format!("Z:{}", ctx.mate_cigar)));

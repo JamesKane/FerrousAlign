@@ -1005,7 +1005,16 @@ pub fn generate_cigar_from_region(
     }
 
     if clip3 > 0 {
-        final_cigar.push((b'S', clip3));
+        // Merge with existing trailing soft clip if present
+        if let Some((last_op, last_len)) = final_cigar.last_mut() {
+            if *last_op == b'S' {
+                *last_len += clip3;
+            } else {
+                final_cigar.push((b'S', clip3));
+            }
+        } else {
+            final_cigar.push((b'S', clip3));
+        }
     }
 
     // Validate that CIGAR has some aligned bases (not all clips)

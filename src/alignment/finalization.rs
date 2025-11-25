@@ -169,12 +169,14 @@ impl Alignment {
         }
 
         // Format mandatory SAM fields
+        // For unmapped reads (ref_name == "*"), POS must be 0 per SAM spec
+        let sam_pos = if self.ref_name == "*" { 0 } else { self.pos + 1 };
         let mut sam_line = format!(
             "{}	{}	{}	{}	{}	{}	{}	{}	{}	{}	{}",
             self.query_name,
             self.flag,
             self.ref_name,
-            self.pos + 1, // SAM POS is 1-based
+            sam_pos, // SAM POS is 1-based for mapped, 0 for unmapped
             self.mapq,
             cigar_string,
             self.rnext,
@@ -340,8 +342,11 @@ impl Alignment {
                     query_idx += len as usize;
                 }
                 'S' | 'H' => {
-                    // Soft/hard clip - skip query bases, no MD tag entry
-                    query_idx += len as usize;
+                    // Soft/hard clips don't affect MD tag generation.
+                    // The input query_aligned is already trimmed to exclude soft clips
+                    // (passed as full_query[query_start..query_end] from pipeline.rs).
+                    // Hard clips aren't even in the original sequence.
+                    // Do NOT advance query_idx - the aligned portion starts at index 0.
                 }
                 _ => {
                     // Unknown op - skip
