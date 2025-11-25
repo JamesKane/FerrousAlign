@@ -990,8 +990,8 @@ pub fn generate_cigar_from_region(
     );
 
     let mut cigar = result.1; // CIGAR operations
-    let ref_aligned = result.2;
-    let query_aligned = result.3;
+    let _ref_aligned = result.2;
+    let _query_aligned = result.3;
 
     // If reverse strand, reverse the CIGAR
     if region.rb >= l_pac {

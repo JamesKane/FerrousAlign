@@ -3,7 +3,6 @@ pub mod chaining;
 pub mod cigar;
 pub mod coordinates;
 pub mod edit_distance;
-pub mod extension;
 pub mod finalization;
 pub mod ksw_affine_gap;
 pub mod mem;
