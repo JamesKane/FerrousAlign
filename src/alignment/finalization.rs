@@ -714,7 +714,8 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
             };
 
             // Min lengths
-            let min_ref_len = ((p_ref_end - p_ref_start) as i64).min((q_ref_end - q_ref_start) as i64);
+            let min_ref_len =
+                ((p_ref_end - p_ref_start) as i64).min((q_ref_end - q_ref_start) as i64);
             let min_query_len = (p_qe - p_qb).min(q_qe - q_qb);
 
             // Check if redundant: overlap > mask_level_redun on BOTH ref AND query
@@ -752,9 +753,19 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                 if same_strand && same_pos && same_ref_len && partial_query_overlap {
                     log::debug!(
                         "same_position_duplicate: {}:{} (q[{},{}) ref_len={}) vs {}:{} (q[{},{}) ref_len={}), scores={}/{}, q_overlap={}",
-                        p.ref_name, p.pos, p_qb, p_qe, p_ref_len,
-                        q.ref_name, q.pos, q_qb, q_qe, q_ref_len,
-                        p.score, q.score, query_overlap
+                        p.ref_name,
+                        p.pos,
+                        p_qb,
+                        p_qe,
+                        p_ref_len,
+                        q.ref_name,
+                        q.pos,
+                        q_qb,
+                        q_qe,
+                        q_ref_len,
+                        p.score,
+                        q.score,
+                        query_overlap
                     );
                     true
                 } else {
@@ -785,7 +796,8 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                     let regions_close = ref_distance <= max_ref_len;
 
                     // Check if scores are similar (within 20%)
-                    let score_ratio = (p.score.min(q.score) as f32) / (p.score.max(q.score).max(1) as f32);
+                    let score_ratio =
+                        (p.score.min(q.score) as f32) / (p.score.max(q.score).max(1) as f32);
                     let scores_similar = score_ratio >= 0.8;
 
                     // Check if query regions are complementary (same region accounting for strand)
@@ -809,14 +821,25 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                     // Check if the forward-normalized query regions overlap significantly
                     let fwd_b_max = p_fwd_start.max(q_fwd_start);
                     let fwd_e_min = p_fwd_end.min(q_fwd_end);
-                    let fwd_overlap = if fwd_e_min > fwd_b_max { fwd_e_min - fwd_b_max } else { 0 };
+                    let fwd_overlap = if fwd_e_min > fwd_b_max {
+                        fwd_e_min - fwd_b_max
+                    } else {
+                        0
+                    };
                     let fwd_min_len = (p_fwd_end - p_fwd_start).min(q_fwd_end - q_fwd_start);
-                    let query_regions_same = fwd_overlap > 0 && fwd_overlap >= (fwd_min_len as f32 * 0.8) as i32;
+                    let query_regions_same =
+                        fwd_overlap > 0 && fwd_overlap >= (fwd_min_len as f32 * 0.8) as i32;
 
                     if regions_close && scores_similar && query_regions_same {
                         log::debug!(
                             "same_region_opposite_strand match: {}:{} vs {}:{}, ref_dist={}, score_ratio={:.2}, fwd_overlap={}",
-                            p.ref_name, p.pos, q.ref_name, q.pos, ref_distance, score_ratio, fwd_overlap
+                            p.ref_name,
+                            p.pos,
+                            q.ref_name,
+                            q.pos,
+                            ref_distance,
+                            score_ratio,
+                            fwd_overlap
                         );
                     }
                     regions_close && scores_similar && query_regions_same
@@ -828,7 +851,10 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
             // 2. OR same genomic region on opposite strands with same query coverage
             //    (these produce equal scores, causing MAPQ=0 incorrectly)
             // 3. OR same-position duplicate alignments (same ref region, different query regions)
-            if (ref_redundant && query_redundant) || same_region_opposite_strand || same_position_duplicate {
+            if (ref_redundant && query_redundant)
+                || same_region_opposite_strand
+                || same_position_duplicate
+            {
                 // Remove the lower-scoring one (or the current one if equal)
                 // Matches C++ logic: if p->score < q->score remove p, else remove q
                 let removal_reason = if same_position_duplicate {
@@ -842,7 +868,13 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                     keep[i] = false;
                     log::debug!(
                         "Removing redundant alignment[{}]: {}:{} score={} ({}, overlaps with [{}] score={})",
-                        i, p.ref_name, p.pos, p.score, removal_reason, j, q.score
+                        i,
+                        p.ref_name,
+                        p.pos,
+                        p.score,
+                        removal_reason,
+                        j,
+                        q.score
                     );
                     break;
                 } else {
@@ -850,7 +882,13 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                     keep[j] = false;
                     log::debug!(
                         "Removing redundant alignment[{}]: {}:{} score={} ({}, overlaps with [{}] score={})",
-                        j, q.ref_name, q.pos, q.score, removal_reason, i, p.score
+                        j,
+                        q.ref_name,
+                        q.pos,
+                        q.score,
+                        removal_reason,
+                        i,
+                        p.score
                     );
                 }
             }
@@ -875,8 +913,11 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
 
     // Remove exact duplicates (same score, same position, same query bounds)
     alignments.dedup_by(|a, b| {
-        a.score == b.score && a.pos == b.pos && a.ref_id == b.ref_id
-            && a.query_start == b.query_start && a.query_end == b.query_end
+        a.score == b.score
+            && a.pos == b.pos
+            && a.ref_id == b.ref_id
+            && a.query_start == b.query_start
+            && a.query_end == b.query_end
     });
 
     if alignments.len() < before_count {
@@ -944,7 +985,8 @@ fn find_primary_alignments(
                 is_secondary = true;
                 log::debug!(
                     "  -> Marked alignment[{}] as SECONDARY (overlaps with [{}])",
-                    i, j
+                    i,
+                    j
                 );
                 break;
             }
@@ -966,7 +1008,10 @@ fn apply_supplementary_flags(alignments: &mut [Alignment], primary_indices: &[us
             alignments[i].flag |= sam_flags::SUPPLEMENTARY;
             log::debug!(
                 "Marked alignment {} as SUPPLEMENTARY ({}:{}, score={})",
-                i, alignments[i].ref_name, alignments[i].pos, alignments[i].score
+                i,
+                alignments[i].ref_name,
+                alignments[i].pos,
+                alignments[i].score
             );
         }
     }
@@ -1029,8 +1074,10 @@ fn filter_supplementary_by_score(
             to_remove.push(i);
             log::debug!(
                 "Filtering supplementary alignment: {}:{} score={} < threshold={}",
-                alignments[i].ref_name, alignments[i].pos,
-                alignments[i].score, supp_threshold
+                alignments[i].ref_name,
+                alignments[i].pos,
+                alignments[i].score,
+                supp_threshold
             );
         }
     }
@@ -1043,7 +1090,9 @@ fn filter_supplementary_by_score(
     if before_filter != alignments.len() {
         log::debug!(
             "Filtered {} supplementary alignments below score threshold {} (xa_drop_ratio={})",
-            before_filter - alignments.len(), supp_threshold, xa_drop_ratio
+            before_filter - alignments.len(),
+            supp_threshold,
+            xa_drop_ratio
         );
     }
 }
@@ -1078,6 +1127,14 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
         alignments.len(),
         opt.mask_level
     );
+
+    // Step 0: Clear any pre-existing SECONDARY/SUPPLEMENTARY flags
+    // This ensures we start with clean flags and properly recompute them based on
+    // query overlap. Important because some code paths (e.g., deferred CIGAR pipeline)
+    // may have incorrectly set these flags before calling this function.
+    for aln in alignments.iter_mut() {
+        aln.flag &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
+    }
 
     // Calculate score gap threshold for sub_count
     // tmp = max(a+b, o_del+e_del, o_ins+e_ins)
@@ -1150,7 +1207,12 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
     if e_min <= b_max {
         log::debug!(
             "alignments_overlap: NO OVERLAP - a1[{},{}), a2[{},{}), b_max={}, e_min={}",
-            a1_qb, a1_qe, a2_qb, a2_qe, b_max, e_min
+            a1_qb,
+            a1_qe,
+            a2_qb,
+            a2_qe,
+            b_max,
+            e_min
         );
         return false; // No overlap
     }
@@ -1162,7 +1224,14 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
 
     log::debug!(
         "alignments_overlap: a1[{},{}), a2[{},{}), overlap={}, min_len={}, threshold={}, result={}",
-        a1_qb, a1_qe, a2_qb, a2_qe, overlap, min_len, threshold, result
+        a1_qb,
+        a1_qe,
+        a2_qb,
+        a2_qe,
+        overlap,
+        min_len,
+        threshold,
+        result
     );
 
     result
@@ -1611,8 +1680,15 @@ mod tests {
     fn test_remove_redundant_single() {
         let opt = default_test_opt();
         let mut alignments = vec![make_test_alignment(
-            "read1", "chr1", 0, 1000, 100,
-            vec![(b'M', 100)], 0, 100, 0,
+            "read1",
+            "chr1",
+            0,
+            1000,
+            100,
+            vec![(b'M', 100)],
+            0,
+            100,
+            0,
         )];
         remove_redundant_alignments(&mut alignments, &opt);
         assert_eq!(alignments.len(), 1);
@@ -1684,8 +1760,15 @@ mod tests {
     fn test_mark_secondary_single() {
         let opt = default_test_opt();
         let mut alignments = vec![make_test_alignment(
-            "read1", "chr1", 0, 1000, 100,
-            vec![(b'M', 100)], 0, 100, 0,
+            "read1",
+            "chr1",
+            0,
+            1000,
+            100,
+            vec![(b'M', 100)],
+            0,
+            100,
+            0,
         )];
         mark_secondary_alignments(&mut alignments, &opt);
         assert_eq!(alignments.len(), 1);
@@ -1741,18 +1824,23 @@ mod tests {
 
     #[test]
     fn test_alignment_ref_length_simple_match() {
-        let alignment = make_test_alignment(
-            "read1", "chr1", 0, 1000, 100,
-            vec![(b'M', 100)], 0, 100, 0,
-        );
+        let alignment =
+            make_test_alignment("read1", "chr1", 0, 1000, 100, vec![(b'M', 100)], 0, 100, 0);
         assert_eq!(alignment_ref_length(&alignment), 100);
     }
 
     #[test]
     fn test_alignment_ref_length_with_insertions() {
         let alignment = make_test_alignment(
-            "read1", "chr1", 0, 1000, 100,
-            vec![(b'M', 50), (b'I', 5), (b'M', 45)], 0, 100, 0,
+            "read1",
+            "chr1",
+            0,
+            1000,
+            100,
+            vec![(b'M', 50), (b'I', 5), (b'M', 45)],
+            0,
+            100,
+            0,
         );
         // Insertions don't consume reference
         assert_eq!(alignment_ref_length(&alignment), 95);
@@ -1761,8 +1849,15 @@ mod tests {
     #[test]
     fn test_alignment_ref_length_with_deletions() {
         let alignment = make_test_alignment(
-            "read1", "chr1", 0, 1000, 100,
-            vec![(b'M', 50), (b'D', 10), (b'M', 40)], 0, 90, 0,
+            "read1",
+            "chr1",
+            0,
+            1000,
+            100,
+            vec![(b'M', 50), (b'D', 10), (b'M', 40)],
+            0,
+            90,
+            0,
         );
         // Deletions consume reference
         assert_eq!(alignment_ref_length(&alignment), 100);
@@ -1771,8 +1866,15 @@ mod tests {
     #[test]
     fn test_alignment_ref_length_with_soft_clips() {
         let alignment = make_test_alignment(
-            "read1", "chr1", 0, 1000, 100,
-            vec![(b'S', 10), (b'M', 80), (b'S', 10)], 0, 100, 0,
+            "read1",
+            "chr1",
+            0,
+            1000,
+            100,
+            vec![(b'S', 10), (b'M', 80), (b'S', 10)],
+            0,
+            100,
+            0,
         );
         // Soft clips don't consume reference
         assert_eq!(alignment_ref_length(&alignment), 80);
@@ -1810,10 +1912,8 @@ mod tests {
 
     #[test]
     fn test_calculate_tlen_downstream_mate() {
-        let alignment = make_test_alignment(
-            "read1", "chr1", 0, 100, 100,
-            vec![(b'M', 100)], 0, 100, 0,
-        );
+        let alignment =
+            make_test_alignment("read1", "chr1", 0, 100, 100, vec![(b'M', 100)], 0, 100, 0);
         // Mate at position 300, ref_len 100
         let tlen = alignment.calculate_tlen(300, 100);
         // TLEN = mate_end - self_start = 400 - 100 = 300
@@ -1822,10 +1922,8 @@ mod tests {
 
     #[test]
     fn test_calculate_tlen_upstream_mate() {
-        let alignment = make_test_alignment(
-            "read1", "chr1", 0, 300, 100,
-            vec![(b'M', 100)], 0, 100, 0,
-        );
+        let alignment =
+            make_test_alignment("read1", "chr1", 0, 300, 100, vec![(b'M', 100)], 0, 100, 0);
         // Mate at position 100, ref_len 100
         let tlen = alignment.calculate_tlen(100, 100);
         // TLEN should be negative (mate is upstream)

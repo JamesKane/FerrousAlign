@@ -61,7 +61,9 @@ pub fn generate_seeds(
     opt: &MemOpt,
     read_id: u64, // Global read ID for deterministic hash tie-breaking (matches C++ bwa-mem2)
 ) -> Vec<Alignment> {
-    generate_seeds_internal(bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, false)
+    generate_seeds_internal(
+        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, false,
+    )
 }
 
 /// Generate alignments for paired-end processing with deferred secondary marking
@@ -77,7 +79,9 @@ pub fn generate_seeds_for_paired(
     opt: &MemOpt,
     read_id: u64,
 ) -> Vec<Alignment> {
-    generate_seeds_internal(bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, true)
+    generate_seeds_internal(
+        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, read_id, true,
+    )
 }
 
 fn generate_seeds_internal(
@@ -94,7 +98,14 @@ fn generate_seeds_internal(
     // TODO: Accept ComputeBackend parameter when full integration is implemented
     let compute_backend = crate::compute::detect_optimal_backend();
     align_read(
-        bwa_idx, pac_data, query_name, query_seq, query_qual, opt, compute_backend, read_id,
+        bwa_idx,
+        pac_data,
+        query_name,
+        query_seq,
+        query_qual,
+        opt,
+        compute_backend,
+        read_id,
         skip_secondary_marking,
     )
 }
@@ -128,17 +139,17 @@ type RawAlignment = (i32, Vec<(u8, i32)>, Vec<u8>, Vec<u8>);
 #[derive(Debug, Clone)]
 struct MergedChainResult {
     chain_idx: usize,
-    cigar: Vec<(u8, i32)>,     // Pre-merged and normalized CIGAR
+    cigar: Vec<(u8, i32)>, // Pre-merged and normalized CIGAR
     score: i32,
     // Reference location (Phase 3 - coordinate conversion in extension)
     ref_name: String,
     ref_id: usize,
-    chr_pos: u64,              // 0-based chromosome position
-    fm_index_pos: u64,         // Original FM-index position (for MD tag generation)
-    fm_is_rev: bool,           // Whether FM-index pos was in reverse complement region
+    chr_pos: u64,      // 0-based chromosome position
+    fm_index_pos: u64, // Original FM-index position (for MD tag generation)
+    fm_is_rev: bool,   // Whether FM-index pos was in reverse complement region
     // Query bounds (from CIGAR analysis)
-    query_start: i32,          // Sum of leading clips
-    query_end: i32,            // query_len - sum of trailing clips
+    query_start: i32, // Sum of leading clips
+    query_end: i32,   // query_len - sum of trailing clips
 }
 
 struct ExtensionResult {
@@ -309,16 +320,22 @@ fn merge_cigars_for_chains(
 
             // For reverse strand alignments, use end position for bns_depos
             let depos_input = if start_pos >= l_pac {
-                start_pos + ref_len as u64 - 1  // Alignment end (re - 1)
+                start_pos + ref_len as u64 - 1 // Alignment end (re - 1)
             } else {
-                start_pos  // Alignment start (rb)
+                start_pos // Alignment start (rb)
             };
             let (pos_f, fm_is_rev) = bwa_idx.bns.bns_depos(depos_input as i64);
             let rid = bwa_idx.bns.bns_pos2rid(pos_f);
 
             log::debug!(
                 "{}: COORD_TRACE: start_pos={}, l_pac={}, depos_input={}, pos_f={}, rid={}, fm_is_rev={}",
-                query_name, start_pos, l_pac, depos_input, pos_f, rid, fm_is_rev
+                query_name,
+                start_pos,
+                l_pac,
+                depos_input,
+                pos_f,
+                rid,
+                fm_is_rev
             );
 
             let (ref_name, ref_id, chr_pos) =
@@ -326,7 +343,11 @@ fn merge_cigars_for_chains(
                     let ann = &bwa_idx.bns.annotations[rid as usize];
                     log::debug!(
                         "{}: COORD_TRACE: rid={}, ann.name={}, ann.offset={}, chr_pos={}",
-                        query_name, rid, ann.name, ann.offset, pos_f - ann.offset as i64
+                        query_name,
+                        rid,
+                        ann.name,
+                        ann.offset,
+                        pos_f - ann.offset as i64
                     );
                     (
                         ann.name.clone(),
@@ -410,7 +431,11 @@ impl CandidateAlignment {
     fn to_alignment(&self, query_name: &str) -> Alignment {
         use crate::alignment::finalization::sam_flags;
 
-        let flag = if self.strand_rev { sam_flags::REVERSE } else { 0 };
+        let flag = if self.strand_rev {
+            sam_flags::REVERSE
+        } else {
+            0
+        };
 
         Alignment {
             query_name: query_name.to_string(),
@@ -618,10 +643,13 @@ fn find_seeds(
         for (idx, smem) in all_smems.iter().enumerate().take(10) {
             log::debug!(
                 "SMEM_VALIDATION {}:   Pass1[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
-                query_name, idx,
-                smem.query_start, smem.query_end,
+                query_name,
+                idx,
+                smem.query_start,
+                smem.query_end,
                 smem.query_end - smem.query_start + 1,
-                smem.bwt_interval_start, smem.bwt_interval_end,
+                smem.bwt_interval_start,
+                smem.bwt_interval_end,
                 smem.interval_size
             );
         }
@@ -693,13 +721,21 @@ fn find_seeds(
             all_smems.len()
         );
         if log::log_enabled!(log::Level::Debug) {
-            for (idx, smem) in all_smems.iter().skip(initial_smem_count).enumerate().take(10) {
+            for (idx, smem) in all_smems
+                .iter()
+                .skip(initial_smem_count)
+                .enumerate()
+                .take(10)
+            {
                 log::debug!(
                     "SMEM_VALIDATION {}:   Pass2[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
-                    query_name, idx,
-                    smem.query_start, smem.query_end,
+                    query_name,
+                    idx,
+                    smem.query_start,
+                    smem.query_end,
                     smem.query_end - smem.query_start + 1,
-                    smem.bwt_interval_start, smem.bwt_interval_end,
+                    smem.bwt_interval_start,
+                    smem.bwt_interval_end,
                     smem.interval_size
                 );
             }
@@ -731,7 +767,9 @@ fn find_seeds(
         used_3rd_round_seeding = true;
         log::debug!(
             "{}: Running 3rd round seeding (max_mem_intv={}) with {} existing SMEMs",
-            query_name, opt.max_mem_intv, all_smems.len()
+            query_name,
+            opt.max_mem_intv,
+            all_smems.len()
         );
 
         // Use forward-only seed strategy matching BWA-MEM2's bwtSeedStrategyAllPosOneThread
@@ -759,13 +797,21 @@ fn find_seeds(
                 all_smems.len()
             );
             if log::log_enabled!(log::Level::Debug) {
-                for (idx, smem) in all_smems.iter().skip(smems_before_3rd_round).enumerate().take(10) {
+                for (idx, smem) in all_smems
+                    .iter()
+                    .skip(smems_before_3rd_round)
+                    .enumerate()
+                    .take(10)
+                {
                     log::debug!(
                         "SMEM_VALIDATION {}:   Pass3[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
-                        query_name, idx,
-                        smem.query_start, smem.query_end,
+                        query_name,
+                        idx,
+                        smem.query_start,
+                        smem.query_end,
                         smem.query_end - smem.query_start + 1,
-                        smem.bwt_interval_start, smem.bwt_interval_end,
+                        smem.bwt_interval_start,
+                        smem.bwt_interval_end,
                         smem.interval_size
                     );
                 }
@@ -813,12 +859,19 @@ fn find_seeds(
     let effective_max_occ = if used_3rd_round_seeding {
         // Find the minimum occurrence among all SMEMs and use that as the threshold
         // This ensures at least some seeds pass through
-        let min_occ = all_smems.iter().map(|s| s.interval_size).min().unwrap_or(opt.max_occ as u64);
+        let min_occ = all_smems
+            .iter()
+            .map(|s| s.interval_size)
+            .min()
+            .unwrap_or(opt.max_occ as u64);
         // Use min_occ + 1 to ensure seeds pass
         let relaxed_threshold = (min_occ + 1).max(opt.max_occ as u64);
         log::debug!(
             "{}: 3rd round seeding used, relaxing max_occ filter from {} to {} (min_occ={})",
-            query_name, opt.max_occ, relaxed_threshold, min_occ
+            query_name,
+            opt.max_occ,
+            relaxed_threshold,
+            min_occ
         );
         relaxed_threshold
     } else {
@@ -857,13 +910,22 @@ fn find_seeds(
 
     // SMEM OVERLAP DEBUG: Log ALL SMEMs to identify overlapping/duplicate SMEMs
     if log::log_enabled!(log::Level::Debug) {
-        log::debug!("SMEM_OVERLAP {}: {} SMEMs after filtering:", query_name, unique_filtered_smems.len());
+        log::debug!(
+            "SMEM_OVERLAP {}: {} SMEMs after filtering:",
+            query_name,
+            unique_filtered_smems.len()
+        );
         for (idx, smem) in unique_filtered_smems.iter().enumerate() {
             log::debug!(
                 "SMEM_OVERLAP {}:   SMEM[{}]: query[{}..{}] len={} interval=[{}, {}) size={} rev={}",
-                query_name, idx, smem.query_start, smem.query_end,
+                query_name,
+                idx,
+                smem.query_start,
+                smem.query_end,
                 smem.query_end - smem.query_start + 1,
-                smem.bwt_interval_start, smem.bwt_interval_end, smem.interval_size,
+                smem.bwt_interval_start,
+                smem.bwt_interval_end,
+                smem.interval_size,
                 smem.is_reverse_complement
             );
         }
@@ -878,8 +940,10 @@ fn find_seeds(
     // For highly repetitive reads (small number of SMEMs all covering full query),
     // allow more seeds per SMEM to get full coverage of the reference range.
     // Otherwise divide SEEDS_PER_READ among all SMEMs.
-    let is_highly_repetitive = sorted_smems.len() <= 4 &&
-        sorted_smems.iter().all(|s| s.query_end - s.query_start > (query_len as i32 * 3 / 4));
+    let is_highly_repetitive = sorted_smems.len() <= 4
+        && sorted_smems
+            .iter()
+            .all(|s| s.query_end - s.query_start > (query_len as i32 * 3 / 4));
 
     let seeds_per_smem = if sorted_smems.is_empty() {
         SEEDS_PER_READ
@@ -916,8 +980,12 @@ fn find_seeds(
         if log::log_enabled!(log::Level::Debug) {
             log::debug!(
                 "SEED_CONVERSION {}: SMEM[{}] query[{}..{}] → {} ref positions (requested: {})",
-                query_name, smem_idx, smem.query_start, smem.query_end,
-                ref_positions.len(), max_positions_this_smem
+                query_name,
+                smem_idx,
+                smem.query_start,
+                smem.query_end,
+                ref_positions.len(),
+                max_positions_this_smem
             );
         }
 
@@ -942,8 +1010,16 @@ fn find_seeds(
             if log::log_enabled!(log::Level::Debug) {
                 log::debug!(
                     "SEED_CONVERSION {}:   Seed[{}]: ref_pos={} is_rev={} rid={} chr={}",
-                    query_name, pos_idx, ref_pos, is_rev, rid,
-                    if rid >= 0 { bwa_idx.bns.annotations[rid as usize].name.as_str() } else { "N/A" }
+                    query_name,
+                    pos_idx,
+                    ref_pos,
+                    is_rev,
+                    rid,
+                    if rid >= 0 {
+                        bwa_idx.bns.annotations[rid as usize].name.as_str()
+                    } else {
+                        "N/A"
+                    }
                 );
             }
 
@@ -991,7 +1067,10 @@ fn find_seeds(
             if count > 0 || skipped > 0 {
                 log::debug!(
                     "SEED_CONVERSION {}:   SMEM[{}] → {} seeds ({} skipped at boundary)",
-                    query_name, idx, count, skipped
+                    query_name,
+                    idx,
+                    count,
+                    skipped
                 );
             }
         }
@@ -1003,7 +1082,6 @@ fn find_seeds(
             );
         }
     }
-
 
     if max_smem_count > query_len {
         log::debug!(
@@ -1032,17 +1110,29 @@ fn build_and_filter_chains(
 ) -> (Vec<Chain>, Vec<Seed>) {
     // Chain seeds together and then filter them
     let (mut chained_results, sorted_seeds) = chain_seeds(seeds, opt);
-    log::debug!("{}: Chaining produced {} chains", query_name, chained_results.len());
+    log::debug!(
+        "{}: Chaining produced {} chains",
+        query_name,
+        chained_results.len()
+    );
 
     // PHASE 3 VALIDATION: Log all chains before filtering
     if log::log_enabled!(log::Level::Debug) {
         for (idx, chain) in chained_results.iter().enumerate() {
             log::debug!(
                 "CHAIN_VALIDATION {}: Chain[{}] score={} seeds={} query=[{}..{}] ref=[{}..{}] rev={} weight={} frac_rep={:.3} rid={}",
-                query_name, idx, chain.score, chain.seeds.len(),
-                chain.query_start, chain.query_end,
-                chain.ref_start, chain.ref_end,
-                chain.is_rev, chain.weight, chain.frac_rep, chain.rid
+                query_name,
+                idx,
+                chain.score,
+                chain.seeds.len(),
+                chain.query_start,
+                chain.query_end,
+                chain.ref_start,
+                chain.ref_end,
+                chain.is_rev,
+                chain.weight,
+                chain.frac_rep,
+                chain.rid
             );
         }
     }
@@ -1060,10 +1150,18 @@ fn build_and_filter_chains(
         for (idx, chain) in filtered_chains.iter().enumerate() {
             log::debug!(
                 "CHAIN_VALIDATION {}: FilteredChain[{}] score={} seeds={} query=[{}..{}] ref=[{}..{}] rev={} weight={} frac_rep={:.3} rid={}",
-                query_name, idx, chain.score, chain.seeds.len(),
-                chain.query_start, chain.query_end,
-                chain.ref_start, chain.ref_end,
-                chain.is_rev, chain.weight, chain.frac_rep, chain.rid
+                query_name,
+                idx,
+                chain.score,
+                chain.seeds.len(),
+                chain.query_start,
+                chain.query_end,
+                chain.ref_start,
+                chain.ref_end,
+                chain.is_rev,
+                chain.weight,
+                chain.frac_rep,
+                chain.rid
             );
         }
     }
@@ -1184,9 +1282,14 @@ fn extend_chains_to_alignments(
                     if log::log_enabled!(log::Level::Debug) {
                         log::debug!(
                             "EXTENSION_JOB {}: Chain[{}] type=LEFT query=[0..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
-                            _query_name, chain_idx, seed.query_pos,
-                            rmax_0, seed.ref_pos,
-                            seed.query_pos, seed.len, seed.is_rev
+                            _query_name,
+                            chain_idx,
+                            seed.query_pos,
+                            rmax_0,
+                            seed.ref_pos,
+                            seed.query_pos,
+                            seed.len,
+                            seed.is_rev
                         );
                     }
 
@@ -1212,9 +1315,15 @@ fn extend_chains_to_alignments(
                     if log::log_enabled!(log::Level::Debug) {
                         log::debug!(
                             "EXTENSION_JOB {}: Chain[{}] type=RIGHT query=[{}..{}] ref=[{}..{}] seed_pos={} seed_len={} rev={}",
-                            _query_name, chain_idx, seed_query_end, query_len,
-                            seed.ref_pos + seed.len as u64, rmax_1,
-                            seed.query_pos, seed.len, seed.is_rev
+                            _query_name,
+                            chain_idx,
+                            seed_query_end,
+                            query_len,
+                            seed.ref_pos + seed.len as u64,
+                            rmax_1,
+                            seed.query_pos,
+                            seed.len,
+                            seed.is_rev
                         );
                     }
 
@@ -1375,13 +1484,8 @@ fn finalize_alignments(
     skip_score_filtering: bool,
 ) -> Vec<Alignment> {
     // Step 1: Build CandidateAlignment from extension results
-    let candidates = build_candidate_alignments(
-        &extension_result,
-        bwa_idx,
-        pac_data,
-        query_name,
-        read_id,
-    );
+    let candidates =
+        build_candidate_alignments(&extension_result, bwa_idx, pac_data, query_name, read_id);
 
     log::debug!(
         "{}: STANDARD_CIGAR: {} candidates after build_candidate_alignments",
@@ -1390,7 +1494,13 @@ fn finalize_alignments(
     );
 
     // Step 2-5: Convert to Alignments and apply post-processing
-    finalize_candidates(candidates, query_name, opt, skip_secondary_marking, skip_score_filtering)
+    finalize_candidates(
+        candidates,
+        query_name,
+        opt,
+        skip_secondary_marking,
+        skip_score_filtering,
+    )
 }
 
 /// Build CandidateAlignment structs from extension results
@@ -1427,7 +1537,8 @@ fn build_candidate_alignments(
         // NOTE: We use fm_index_pos (not chr_pos) for MD tag generation because
         // bns_get_seq expects FM-index coordinates
         let md_tag = if !pac_data.is_empty() {
-            let ref_len: i32 = merged.cigar
+            let ref_len: i32 = merged
+                .cigar
                 .iter()
                 .filter_map(|&(op, len)| {
                     if matches!(op as char, 'M' | 'D') {
@@ -1448,7 +1559,8 @@ fn build_candidate_alignments(
                 &merged.cigar,
             )
         } else {
-            merged.cigar
+            merged
+                .cigar
                 .iter()
                 .filter_map(|&(op, len)| if op == b'M' { Some(len) } else { None })
                 .sum::<i32>()
@@ -1489,9 +1601,10 @@ fn build_candidate_alignments(
     // This ensures that for equal scores, lower-position alignments get lower hashes
     // and thus become primary (since hash is used as tie-breaker in alnreg_hlt)
     candidates.sort_by(|a, b| {
-        b.score.cmp(&a.score)  // score descending
-            .then_with(|| a.pos.cmp(&b.pos))  // ref_pos ascending
-            .then_with(|| a.query_start.cmp(&b.query_start))  // query_start ascending
+        b.score
+            .cmp(&a.score) // score descending
+            .then_with(|| a.pos.cmp(&b.pos)) // ref_pos ascending
+            .then_with(|| a.query_start.cmp(&b.query_start)) // query_start ascending
     });
 
     // Now assign hash based on sorted order (matching C++ bwamem.cpp:1428)
@@ -1557,7 +1670,9 @@ fn finalize_candidates(
         remove_redundant_alignments(&mut alignments, opt);
         log::debug!(
             "{}: STANDARD_CIGAR: {} alignments after redundancy removal (was {})",
-            query_name, alignments.len(), before_dedup
+            query_name,
+            alignments.len(),
+            before_dedup
         );
 
         // Sort by score for consistent ordering
@@ -1573,9 +1688,16 @@ fn finalize_candidates(
 
     // If all alignments were filtered/removed, output unmapped record
     // This ensures SAM spec compliance: all input reads must appear in output
-    log::debug!("{}: STANDARD_CIGAR: Final {} alignments", query_name, alignments.len());
+    log::debug!(
+        "{}: STANDARD_CIGAR: Final {} alignments",
+        query_name,
+        alignments.len()
+    );
     if alignments.is_empty() {
-        log::debug!("{}: No alignments remaining, creating unmapped record", query_name);
+        log::debug!(
+            "{}: No alignments remaining, creating unmapped record",
+            query_name
+        );
         alignments.push(Alignment {
             query_name: query_name.to_string(),
             flag: sam_flags::UNMAPPED,
@@ -1659,7 +1781,10 @@ pub fn align_read_deferred(
     let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len(), query_name);
 
     if chains.is_empty() {
-        log::debug!("{}: No chains after filtering, returning unmapped", query_name);
+        log::debug!(
+            "{}: No chains after filtering, returning unmapped",
+            query_name
+        );
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -1689,7 +1814,10 @@ pub fn align_read_deferred(
     );
 
     if extension_result.regions.is_empty() {
-        log::debug!("{}: No regions after extension, returning unmapped", query_name);
+        log::debug!(
+            "{}: No regions after extension, returning unmapped",
+            query_name
+        );
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -1744,13 +1872,8 @@ pub fn align_read_deferred(
 
     for (idx, region) in filtered_regions.iter().enumerate() {
         // Generate CIGAR from region boundaries
-        let cigar_result = generate_cigar_from_region(
-            bwa_idx,
-            pac_data,
-            &encoded_query,
-            region,
-            opt,
-        );
+        let cigar_result =
+            generate_cigar_from_region(bwa_idx, pac_data, &encoded_query, region, opt);
 
         let (cigar, nm, md_tag) = match cigar_result {
             Some(result) => result,
@@ -1766,11 +1889,10 @@ pub fn align_read_deferred(
         };
 
         // Build alignment from region + generated CIGAR
-        let mut flag = if region.is_rev { sam_flags::REVERSE } else { 0 };
-        if idx > 0 {
-            // Mark non-primary alignments
-            flag |= sam_flags::SECONDARY;
-        }
+        // Only set strand flag here - secondary/supplementary marking is done later
+        // by mark_secondary_alignments() which properly distinguishes overlapping
+        // (SECONDARY) vs non-overlapping (SUPPLEMENTARY) alignments
+        let flag = if region.is_rev { sam_flags::REVERSE } else { 0 };
 
         let hash = crate::utils::hash_64(read_id + idx as u64);
 
@@ -1802,7 +1924,10 @@ pub fn align_read_deferred(
     }
 
     if alignments.is_empty() {
-        log::debug!("{}: No valid alignments after CIGAR generation, returning unmapped", query_name);
+        log::debug!(
+            "{}: No valid alignments after CIGAR generation, returning unmapped",
+            query_name
+        );
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -1810,7 +1935,10 @@ pub fn align_read_deferred(
     crate::alignment::finalization::remove_redundant_alignments(&mut alignments, opt);
 
     if alignments.is_empty() {
-        log::debug!("{}: No alignments after redundancy removal, returning unmapped", query_name);
+        log::debug!(
+            "{}: No alignments after redundancy removal, returning unmapped",
+            query_name
+        );
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -1931,8 +2059,9 @@ mod tests {
         // Test doesn't need real MD tags, use empty pac_data
         let pac_data: &[u8] = &[];
         let read_id = 0u64; // Test read ID
-        let alignments =
-            super::generate_seeds(&bwa_idx, pac_data, query_name, query_seq, query_qual, &opt, read_id);
+        let alignments = super::generate_seeds(
+            &bwa_idx, pac_data, query_name, query_seq, query_qual, &opt, read_id,
+        );
 
         assert!(
             !alignments.is_empty(),
