@@ -1,5 +1,6 @@
 pub mod banded_swa;
 pub mod chaining;
+pub mod coordinates;
 pub mod extension;
 pub mod finalization;
 pub mod ksw_affine_gap;

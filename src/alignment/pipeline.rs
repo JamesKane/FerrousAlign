@@ -242,60 +242,37 @@ fn merge_cigars_for_chains(
             }
 
             // Coordinate conversion: FM-index position -> chromosome position
-            // Matching BWA-MEM2 bwamem.cpp:1770:
-            //   pos = bns_depos(bns, rb < bns->l_pac? rb : re - 1, &is_rev);
-            // For reverse strand (rb >= l_pac), use alignment END position, not START
-            let l_pac = bwa_idx.bns.packed_sequence_length;
-            let ref_len: i64 = cigar
+            // Using centralized function for consistent conversion across code paths
+            let ref_len: u64 = cigar
                 .iter()
                 .filter_map(|&(op, len)| {
                     if matches!(op as char, 'M' | 'D') {
-                        Some(len as i64)
+                        Some(len as u64)
                     } else {
                         None
                     }
                 })
                 .sum();
 
-            // For reverse strand alignments, use end position for bns_depos
-            let depos_input = if start_pos >= l_pac {
-                start_pos + ref_len as u64 - 1 // Alignment end (re - 1)
-            } else {
-                start_pos // Alignment start (rb)
-            };
-            let (pos_f, fm_is_rev) = bwa_idx.bns.bns_depos(depos_input as i64);
-            let rid = bwa_idx.bns.bns_pos2rid(pos_f);
+            let coords = crate::alignment::coordinates::fm_to_chromosome_coords(
+                bwa_idx,
+                start_pos,
+                start_pos + ref_len,
+            );
+            let ref_name = coords.ref_name;
+            let ref_id = coords.ref_id.max(0) as usize;
+            let chr_pos = coords.chr_pos;
+            let fm_is_rev = coords.is_rev;
 
             log::debug!(
-                "{}: COORD_TRACE: start_pos={}, l_pac={}, depos_input={}, pos_f={}, rid={}, fm_is_rev={}",
+                "{}: COORD_TRACE: start_pos={}, ref_len={}, ref_name={}, chr_pos={}, is_rev={}",
                 query_name,
                 start_pos,
-                l_pac,
-                depos_input,
-                pos_f,
-                rid,
+                ref_len,
+                ref_name,
+                chr_pos,
                 fm_is_rev
             );
-
-            let (ref_name, ref_id, chr_pos) =
-                if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
-                    let ann = &bwa_idx.bns.annotations[rid as usize];
-                    log::debug!(
-                        "{}: COORD_TRACE: rid={}, ann.name={}, ann.offset={}, chr_pos={}",
-                        query_name,
-                        rid,
-                        ann.name,
-                        ann.offset,
-                        pos_f - ann.offset as i64
-                    );
-                    (
-                        ann.name.clone(),
-                        rid as usize,
-                        (pos_f - ann.offset as i64) as u64,
-                    )
-                } else {
-                    ("unknown_ref".to_string(), 0, 0)
-                };
 
             results.push(MergedChainResult {
                 chain_idx,

@@ -668,7 +668,6 @@ fn merge_scores_to_regions(
     query_len: i32,
 ) -> Vec<AlignmentRegion> {
     let mut regions = Vec::new();
-    let l_pac = bwa_idx.bns.packed_sequence_length;
 
     for (chain_idx, chain) in chains.iter().enumerate() {
         if chain.seeds.is_empty() {
@@ -776,36 +775,16 @@ fn merge_scores_to_regions(
                 }
             }
 
-            // Convert FM-index position to chromosome coordinates
-            // BWA-MEM2 reference: bwamem.cpp:1783-1785
-            // For forward strand (rb < l_pac): use rb
-            // For reverse strand (rb >= l_pac): use re - 1
-            // This ensures bns_depos returns the leftmost chromosome position
-            let is_rev = region.rb >= l_pac;
-            let fm_pos = if is_rev {
-                region.re.saturating_sub(1)
-            } else {
-                region.rb
-            };
-            region.is_rev = is_rev;
-
-            // Get reference ID and chromosome position
-            // Use bns_depos to get forward position and strand
-            let (pos_f, depos_is_rev) = bwa_idx.bns.bns_depos(fm_pos as i64);
-            region.is_rev = depos_is_rev;
-
-            let rid = bwa_idx.bns.bns_pos2rid(pos_f);
-            if rid >= 0 && (rid as usize) < bwa_idx.bns.annotations.len() {
-                region.rid = rid;
-                region.ref_name = bwa_idx.bns.annotations[rid as usize].name.clone();
-                // Calculate chromosome position (position relative to chromosome start)
-                let offset = bwa_idx.bns.annotations[rid as usize].offset as i64;
-                region.chr_pos = (pos_f - offset).max(0) as u64;
-            } else {
-                region.rid = -1;
-                region.ref_name = "*".to_string();
-                region.chr_pos = 0;
-            }
+            // Convert FM-index position to chromosome coordinates using centralized function
+            let coords = crate::alignment::coordinates::fm_to_chromosome_coords(
+                bwa_idx,
+                region.rb,
+                region.re,
+            );
+            region.rid = coords.ref_id;
+            region.ref_name = coords.ref_name;
+            region.chr_pos = coords.chr_pos;
+            region.is_rev = coords.is_rev;
 
             // Track best scoring region for this chain
             if total_score > best_score {
