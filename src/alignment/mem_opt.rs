@@ -1,5 +1,6 @@
 use clap::Args;
 use std::path::PathBuf;
+use crate::defaults::*;
 
 // bwa-mem2-rust/src/mem_opt.rs
 //
@@ -153,39 +154,39 @@ pub struct MemCliOptions {
 
     // ===== Algorithm Options =====
     /// Minimum seed length
-    #[arg(short = 'k', long, value_name = "INT", default_value_t = 19)]
+    #[arg(short = 'k', long, value_name = "INT", default_value_t = MIN_SEED_LEN)]
     pub min_seed_len: i32,
 
     /// Band width for banded alignment
-    #[arg(short = 'w', long, value_name = "INT", default_value_t = 100)]
+    #[arg(short = 'w', long, value_name = "INT", default_value_t = BAND_WIDTH)]
     pub band_width: i32,
 
     /// Off-diagonal X-dropoff
-    #[arg(short = 'z', long, value_name = "INT", default_value_t = 100)]
+    #[arg(short = 'z', long, value_name = "INT", default_value_t = OFF_DIAGONAL_DROPOFF)]
     pub off_diagonal_dropoff: i32,
 
     /// Look for internal seeds inside a seed longer than {-k} * FLOAT
-    #[arg(short = 'r', long, value_name = "FLOAT", default_value_t = 1.5)]
+    #[arg(short = 'r', long, value_name = "FLOAT", default_value_t = RESEED_FACTOR)]
     pub reseed_factor: f32,
 
     /// Seed occurrence for the 3rd round seeding
-    #[arg(short = 'y', long, value_name = "INT", default_value_t = 20)]
+    #[arg(short = 'y', long, value_name = "INT", default_value_t = SEED_OCCURRENCE_3RD)]
     pub seed_occurrence_3rd: u64,
 
     /// Skip seeds with more than INT occurrences
-    #[arg(short = 'X', long, value_name = "INT", default_value_t = 500)]
+    #[arg(short = 'X', long, value_name = "INT", default_value_t = MAX_OCCURRENCES)]
     pub max_occurrences: i32,
 
     /// Drop chains shorter than FLOAT fraction of the longest overlapping chain
-    #[arg(short = 'D', long, value_name = "FLOAT", default_value_t = 0.50)]
+    #[arg(short = 'D', long, value_name = "FLOAT", default_value_t = DROP_CHAIN_FRACTION)]
     pub drop_chain_fraction: f32,
 
     /// Discard a chain if seeded bases shorter than INT
-    #[arg(short = 'm', long, value_name = "INT", default_value_t = 0)]
+    #[arg(short = 'm', long, value_name = "INT", default_value_t = MIN_CHAIN_WEIGHT)]
     pub min_chain_weight: i32,
 
     /// Perform at most INT rounds of mate rescues for each read
-    #[arg(short = 'r', long, value_name = "INT", default_value_t = 50)]
+    #[arg(short = 'r', long, value_name = "INT", default_value_t = MAX_MATE_RESCUES)]
     pub max_mate_rescues: i32,
 
     /// Skip mate rescue
@@ -198,27 +199,27 @@ pub struct MemCliOptions {
 
     // ===== Scoring Options =====
     /// Score for a sequence match, which scales options -TdBOELU unless overridden
-    #[arg(short = 'A', long, value_name = "INT", default_value_t = 1)]
+    #[arg(short = 'A', long, value_name = "INT", default_value_t = MATCH_SCORE)]
     pub match_score: i32,
 
     /// Penalty for a mismatch
-    #[arg(short = 'B', long, value_name = "INT", default_value_t = 4)]
+    #[arg(short = 'B', long, value_name = "INT", default_value_t = MISMATCH_PENALTY)]
     pub mismatch_penalty: i32,
 
     /// Gap open penalties for deletions and insertions [6,6]
-    #[arg(short = 'O', long, value_name = "INT[,INT]", default_value = "6")]
+    #[arg(short = 'O', long, value_name = "INT[,INT]", default_value = GAP_OPEN_PENALTIES)]
     pub gap_open: String,
 
     /// Gap extension penalty; a gap of size k cost '{-O} + {-E}*k' [1,1]
-    #[arg(short = 'E', long, value_name = "INT[,INT]", default_value = "1")]
+    #[arg(short = 'E', long, value_name = "INT[,INT]", default_value = GAP_EXTEND_PENALTIES)]
     pub gap_extend: String,
 
     /// Penalty for 5'- and 3'-end clipping [5,5]
-    #[arg(short = 'L', long, value_name = "INT[,INT]", default_value = "5")]
+    #[arg(short = 'L', long, value_name = "INT[,INT]", default_value = CLIPPING_PENALTIES)]
     pub clipping_penalty: String,
 
     /// Penalty for an unpaired read pair
-    #[arg(short = 'U', long, value_name = "INT", default_value_t = 17)]
+    #[arg(short = 'U', long, value_name = "INT", default_value_t = UNPAIRED_PENALTY)]
     pub unpaired_penalty: i32,
 
     // ===== I/O Options =====
@@ -251,16 +252,16 @@ pub struct MemCliOptions {
     pub chunk_size: Option<i64>,
 
     /// Verbose level: 1=error, 2=warning, 3=message, 4=debug, 5+=trace
-    #[arg(short = 'v', long, value_name = "INT", default_value_t = 3)]
+    #[arg(short = 'v', long, value_name = "INT", default_value_t = VERBOSITY as u8)]
     pub verbosity: u8,
 
     /// Minimum score to output
-    #[arg(short = 'T', long, value_name = "INT", default_value_t = 30)]
+    #[arg(short = 'T', long, value_name = "INT", default_value_t = MIN_SCORE)]
     pub min_score: i32,
 
     /// If there are <INT hits with score >80% of the max score, output all in XA [5,200]
     /// Note: bwa-mem2 uses -h, but we use --max-xa-hits to avoid conflict with --help
-    #[arg(short = 'x', long, value_name = "INT[,INT]", default_value = "5")]
+    #[arg(short = 'x', long, value_name = "INT[,INT]", default_value = MAX_XA_HITS)]
     pub max_xa_hits: String,
 
     /// Output all alignments for SE or unpaired PE
@@ -335,42 +336,42 @@ impl Default for MemOpt {
     fn default() -> Self {
         let mut opt = MemOpt {
             // Scoring (matching C++ defaults)
-            a: 1,
-            b: 4,
-            o_del: 6,
-            e_del: 1,
-            o_ins: 6,
-            e_ins: 1,
-            pen_unpaired: 17,
-            pen_clip5: 5,
-            pen_clip3: 5,
+            a: MATCH_SCORE,
+            b: MISMATCH_PENALTY,
+            o_del: MemOpt::parse_gap_penalties(GAP_OPEN_PENALTIES).unwrap().0,
+            e_del: MemOpt::parse_gap_penalties(GAP_EXTEND_PENALTIES).unwrap().0,
+            o_ins: MemOpt::parse_gap_penalties(GAP_OPEN_PENALTIES).unwrap().1,
+            e_ins: MemOpt::parse_gap_penalties(GAP_EXTEND_PENALTIES).unwrap().1,
+            pen_unpaired: UNPAIRED_PENALTY,
+            pen_clip5: MemOpt::parse_clip_penalties(CLIPPING_PENALTIES).unwrap().0,
+            pen_clip3: MemOpt::parse_clip_penalties(CLIPPING_PENALTIES).unwrap().1,
 
             // Alignment
-            w: 100,
-            zdrop: 100,
+            w: BAND_WIDTH,
+            zdrop: OFF_DIAGONAL_DROPOFF,
 
             // Seeding
-            max_mem_intv: 20,
-            min_seed_len: 19,
-            split_factor: 1.5,
-            split_width: 10,
-            max_occ: 500,
+            max_mem_intv: SEED_OCCURRENCE_3RD, // Assuming this maps to SEED_OCCURRENCE_3RD due to similar context
+            min_seed_len: MIN_SEED_LEN,
+            split_factor: RESEED_FACTOR,
+            split_width: 10, // No corresponding constant in defaults.rs
+            max_occ: MAX_OCCURRENCES,
 
             // Chaining
-            min_chain_weight: 0,
+            min_chain_weight: MIN_CHAIN_WEIGHT,
             max_chain_extend: 50, // Limit chains to extend (was 1<<30 which caused memory explosion)
             max_chain_gap: 10000,
 
             // Filtering
-            mask_level: 0.50,
-            drop_ratio: 0.50,
-            xa_drop_ratio: 0.80,
-            mask_level_redun: 0.95,
+            mask_level: 0.50, // No corresponding constant in defaults.rs
+            drop_ratio: DROP_CHAIN_FRACTION,
+            xa_drop_ratio: 0.80, // No corresponding constant in defaults.rs
+            mask_level_redun: 0.95, // No corresponding constant in defaults.rs
 
             // Output
-            t: 30,
-            max_xa_hits: 5,
-            max_xa_hits_alt: 200,
+            t: MIN_SCORE,
+            max_xa_hits: parse_xa_hits(MAX_XA_HITS).unwrap().0,
+            max_xa_hits_alt: parse_xa_hits(MAX_XA_HITS).unwrap().1,
 
             // Paired-end
             max_ins: 10000,
@@ -396,7 +397,7 @@ impl Default for MemOpt {
 
             // Advanced options
             insert_size_override: None,
-            verbosity: 3, // Default: message level
+            verbosity: VERBOSITY, // Default: message level
 
             // Advanced flags
             smart_pairing: false,
