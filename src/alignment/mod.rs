@@ -1,4 +1,5 @@
 pub mod banded_swa;
+pub mod banded_swa_sse_neon;  // Baseline 128-bit vertical SIMD kernel (SSE/NEON)
 pub mod chaining;
 pub mod cigar;
 pub mod coordinates;
