@@ -122,22 +122,37 @@ impl BandedPairWiseSW {
     /// - "1", "true", "on" => enable SIMD
     /// - unset => defaults to enabled on x86_64, disabled on aarch64 (temporary until NEON fully vetted)
     fn simd_runtime_enabled() -> bool {
-        if let Ok(val) = std::env::var("FERROUS_ALIGN_SIMD") {
+        let result = if let Ok(val) = std::env::var("FERROUS_ALIGN_SIMD") {
             match val.to_ascii_lowercase().as_str() {
-                "0" | "false" | "off" => return false,
-                "1" | "true" | "on" => return true,
-                _ => { /* fallthrough to default */ }
+                "0" | "false" | "off" => {
+                    log::debug!("[SIMD] Runtime control: DISABLED by FERROUS_ALIGN_SIMD={}", val);
+                    false
+                }
+                "1" | "true" | "on" => {
+                    log::debug!("[SIMD] Runtime control: ENABLED by FERROUS_ALIGN_SIMD={}", val);
+                    true
+                }
+                _ => {
+                    log::debug!("[SIMD] Runtime control: invalid value '{}', using platform default", val);
+                    #[cfg(target_arch = "x86_64")]
+                    { true }
+                    #[cfg(not(target_arch = "x86_64"))]
+                    { false }
+                }
             }
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            true
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            // Default to scalar on non‑x86_64 (e.g., aarch64/NEON) until SIMD path is fully validated
-            false
-        }
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            {
+                log::debug!("[SIMD] Runtime control: using default (ENABLED on x86_64)");
+                true
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                log::debug!("[SIMD] Runtime control: using default (DISABLED on aarch64)");
+                false
+            }
+        };
+        result
     }
     pub fn new(
         o_del: i32,
@@ -171,6 +186,57 @@ impl BandedPairWiseSW {
         }
     }
 
+    /// Runtime dispatch for single alignment that respects FERROUS_ALIGN_SIMD flag.
+    ///
+    /// This is the main entry point for alignment that should be used in production code.
+    /// It checks the FERROUS_ALIGN_SIMD flag and dispatches to either:
+    /// - SIMD path: Uses SIMD batch of size 1 (to exercise SIMD code paths)
+    /// - Scalar path: Direct scalar implementation
+    ///
+    /// For tests and benchmarks that explicitly want scalar/SIMD, call those functions directly.
+    pub fn banded_swa(
+        &self,
+        qlen: i32,
+        query: &[u8],
+        tlen: i32,
+        target: &[u8],
+        w: i32,
+        h0: i32,
+    ) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
+        if !Self::simd_runtime_enabled() {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static LOGGED: AtomicBool = AtomicBool::new(false);
+            if !LOGGED.swap(true, Ordering::Relaxed) {
+                log::info!("[SIMD] Runtime dispatch: using SCALAR path (FERROUS_ALIGN_SIMD=0)");
+            }
+            return self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
+        }
+
+        // SIMD enabled: use batch of 1 to exercise SIMD code paths
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if !LOGGED.swap(true, Ordering::Relaxed) {
+            #[cfg(target_arch = "x86_64")]
+            log::info!("[SIMD] Runtime dispatch: using SIMD path (SSE/AVX2, FERROUS_ALIGN_SIMD=1)");
+            #[cfg(target_arch = "aarch64")]
+            log::info!("[SIMD] Runtime dispatch: using SIMD path (NEON, FERROUS_ALIGN_SIMD=1)");
+        }
+
+        // Create a batch of 1 alignment and dispatch to SIMD
+        // Note: We need to clone the slices to Vec for the batch API
+        let batch = vec![(qlen, query.to_vec(), tlen, target.to_vec(), w, h0, None)];
+        let results = self.simd_banded_swa_dispatch_with_cigar(&batch);
+
+        // Extract the single result and convert from AlignmentResult to scalar tuple format
+        if let Some(result) = results.into_iter().next() {
+            (result.score, result.cigar, result.ref_aligned, result.query_aligned)
+        } else {
+            // Shouldn't happen, but fall back to scalar if SIMD returns empty
+            log::warn!("[SIMD] SIMD batch returned empty, falling back to scalar");
+            self.scalar_banded_swa(qlen, query, tlen, target, w, h0)
+        }
+    }
+
     pub fn scalar_banded_swa(
         &self,
         qlen: i32,
@@ -180,6 +246,9 @@ impl BandedPairWiseSW {
         w: i32,
         h0: i32,
     ) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
+        // Note: This is the direct scalar implementation.
+        // For runtime SIMD dispatch, use banded_swa() instead.
+
         // Handle degenerate cases: empty sequences
         if tlen == 0 || qlen == 0 {
             // For empty sequences, return zero score and empty CIGAR
@@ -1270,6 +1339,11 @@ impl BandedPairWiseSW {
 
         // Main DP loop using SIMD (16-bit operations)
         unsafe {
+            #[cfg(target_arch = "x86_64")]
+            log::trace!("[SIMD] Executing SSE2 intrinsics in DP loop (batch size: {})", SIMD_WIDTH);
+            #[cfg(target_arch = "aarch64")]
+            log::trace!("[SIMD] Executing NEON intrinsics in DP loop (batch size: {})", SIMD_WIDTH);
+
             let mut max_score_vec = _mm_loadu_si128(max_scores.as_ptr() as *const __m128i);
 
             for i in 0..max_tlen as usize {
@@ -1651,6 +1725,7 @@ impl BandedPairWiseSW {
 
         // Allow forcing scalar path via env var (temporary default on aarch64)
         if !Self::simd_runtime_enabled() {
+            log::info!("[SIMD] Vertical batch (8-bit): using SCALAR fallback for {} alignments", batch.len());
             // Scalar fallback: process each alignment sequentially
             let mut results = Vec::with_capacity(batch.len());
             for &(qlen, query, tlen, target, w, h0) in batch.iter() {
@@ -1661,6 +1736,7 @@ impl BandedPairWiseSW {
         }
 
         let engine = detect_optimal_simd_engine();
+        log::info!("[SIMD] Vertical batch (8-bit): using {:?} engine for {} alignments", engine, batch.len());
 
         // Determine batch size based on SIMD engine
         let simd_batch_size: usize = match engine {
@@ -1731,6 +1807,7 @@ impl BandedPairWiseSW {
 
         // Allow forcing scalar path via env var (temporary default on aarch64)
         if !Self::simd_runtime_enabled() {
+            log::info!("[SIMD] Vertical batch (16-bit): using SCALAR fallback for {} alignments", batch.len());
             let mut results = Vec::with_capacity(batch.len());
             for &(qlen, query, tlen, target, w, h0) in batch.iter() {
                 let (out, _cigar, _q, _t) = self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
@@ -1738,6 +1815,8 @@ impl BandedPairWiseSW {
             }
             return results;
         }
+
+        log::info!("[SIMD] Vertical batch (16-bit): using NEON/SSE 128-bit engine for {} alignments", batch.len());
 
         let mut all_results = Vec::with_capacity(batch.len());
 

@@ -103,6 +103,8 @@ pub unsafe fn batch_ksw_align_sse_neon(
     w_ambig: i8,              // Ambiguous base penalty
     _phase: i32,              // Processing phase
 ) -> usize {
+    log::debug!("[SIMD] Horizontal kernel (SSE/NEON): processing {} alignments", pairs.len());
+
     // ========================================================================
     // SECTION 1: Initialization
     // ========================================================================

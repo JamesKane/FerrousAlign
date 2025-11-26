@@ -979,8 +979,8 @@ pub fn generate_cigar_from_region(
     );
 
     // Run global alignment to generate CIGAR
-    // Using scalar for CIGAR generation (matches BWA-MEM2 behavior)
-    let result = sw_params.scalar_banded_swa(
+    // Runtime dispatch: respects FERROUS_ALIGN_SIMD flag
+    let result = sw_params.banded_swa(
         query_for_sw.len() as i32,
         &query_for_sw,
         rseq_for_sw.len() as i32,
