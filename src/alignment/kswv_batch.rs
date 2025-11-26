@@ -256,6 +256,7 @@ pub struct KswvMemoryPool {
     /// Dimensions
     max_query_len: usize,
     batch_size: usize,
+    #[allow(dead_code)]
     num_threads: usize,
 }
 
@@ -396,7 +397,7 @@ pub fn batch_ksw_align(
     mismatch_penalty: i8,
     gap_open: i32,
     gap_extend: i32,
-    debug: bool,
+    _debug: bool,
 ) -> usize {
     // Dispatch to appropriate SIMD kernel based on engine type
     match engine {
@@ -485,6 +486,7 @@ pub fn batch_ksw_align(
 /// # Note
 /// This function should NOT be used in production - it's only for testing the
 /// SoA buffer and API infrastructure.
+#[allow(dead_code)]
 fn batch_ksw_align_fallback(
     soa: &SoABuffer,
     pairs: &mut [SeqPair],

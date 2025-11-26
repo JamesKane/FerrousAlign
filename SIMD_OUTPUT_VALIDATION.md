@@ -2,7 +2,7 @@
 
 **Date**: 2025-11-26
 **Branch**: feature/session49-frontloading-optimization
-**Status**: ✅ NEON FIXED - ARM now matches scalar exactly; ⚠️ x86 REQUIRES REVALIDATION
+**Status**: ✅ ALL PLATFORMS VALIDATED - SSE/AVX2/AVX-512/NEON all produce identical output
 
 ## Objective
 
@@ -43,36 +43,52 @@ Validate that ALL horizontal SIMD implementations (AVX-512, AVX2, SSE/NEON) prod
 
 | Criterion | Status |
 |-----------|--------|
-| SSE, AVX2, AVX-512 produce identical output | ⚠️ **REVALIDATION REQUIRED** (code changed) |
-| All phases tested (100, 1K, 10K pairs) | ⚠️ **REVALIDATION REQUIRED** |
+| SSE, AVX2, AVX-512 produce identical output | ✅ **PASS** (revalidated 2025-11-26) |
+| All phases tested (100, 1K, 10K pairs) | ✅ **PASS** (revalidated 2025-11-26) |
 | Discordances explained | ✅ PASS (tie-breaking in repetitive regions) |
 | No systematic bias | ✅ PASS (random distribution across chromosomes) |
 | NEON matches scalar | ✅ **PASS** (96.30% properly paired, matches exactly) |
 
 ## Validation Commands Used
 
+### Runtime Engine Override (Recommended)
+
+Use environment variables to force specific SIMD engines at runtime. This is more reliable than compile-time flags because `is_x86_feature_detected!()` checks the CPU at runtime, not the compile target.
+
 ```bash
-# Main branch baseline
-git checkout main
-RUSTFLAGS="-C target-cpu=native" cargo build --release
-./target/release/ferrous-align mem -t 1 $REF reads_R1.fq reads_R2.fq > main.sam
-
-# Feature branch - AVX2
-git checkout feature/session49-frontloading-optimization
-RUSTFLAGS="-C target-cpu=native" cargo build --release
-./target/release/ferrous-align mem -t 1 $REF reads_R1.fq reads_R2.fq > avx2.sam
-
-# Feature branch - AVX-512
+# Build once with AVX-512 support
 RUSTFLAGS="-C target-cpu=native" cargo +nightly build --release --features avx512
-./target/release/ferrous-align mem -t 1 $REF reads_R1.fq reads_R2.fq > avx512.sam
 
-# Feature branch - SSE only
+# Test AVX-512 (default on supported CPUs)
+./target/release/ferrous-align mem -t 8 $REF reads_R1.fq reads_R2.fq > avx512.sam
+
+# Test AVX2 (forced via env var)
+FERROUS_ALIGN_FORCE_AVX2=1 ./target/release/ferrous-align mem -t 8 $REF reads_R1.fq reads_R2.fq > avx2.sam
+
+# Test SSE (forced via env var)
+FERROUS_ALIGN_FORCE_SSE=1 ./target/release/ferrous-align mem -t 8 $REF reads_R1.fq reads_R2.fq > sse.sam
+
+# Compare outputs (should be identical)
+diff <(grep "^HISEQ" avx512.sam | sort) <(grep "^HISEQ" avx2.sam | sort)
+diff <(grep "^HISEQ" avx512.sam | sort) <(grep "^HISEQ" sse.sam | sort)
+```
+
+### Environment Variables
+
+| Variable | Effect |
+|----------|--------|
+| `FERROUS_ALIGN_FORCE_SSE=1` | Force 128-bit SSE engine (skip AVX2/AVX-512 detection) |
+| `FERROUS_ALIGN_FORCE_AVX2=1` | Force 256-bit AVX2 engine (skip AVX-512 detection) |
+| `FERROUS_ALIGN_FORCE_SCALAR=1` | Force scalar path for mate rescue (no SIMD batching) |
+
+### Legacy Compile-Time Approach (Not Recommended)
+
+**Warning**: This approach doesn't work as expected! The `-C target-cpu=x86-64` flag only affects code generation, but `is_x86_feature_detected!()` still detects AVX2 at runtime if your CPU supports it. Use the environment variable approach instead.
+
+```bash
+# This does NOT force SSE at runtime on an AVX2 CPU!
 RUSTFLAGS="-C target-cpu=x86-64" cargo build --release
-./target/release/ferrous-align mem -t 1 $REF reads_R1.fq reads_R2.fq > sse.sam
-
-# Compare
-python3 compare_sam_outputs.py avx2.sam avx512.sam "AVX512 vs AVX2"
-python3 compare_sam_outputs.py avx2.sam sse.sam "SSE vs AVX2"
+./target/release/ferrous-align mem -t 1 $REF reads_R1.fq reads_R2.fq > sse.sam  # Actually uses AVX2!
 ```
 
 ## CHM13v2 Reference Validation (Informational)
@@ -178,12 +194,48 @@ samtools flagstat simd_output.sam
 samtools flagstat scalar_output.sam
 ```
 
+## x86 (SSE/AVX2/AVX-512) Revalidation - GRCh38 ✅ COMPLETE
+
+**Platform**: AMD Ryzen 9 7900X (x86_64, AVX-512 capable)
+**Reference**: GRCh38 (GCA_000001405.15_GRCh38_no_alt_analysis_set.fna)
+**Date**: 2025-11-26
+
+### x86 Internal Consistency (After NEON Fixes)
+
+**All three x86 SIMD backends produce 100% identical output:**
+
+| Comparison | 100 pairs | 1K pairs | 10K pairs |
+|------------|-----------|----------|-----------|
+| SSE vs AVX2 | 100.00% ✅ | 100.00% ✅ | 100.00% ✅ |
+| AVX-512 vs AVX2 | 100.00% ✅ | 100.00% ✅ | 100.00% ✅ |
+| AVX-512 vs SSE | 100.00% ✅ | 100.00% ✅ | 100.00% ✅ |
+
+### Alignment Counts
+
+| Dataset | AVX-512 | AVX2 | SSE |
+|---------|---------|------|-----|
+| 100 pairs | 200 | 200 | 200 |
+| 1K pairs | 2,006 | 2,006 | 2,006 |
+| 10K pairs | 20,085 | 20,085 | 20,085 |
+
+### Issue Found: Runtime Detection vs Compile-Time Flags
+
+During revalidation, we discovered that the previous SSE testing methodology was flawed:
+
+- **Problem**: Building with `-C target-cpu=x86-64` does NOT force SSE at runtime
+- **Root cause**: `is_x86_feature_detected!("avx2")` checks CPU capabilities at runtime, not compile flags
+- **Impact**: SSE code path was never actually tested on x86 machines with AVX2
+- **Solution**: Added `FERROUS_ALIGN_FORCE_SSE` environment variable to override runtime detection
+
+This explains why the ambiguous base handling bug (Fix 2) wasn't caught on x86 - the SSE code path was never executed!
+
 ## Conclusion
 
-**x86 (SSE/AVX2/AVX-512)** - ⚠️ **REVALIDATION REQUIRED**:
-1. Previously validated as 100% identical across all three backends
-2. **Code changes to kswv_sse_neon.rs and kswv_batch.rs affect SSE path**
-3. Must re-run validation after NEON fixes to ensure SSE still works correctly
+**x86 (SSE/AVX2/AVX-512)** - ✅ **COMPLETE** (revalidated 2025-11-26):
+1. ✅ All three backends produce **100% identical output**
+2. ✅ Tested on 100, 1K, and 10K read pairs
+3. ✅ NEON fixes (ambiguous base handling) confirmed working on SSE path
+4. ✅ Added `FERROUS_ALIGN_FORCE_SSE` env var for proper SSE testing
 
 **ARM (NEON)** - ✅ **COMPLETE**:
 1. ✅ Score and te match scalar **100%**

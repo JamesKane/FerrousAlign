@@ -49,7 +49,7 @@ pub fn reverse_complement_code(code: u8) -> u8 {
 ///
 /// # Example
 /// ```
-/// use ferrous_align::align::encode_sequence;
+/// use ferrous_align::alignment::utils::encode_sequence;
 ///
 /// let seq = b"ACGTN";
 /// let encoded = encode_sequence(seq);
@@ -70,7 +70,7 @@ pub fn encode_sequence(seq: &[u8]) -> Vec<u8> {
 ///
 /// # Example
 /// ```
-/// use ferrous_align::align::{encode_sequence, reverse_complement_sequence};
+/// use ferrous_align::alignment::utils::{encode_sequence, reverse_complement_sequence};
 ///
 /// let seq = b"ACG";  // Non-palindromic sequence
 /// let encoded = encode_sequence(seq);  // [0, 1, 2]

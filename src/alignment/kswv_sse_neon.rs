@@ -49,9 +49,11 @@ pub const SIMD_WIDTH8: usize = 16;
 pub const SIMD_WIDTH16: usize = 8;
 
 /// Dummy values for ambiguous bases (matching BWA-MEM2)
+#[allow(dead_code)]
 const DUMMY5: i8 = 5;
+#[allow(dead_code)]
 const DUMMY8: i8 = 8;
-const AMBIG: i8 = 4;
+const AMBIG: i8 = 4; // N base encoding
 
 /// KSW flags (from kswv.h)
 const KSW_XSUBO: i32 = 0x40000;
@@ -102,7 +104,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
     e_ins: i32,                // Gap extension (insertion)
     w_ambig: i8,               // Ambiguous base penalty
     _phase: i32,               // Processing phase
-    debug: bool,
+    _debug: bool,              // Debug flag (unused, for API consistency)
 ) -> usize {
     log::debug!(
         "[SIMD] Horizontal kernel (SSE/NEON): processing {} alignments",
@@ -367,9 +369,12 @@ pub unsafe fn batch_ksw_align_sse_neon(
         // Swap buffers
         std::mem::swap(&mut h0_buf, &mut h1_buf);
 
-        // Increment row index
+        // Increment row index (final value unused after last iteration)
         let one256_16 = SimdEngine128::set1_epi16(1);
-        i256_vec = SimdEngine128::add_epi16(i256_vec, one256_16);
+        #[allow(unused_assignments)]
+        {
+            i256_vec = SimdEngine128::add_epi16(i256_vec, one256_16);
+        }
     }
 
     // Final row max update (unaligned for Vec buffers)
@@ -596,6 +601,7 @@ mod tests {
                 2,
                 -1,
                 0,
+                false, // debug
             );
         }
     }

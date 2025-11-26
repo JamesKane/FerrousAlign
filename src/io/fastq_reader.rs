@@ -48,7 +48,7 @@ impl ReadBatch {
     ///
     /// # Example
     /// ```
-    /// use ferrous_align::fastq_reader::ReadBatch;
+    /// use ferrous_align::io::fastq_reader::ReadBatch;
     ///
     /// let batch = ReadBatch {
     ///     names: vec!["read1".to_string()],

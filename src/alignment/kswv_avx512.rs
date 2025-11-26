@@ -76,6 +76,7 @@ pub unsafe fn batch_ksw_align_avx512(
     e_ins: i32,                // Gap extension (insertion)
     w_ambig: i8,               // Ambiguous base penalty
     _phase: i32,               // Processing phase (unused in forward pass)
+    _debug: bool,              // Debug flag (unused, for API consistency)
 ) -> usize {
     // ========================================================================
     // SECTION 1: Initialization (C++ lines 387-478)

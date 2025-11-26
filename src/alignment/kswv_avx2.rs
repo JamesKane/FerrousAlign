@@ -49,8 +49,10 @@ pub const SIMD_WIDTH8: usize = 32;
 pub const SIMD_WIDTH16: usize = 16;
 
 /// Dummy values for ambiguous bases (matching BWA-MEM2)
-const DUMMY5: i8 = 5;
+const DUMMY5: i8 = 5; // Used for ambiguous base detection
+#[allow(dead_code)]
 const DUMMY8: i8 = 8;
+#[allow(dead_code)]
 const AMBIG: i8 = 4;
 
 /// KSW flags (from kswv.h)
@@ -103,6 +105,7 @@ pub unsafe fn batch_ksw_align_avx2(
     e_ins: i32,                // Gap extension (insertion)
     w_ambig: i8,               // Ambiguous base penalty
     _phase: i32,               // Processing phase
+    _debug: bool,              // Debug flag (unused, for API consistency)
 ) -> usize {
     // ========================================================================
     // SECTION 1: Initialization
@@ -382,9 +385,12 @@ pub unsafe fn batch_ksw_align_avx2(
         // Swap buffers
         std::mem::swap(&mut h0_buf, &mut h1_buf);
 
-        // Increment row index
+        // Increment row index (final value unused after last iteration)
         let one256_16 = SimdEngine256::set1_epi16(1);
-        i256_vec = SimdEngine256::add_epi16(i256_vec, one256_16);
+        #[allow(unused_assignments)]
+        {
+            i256_vec = SimdEngine256::add_epi16(i256_vec, one256_16);
+        }
     }
 
     // Final row max update (unaligned for Vec buffers)
@@ -622,6 +628,7 @@ mod tests {
                 2,
                 -1,
                 0,
+                false, // debug
             );
         }
     }

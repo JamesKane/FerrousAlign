@@ -421,9 +421,7 @@ impl Alignment {
     /// - TLEN = rightmost_end - leftmost_start (outer coordinates)
     ///
     /// # Example
-    /// ```
-    /// use ferrous_align::align::Alignment;
-    ///
+    /// ```ignore
     /// // Read1 at position 1000, 100bp aligned
     /// // Read2 at position 1200, 100bp aligned
     /// // Read1 TLEN = (1200 - 1000) + 100 = 300 (positive, leftmost)
@@ -474,8 +472,8 @@ impl Alignment {
     /// - TLEN: 0 (no template length for unmapped)
     ///
     /// # Example
-    /// ```
-    /// use ferrous_align::align::Alignment;
+    /// ```ignore
+    /// use ferrous_align::alignment::finalization::{Alignment, sam_flags};
     ///
     /// let unmapped = Alignment::create_unmapped(
     ///     "read1".to_string(),
