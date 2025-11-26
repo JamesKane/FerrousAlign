@@ -373,6 +373,14 @@ pub unsafe fn batch_ksw_align_avx512(
         results[l].te = te_arr.0[l] as i32;
         results[l].qe = qe_arr.0[l] as i32;
 
+        // Debug logging for first sequence to compare with AVX2
+        if l == 0 && final_score > 0 {
+            log::trace!(
+                "AVX512 kswv seq0: score={}, te={}, qe={}, nrow={}, ncol={}, shift={}",
+                final_score, te_arr.0[l], qe_arr.0[l], nrow, ncol, shift
+            );
+        }
+
         if final_score != 255 {
             qe_arr.0[l] = 1;  // Mark as live for second-best computation
             live += 1;
@@ -493,8 +501,17 @@ pub unsafe fn batch_ksw_align_avx512(
             results[idx].te2 = -1;
         }
 
-        results[idx].tb = -1;
-        results[idx].qb = -1;
+        // Set tb and qb based on valid alignment (matching AVX2 behavior)
+        // Phase 0 doesn't compute traceback, so we estimate:
+        // - For mate rescue, alignments typically start at query position 0
+        // - tb is estimated as te - (qe - qb) for same-length alignment
+        if results[idx].score > 0 && results[idx].te >= 0 && results[idx].qe >= 0 {
+            results[idx].qb = 0; // Alignment starts at query position 0
+            results[idx].tb = (results[idx].te - results[idx].qe).max(0);
+        } else {
+            results[idx].tb = -1;
+            results[idx].qb = -1;
+        }
     }
 
     1
@@ -503,6 +520,8 @@ pub unsafe fn batch_ksw_align_avx512(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alignment::kswv_avx2;
+    use crate::alignment::kswv_batch::{KswResult, SeqPair};
 
     #[test]
     fn test_avx512_compiles() {
@@ -515,5 +534,520 @@ mod tests {
         // Basic sanity check that constants are correct
         assert_eq!(SIMD_WIDTH8, 64);
         assert_eq!(SIMD_WIDTH16, 32);
+    }
+
+    /// Compare AVX-512 and AVX2 kernels with identical input
+    #[test]
+    fn test_avx512_vs_avx2_identical_scores() {
+        if !is_x86_feature_detected!("avx512bw") {
+            eprintln!("Skipping: AVX-512BW not available");
+            return;
+        }
+        if !is_x86_feature_detected!("avx2") {
+            eprintln!("Skipping: AVX2 not available");
+            return;
+        }
+
+        // Create test sequences: simple matching sequences
+        let ref_seq: Vec<u8> = vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]; // ACGTACGTAC
+        let query_seq: Vec<u8> = vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]; // ACGTACGTAC (match)
+
+        let nrow = ref_seq.len() as i16;
+        let ncol = query_seq.len() as i16;
+
+        // Create SoA buffers for AVX-512 (64 sequences) and AVX2 (32 sequences)
+        let mut ref_soa_512 = vec![0x80u8; nrow as usize * 64];
+        let mut query_soa_512 = vec![0x80u8; ncol as usize * 64];
+        let mut ref_soa_256 = vec![0x80u8; nrow as usize * 32];
+        let mut query_soa_256 = vec![0x80u8; ncol as usize * 32];
+
+        // Transpose sequence into SoA for first slot
+        for (i, &base) in ref_seq.iter().enumerate() {
+            ref_soa_512[i * 64] = base;
+            ref_soa_256[i * 32] = base;
+        }
+        for (i, &base) in query_seq.iter().enumerate() {
+            query_soa_512[i * 64] = base;
+            query_soa_256[i * 32] = base;
+        }
+
+        // Create pairs and results
+        let pair = SeqPair {
+            ref_len: nrow as i32,
+            query_len: ncol as i32,
+            h0: 0,
+            ..Default::default()
+        };
+        let pairs_512 = vec![pair.clone(); 64];
+        let pairs_256 = vec![pair.clone(); 32];
+
+        let mut results_512 = vec![KswResult::default(); 64];
+        let mut results_256 = vec![KswResult::default(); 32];
+
+        // Run both kernels
+        let match_score: i8 = 1;
+        let mismatch: i8 = -4;
+        let gap_open: i32 = 6;
+        let gap_ext: i32 = 1;
+
+        unsafe {
+            batch_ksw_align_avx512(
+                ref_soa_512.as_ptr(),
+                query_soa_512.as_ptr(),
+                nrow,
+                ncol,
+                &pairs_512,
+                &mut results_512,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1, // w_ambig
+                0,  // phase
+            );
+
+            kswv_avx2::batch_ksw_align_avx2(
+                ref_soa_256.as_ptr(),
+                query_soa_256.as_ptr(),
+                nrow,
+                ncol,
+                &pairs_256,
+                &mut results_256,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1, // w_ambig
+                0,  // phase
+            );
+        }
+
+        // Compare first sequence results
+        let avx512_score = results_512[0].score;
+        let avx2_score = results_256[0].score;
+
+        eprintln!("AVX-512 seq0: score={}, te={}, qe={}",
+                  results_512[0].score, results_512[0].te, results_512[0].qe);
+        eprintln!("AVX2 seq0:    score={}, te={}, qe={}",
+                  results_256[0].score, results_256[0].te, results_256[0].qe);
+
+        // Scores should match for identical input
+        assert_eq!(avx512_score, avx2_score,
+            "AVX-512 ({}) and AVX2 ({}) scores differ for identical input!",
+            avx512_score, avx2_score);
+    }
+
+    /// Test with longer sequences and mismatches
+    #[test]
+    fn test_avx512_vs_avx2_with_mismatches() {
+        if !is_x86_feature_detected!("avx512bw") {
+            eprintln!("Skipping: AVX-512BW not available");
+            return;
+        }
+        if !is_x86_feature_detected!("avx2") {
+            eprintln!("Skipping: AVX2 not available");
+            return;
+        }
+
+        // Create longer sequences with some mismatches
+        // Reference: 150bp
+        let ref_seq: Vec<u8> = (0..150).map(|i| (i % 4) as u8).collect();
+        // Query with 5 mismatches
+        let mut query_seq = ref_seq.clone();
+        query_seq[10] = (query_seq[10] + 1) % 4; // mismatch
+        query_seq[50] = (query_seq[50] + 1) % 4; // mismatch
+        query_seq[80] = (query_seq[80] + 1) % 4; // mismatch
+        query_seq[100] = (query_seq[100] + 1) % 4; // mismatch
+        query_seq[140] = (query_seq[140] + 1) % 4; // mismatch
+
+        let nrow = ref_seq.len() as i16;
+        let ncol = query_seq.len() as i16;
+
+        // Create SoA buffers
+        let mut ref_soa_512 = vec![0x80u8; nrow as usize * 64];
+        let mut query_soa_512 = vec![0x80u8; ncol as usize * 64];
+        let mut ref_soa_256 = vec![0x80u8; nrow as usize * 32];
+        let mut query_soa_256 = vec![0x80u8; ncol as usize * 32];
+
+        for (i, &base) in ref_seq.iter().enumerate() {
+            ref_soa_512[i * 64] = base;
+            ref_soa_256[i * 32] = base;
+        }
+        for (i, &base) in query_seq.iter().enumerate() {
+            query_soa_512[i * 64] = base;
+            query_soa_256[i * 32] = base;
+        }
+
+        let pair = SeqPair {
+            ref_len: nrow as i32,
+            query_len: ncol as i32,
+            h0: 0,
+            ..Default::default()
+        };
+        let pairs_512 = vec![pair.clone(); 64];
+        let pairs_256 = vec![pair.clone(); 32];
+
+        let mut results_512 = vec![KswResult::default(); 64];
+        let mut results_256 = vec![KswResult::default(); 32];
+
+        let match_score: i8 = 1;
+        let mismatch: i8 = -4;
+        let gap_open: i32 = 6;
+        let gap_ext: i32 = 1;
+
+        unsafe {
+            batch_ksw_align_avx512(
+                ref_soa_512.as_ptr(),
+                query_soa_512.as_ptr(),
+                nrow,
+                ncol,
+                &pairs_512,
+                &mut results_512,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1,
+                0,
+            );
+
+            kswv_avx2::batch_ksw_align_avx2(
+                ref_soa_256.as_ptr(),
+                query_soa_256.as_ptr(),
+                nrow,
+                ncol,
+                &pairs_256,
+                &mut results_256,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1,
+                0,
+            );
+        }
+
+        eprintln!("Long seq with mismatches:");
+        eprintln!("  AVX-512: score={}, te={}, qe={}",
+                  results_512[0].score, results_512[0].te, results_512[0].qe);
+        eprintln!("  AVX2:    score={}, te={}, qe={}",
+                  results_256[0].score, results_256[0].te, results_256[0].qe);
+
+        // Expected: 145 matches + 5 mismatches = 145 * 1 + 5 * (-4) = 145 - 20 = 125
+        let expected_approx = 145 - 20; // 125
+
+        assert_eq!(results_512[0].score, results_256[0].score,
+            "AVX-512 ({}) and AVX2 ({}) scores differ!",
+            results_512[0].score, results_256[0].score);
+
+        // Sanity check: score should be close to expected
+        assert!((results_512[0].score - expected_approx).abs() < 10,
+            "Score {} too far from expected ~{}",
+            results_512[0].score, expected_approx);
+    }
+
+    /// Test AVX-512 slots 32-63 (uses te512_ for 16-bit target end tracking)
+    /// This is critical because AVX-512 splits 64 sequences into two 32-seq groups
+    #[test]
+    fn test_avx512_upper_slots_32_to_63() {
+        if !is_x86_feature_detected!("avx512bw") {
+            eprintln!("Skipping: AVX-512BW not available");
+            return;
+        }
+
+        // Real-world sequences from failing read HISEQ1:18:H8VC6ADXX:1:1101:10009:11965
+        // Reference from chr5:49956951-49957098 (148bp)
+        let ref_seq: Vec<u8> = vec![3, 2, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 2, 0, 3, 0, 2, 0, 2, 1, 0, 2, 3, 3, 3, 3, 2, 0, 0, 0, 1, 0, 1, 3, 1, 3, 2, 3, 0, 2, 0, 0, 3, 1, 3, 2, 0, 0, 0, 2, 3, 2, 2, 0, 3, 0, 3, 3, 3, 2, 2, 0, 2, 1, 3, 1, 3, 3, 1, 2, 0, 2, 2, 2, 1, 3, 0, 3, 2, 2, 1, 2, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 3, 0, 3, 3, 1, 0, 1, 0, 3, 3, 0, 0, 0, 1, 3, 0, 2, 0, 1, 0, 2, 1, 0, 2, 1, 0, 3, 3, 1, 3, 1, 0, 2, 0, 0, 0, 1, 3, 3, 1, 3, 3, 3, 0, 2, 2, 0, 3, 2, 3, 3, 3];
+        // Read reverse complement (148bp) - 1 mismatch at position 130
+        let query_seq: Vec<u8> = vec![3, 2, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 2, 0, 3, 0, 2, 0, 2, 1, 0, 2, 3, 3, 3, 3, 2, 0, 0, 0, 1, 0, 1, 3, 1, 3, 2, 3, 0, 2, 0, 0, 3, 1, 3, 2, 0, 0, 0, 2, 3, 2, 2, 0, 3, 0, 3, 3, 3, 2, 2, 0, 2, 1, 3, 1, 3, 3, 1, 2, 0, 2, 2, 2, 1, 3, 0, 3, 2, 2, 1, 2, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 3, 0, 3, 3, 1, 0, 1, 0, 3, 3, 0, 0, 0, 1, 3, 0, 2, 0, 1, 0, 2, 1, 0, 2, 1, 0, 3, 3, 1, 3, 1, 0, 2, 0, 2, 0, 1, 3, 3, 1, 3, 3, 3, 0, 2, 2, 0, 3, 2, 3, 3, 3];
+
+        let nrow = ref_seq.len() as i16;
+        let ncol = query_seq.len() as i16;
+
+        // Test slots 0, 32, and 63
+        let test_slots = [0usize, 32, 63];
+
+        let mut ref_soa_512 = vec![0x80u8; nrow as usize * 64];
+        let mut query_soa_512 = vec![0x80u8; ncol as usize * 64];
+
+        // Place test data in multiple slots
+        for &slot in &test_slots {
+            for (i, &base) in ref_seq.iter().enumerate() {
+                ref_soa_512[i * 64 + slot] = base;
+            }
+            for (i, &base) in query_seq.iter().enumerate() {
+                query_soa_512[i * 64 + slot] = base;
+            }
+        }
+
+        let pair = SeqPair {
+            ref_len: nrow as i32,
+            query_len: ncol as i32,
+            h0: 0,
+            ..Default::default()
+        };
+        let pairs_512 = vec![pair.clone(); 64];
+        let mut results_512 = vec![KswResult::default(); 64];
+
+        let match_score: i8 = 1;
+        let mismatch: i8 = -4;
+        let gap_open: i32 = 6;
+        let gap_ext: i32 = 1;
+
+        unsafe {
+            batch_ksw_align_avx512(
+                ref_soa_512.as_ptr(),
+                query_soa_512.as_ptr(),
+                nrow,
+                ncol,
+                &pairs_512,
+                &mut results_512,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1,
+                0,
+            );
+        }
+
+        // Expected: 147 matches + 1 mismatch = 147*1 + 1*(-4) = 143
+        let expected = 143;
+
+        eprintln!("Testing slots 0, 32, 63 with real-world 148bp sequence (1 mismatch):");
+        for &slot in &test_slots {
+            eprintln!("  Slot {}: score={}, te={}, qe={}",
+                      slot, results_512[slot].score, results_512[slot].te, results_512[slot].qe);
+        }
+
+        // All slots should produce identical scores
+        let score_0 = results_512[0].score;
+        for &slot in &test_slots {
+            assert_eq!(results_512[slot].score, score_0,
+                "Slot {} score ({}) differs from slot 0 score ({})!",
+                slot, results_512[slot].score, score_0);
+        }
+
+        // Score should match expected
+        assert_eq!(score_0, expected,
+            "Score {} doesn't match expected {} for 148bp with 1 mismatch",
+            score_0, expected);
+    }
+
+    /// Test AVX-512 vs AVX2 with DIFFERENT sequences per slot
+    /// This is the critical test - real batches have diverse sequences
+    #[test]
+    fn test_avx512_vs_avx2_diverse_batch() {
+        if !is_x86_feature_detected!("avx512bw") {
+            eprintln!("Skipping: AVX-512BW not available");
+            return;
+        }
+        if !is_x86_feature_detected!("avx2") {
+            eprintln!("Skipping: AVX2 not available");
+            return;
+        }
+
+        // Create 32 unique sequence pairs with varying characteristics
+        // This tests whether AVX-512 handles mixed batches correctly
+        let mut test_cases: Vec<(Vec<u8>, Vec<u8>, &str)> = Vec::new();
+
+        // Case 0: Perfect match 100bp
+        let seq100: Vec<u8> = (0..100).map(|i| (i % 4) as u8).collect();
+        test_cases.push((seq100.clone(), seq100.clone(), "perfect_100bp"));
+
+        // Case 1: 148bp with 1 mismatch (real-world read length)
+        let seq148: Vec<u8> = (0..148).map(|i| (i % 4) as u8).collect();
+        let mut seq148_mm = seq148.clone();
+        seq148_mm[50] = (seq148_mm[50] + 1) % 4;
+        test_cases.push((seq148.clone(), seq148_mm, "148bp_1mm"));
+
+        // Case 2: 50bp with 2 mismatches
+        let seq50: Vec<u8> = (0..50).map(|i| (i % 4) as u8).collect();
+        let mut seq50_mm = seq50.clone();
+        seq50_mm[10] = (seq50_mm[10] + 1) % 4;
+        seq50_mm[30] = (seq50_mm[30] + 1) % 4;
+        test_cases.push((seq50.clone(), seq50_mm, "50bp_2mm"));
+
+        // Case 3: 200bp with 5 mismatches (longer than typical)
+        let seq200: Vec<u8> = (0..200).map(|i| (i % 4) as u8).collect();
+        let mut seq200_mm = seq200.clone();
+        for pos in [20, 60, 100, 140, 180] {
+            seq200_mm[pos] = (seq200_mm[pos] + 1) % 4;
+        }
+        test_cases.push((seq200.clone(), seq200_mm, "200bp_5mm"));
+
+        // Case 4: Perfect match 75bp
+        let seq75: Vec<u8> = (0..75).map(|i| ((i * 3) % 4) as u8).collect();
+        test_cases.push((seq75.clone(), seq75.clone(), "perfect_75bp"));
+
+        // Case 5-31: Generate more diverse cases
+        for i in 5..32 {
+            let len = 50 + (i * 5);
+            let ref_seq: Vec<u8> = (0..len).map(|j| ((i + j) % 4) as u8).collect();
+            let mut query_seq = ref_seq.clone();
+            // Add i mismatches
+            for k in 0..i.min(len / 10) {
+                let pos = (k * len) / i.max(1);
+                if pos < len {
+                    query_seq[pos] = (query_seq[pos] + 1) % 4;
+                }
+            }
+            test_cases.push((ref_seq, query_seq, "generated"));
+        }
+
+        // Find max lengths across all test cases
+        let max_ref_len = test_cases.iter().map(|(r, _, _)| r.len()).max().unwrap();
+        let max_query_len = test_cases.iter().map(|(_, q, _)| q.len()).max().unwrap();
+
+        // Create SoA buffers
+        let mut ref_soa_512 = vec![0x80u8; max_ref_len * 64];
+        let mut query_soa_512 = vec![0x80u8; max_query_len * 64];
+        let mut ref_soa_256 = vec![0x80u8; max_ref_len * 32];
+        let mut query_soa_256 = vec![0x80u8; max_query_len * 32];
+
+        // Transpose first 32 cases for both AVX-512 (slots 0-31) and AVX2
+        for (slot, (ref_seq, query_seq, _)) in test_cases.iter().enumerate().take(32) {
+            for (i, &base) in ref_seq.iter().enumerate() {
+                ref_soa_512[i * 64 + slot] = base;
+                ref_soa_256[i * 32 + slot] = base;
+            }
+            for (i, &base) in query_seq.iter().enumerate() {
+                query_soa_512[i * 64 + slot] = base;
+                query_soa_256[i * 32 + slot] = base;
+            }
+        }
+
+        // Also populate slots 32-63 in AVX-512 with cases 0-31 again
+        // to test the upper half handling
+        for (slot, (ref_seq, query_seq, _)) in test_cases.iter().enumerate().take(32) {
+            let slot_upper = slot + 32;
+            for (i, &base) in ref_seq.iter().enumerate() {
+                ref_soa_512[i * 64 + slot_upper] = base;
+            }
+            for (i, &base) in query_seq.iter().enumerate() {
+                query_soa_512[i * 64 + slot_upper] = base;
+            }
+        }
+
+        // Create pairs metadata
+        let mut pairs_512: Vec<SeqPair> = (0..64).map(|i| {
+            let case_idx = i % 32;
+            SeqPair {
+                ref_len: test_cases[case_idx].0.len() as i32,
+                query_len: test_cases[case_idx].1.len() as i32,
+                h0: 0,
+                ..Default::default()
+            }
+        }).collect();
+
+        let pairs_256: Vec<SeqPair> = (0..32).map(|i| SeqPair {
+            ref_len: test_cases[i].0.len() as i32,
+            query_len: test_cases[i].1.len() as i32,
+            h0: 0,
+            ..Default::default()
+        }).collect();
+
+        // Set nrow/ncol to max for the kernel
+        pairs_512[0].ref_len = max_ref_len as i32;
+        pairs_512[0].query_len = max_query_len as i32;
+
+        let mut pairs_256_copy = pairs_256.clone();
+        pairs_256_copy[0].ref_len = max_ref_len as i32;
+        pairs_256_copy[0].query_len = max_query_len as i32;
+
+        let mut results_512 = vec![KswResult::default(); 64];
+        let mut results_256 = vec![KswResult::default(); 32];
+
+        let match_score: i8 = 1;
+        let mismatch: i8 = -4;
+        let gap_open: i32 = 6;
+        let gap_ext: i32 = 1;
+
+        unsafe {
+            batch_ksw_align_avx512(
+                ref_soa_512.as_ptr(),
+                query_soa_512.as_ptr(),
+                max_ref_len as i16,
+                max_query_len as i16,
+                &pairs_512,
+                &mut results_512,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1,
+                0,
+            );
+
+            kswv_avx2::batch_ksw_align_avx2(
+                ref_soa_256.as_ptr(),
+                query_soa_256.as_ptr(),
+                max_ref_len as i16,
+                max_query_len as i16,
+                &pairs_256_copy,
+                &mut results_256,
+                match_score,
+                mismatch,
+                gap_open,
+                gap_ext,
+                gap_open,
+                gap_ext,
+                -1,
+                0,
+            );
+        }
+
+        // Compare results for slots 0-31 (AVX-512 vs AVX2)
+        let mut mismatches = 0;
+        for slot in 0..32 {
+            let avx512 = &results_512[slot];
+            let avx2 = &results_256[slot];
+
+            if avx512.score != avx2.score || avx512.te != avx2.te || avx512.qe != avx2.qe {
+                mismatches += 1;
+                eprintln!(
+                    "MISMATCH slot {}: AVX-512(score={}, te={}, qe={}) vs AVX2(score={}, te={}, qe={}) - {}",
+                    slot,
+                    avx512.score, avx512.te, avx512.qe,
+                    avx2.score, avx2.te, avx2.qe,
+                    test_cases[slot].2
+                );
+            }
+        }
+
+        // Also verify slots 32-63 match slots 0-31 in AVX-512
+        let mut upper_mismatches = 0;
+        for slot in 0..32 {
+            let lower = &results_512[slot];
+            let upper = &results_512[slot + 32];
+
+            if lower.score != upper.score || lower.te != upper.te || lower.qe != upper.qe {
+                upper_mismatches += 1;
+                eprintln!(
+                    "UPPER MISMATCH: slot {} (score={}, te={}, qe={}) vs slot {} (score={}, te={}, qe={})",
+                    slot, lower.score, lower.te, lower.qe,
+                    slot + 32, upper.score, upper.te, upper.qe
+                );
+            }
+        }
+
+        eprintln!("\n=== Diverse Batch Test Summary ===");
+        eprintln!("AVX-512 vs AVX2 mismatches (slots 0-31): {}/32", mismatches);
+        eprintln!("AVX-512 lower vs upper half mismatches: {}/32", upper_mismatches);
+
+        assert_eq!(mismatches, 0, "AVX-512 vs AVX2 produced {} mismatches!", mismatches);
+        assert_eq!(upper_mismatches, 0, "AVX-512 upper half (32-63) produced {} mismatches vs lower half!", upper_mismatches);
     }
 }

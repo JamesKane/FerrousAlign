@@ -582,4 +582,81 @@ mod tests {
         assert_eq!(results.len(), 1);
         // TODO: Add proper assertions once implementation is complete
     }
+
+    /// Compare AVX-512 vs AVX2 banded SWA results for identical input
+    #[test]
+    fn test_avx512_vs_avx2_banded_swa() {
+        if !is_x86_feature_detected!("avx512bw") {
+            eprintln!("Skipping: AVX-512BW not available");
+            return;
+        }
+        if !is_x86_feature_detected!("avx2") {
+            eprintln!("Skipping: AVX2 not available");
+            return;
+        }
+
+        // Standard BWA-MEM2 scoring matrix (5x5 for A, C, G, T, N)
+        // Match = 1, Mismatch = -4, N penalty = -1
+        let mat: [i8; 25] = [
+             1, -4, -4, -4, -1,  // A vs A,C,G,T,N
+            -4,  1, -4, -4, -1,  // C vs A,C,G,T,N
+            -4, -4,  1, -4, -1,  // G vs A,C,G,T,N
+            -4, -4, -4,  1, -1,  // T vs A,C,G,T,N
+            -1, -1, -1, -1, -1,  // N vs A,C,G,T,N
+        ];
+
+        // Test sequences: 100bp with 3 mismatches
+        let query: Vec<u8> = (0..100).map(|i| (i % 4) as u8).collect();
+        let mut target = query.clone();
+        target[20] = (target[20] + 1) % 4;  // mismatch
+        target[50] = (target[50] + 1) % 4;  // mismatch
+        target[80] = (target[80] + 1) % 4;  // mismatch
+
+        let batch = vec![(
+            query.len() as i32,
+            &query[..],
+            target.len() as i32,
+            &target[..],
+            50,  // bandwidth
+            0,   // h0
+        )];
+
+        // Run AVX-512
+        let results_512 = unsafe {
+            simd_banded_swa_batch64(
+                &batch,
+                6, 1, 6, 1,  // gap penalties
+                100,         // zdrop
+                &mat, 5,
+            )
+        };
+
+        // Run AVX2
+        let results_256 = unsafe {
+            crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
+                &batch,
+                6, 1, 6, 1,
+                100,
+                &mat, 5,
+            )
+        };
+
+        eprintln!("AVX-512: score={}, te={}, qe={}",
+                  results_512[0].score, results_512[0].target_end_pos, results_512[0].query_end_pos);
+        eprintln!("AVX2:    score={}, te={}, qe={}",
+                  results_256[0].score, results_256[0].target_end_pos, results_256[0].query_end_pos);
+
+        // Expected: 97 matches * 1 + 3 mismatches * (-4) = 97 - 12 = 85
+        let expected_approx = 85;
+
+        // Scores should match
+        assert_eq!(results_512[0].score, results_256[0].score,
+            "AVX-512 ({}) and AVX2 ({}) scores differ!",
+            results_512[0].score, results_256[0].score);
+
+        // Sanity check
+        assert!((results_512[0].score - expected_approx).abs() < 15,
+            "Score {} too far from expected ~{}",
+            results_512[0].score, expected_approx);
+    }
 }
