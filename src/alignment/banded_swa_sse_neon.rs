@@ -173,29 +173,19 @@ pub unsafe fn simd_banded_swa_batch16(
     }
 
     // ==================================================================
-    // Step 5: Query Profile Precomputation
+    // Step 5: Scoring Constants (BWA-MEM2 compare-and-blend approach)
     // ==================================================================
 
-    // Precompute query profile in SoA format for fast scoring
-    // For each target base (0-3) and query position, precompute the score from the scoring matrix
-    // This is organized as: profile[target_base][query_pos * SIMD_WIDTH + lane]
-    let mut query_profiles: Vec<Vec<i8>> = vec![vec![0i8; MAX_SEQ_LEN * SIMD_WIDTH]; 4];
+    // Instead of query profiles, we use direct compare-and-blend like BWA-MEM2's MAIN_CODE8
+    // This eliminates the scalar gather loop and uses pure SIMD operations
+    let match_score = mat[0]; // A-A match score (mat[0*5+0])
+    let mismatch_score = mat[1]; // A-C mismatch score (mat[0*5+1])
+    let _ambig_score = mat[4 * m as usize + 4]; // N-N score (typically 0 or negative)
 
-    for target_base in 0..4 {
-        for j in 0..max_qlen as usize {
-            for lane in 0..SIMD_WIDTH {
-                let query_base = query_soa[j * SIMD_WIDTH + lane];
-                if query_base < 4 {
-                    // Look up score from scoring matrix: mat[target_base * m + query_base]
-                    let score = mat[(target_base * m + query_base as i32) as usize];
-                    query_profiles[target_base as usize][j * SIMD_WIDTH + lane] = score;
-                } else {
-                    // Padding or ambiguous base
-                    query_profiles[target_base as usize][j * SIMD_WIDTH + lane] = 0;
-                }
-            }
-        }
-    }
+    let match_vec = Engine::set1_epi8(match_score);
+    let mismatch_vec = Engine::set1_epi8(mismatch_score);
+    // For ambiguous bases, BWA-MEM2 uses max_epu8(s1,s2) to detect high bit (padding = 0x80+)
+    // and zeros out those positions. We'll use a threshold of 3 (bases 0-3 are valid)
 
     // ==================================================================
     // Step 6: Main DP Loop
@@ -262,6 +252,10 @@ pub unsafe fn simd_banded_swa_batch16(
         let term_mask = Engine::loadu_si128(term_mask_vals.as_ptr() as *const _);
 
         // Process each query position
+        // Load target base for this row (same for all query positions in the row)
+        // BWA-MEM2 pattern: s10 = load(seq1SoA + i * SIMD_WIDTH)
+        let s1 = Engine::loadu_si128(target_soa.as_ptr().add(i * SIMD_WIDTH) as *const _);
+
         let mut h_diag_curr = h_diag.clone();
         for j in 0..max_qlen as usize {
             // Create mask for positions within band (per-lane)
@@ -282,18 +276,26 @@ pub unsafe fn simd_banded_swa_batch16(
             h_diag_curr = vec![0i8; SIMD_WIDTH];
             Engine::storeu_si128(h_diag_curr.as_mut_ptr() as *mut _, h_top);
 
-            // Calculate match/mismatch score using precomputed query profiles
-            let mut score_vals = [0i8; SIMD_WIDTH];
-            for lane in 0..SIMD_WIDTH {
-                let target_base = target_soa[i * SIMD_WIDTH + lane];
-                if target_base < 4 {
-                    score_vals[lane] = query_profiles[target_base as usize][j * SIMD_WIDTH + lane];
-                }
-            }
-            let score_vec = Engine::loadu_si128(score_vals.as_ptr() as *const _);
+            // ============================================================
+            // MAIN_CODE8: Vectorized match/mismatch scoring (BWA-MEM2 pattern)
+            // ============================================================
+            // Load query base for this column
+            let s2 = Engine::loadu_si128(query_soa.as_ptr().add(j * SIMD_WIDTH) as *const _);
+
+            // Compare bases: returns 0xFF where equal, 0x00 where different
+            let cmp_eq = Engine::cmpeq_epi8(s1, s2);
+
+            // Select match or mismatch score based on comparison
+            let score_vec = Engine::blendv_epi8(mismatch_vec, match_vec, cmp_eq);
+
+            // Handle ambiguous/padding bases: max_epu8(s1, s2) has high bit set if either is >= 0x80
+            // Padding uses 0xFF, which has high bit set. Zero out those positions.
+            let or_bases = Engine::or_si128(s1, s2);
 
             // M = H[i-1][j-1] + score (diagonal + score)
             let m_vec = Engine::adds_epi8(h_diag_vec, score_vec);
+            // Zero out positions where either base is padding (high bit set in or_bases)
+            let m_vec = Engine::blendv_epi8(m_vec, zero_vec, or_bases);
             let m_vec = Engine::max_epi8(m_vec, zero_vec);
 
             // Calculate E (gap in target/deletion in query)

@@ -185,29 +185,19 @@ pub unsafe fn simd_banded_swa_batch64(
     }
 
     // ==================================================================
-    // Step 5: Query Profile Precomputation
+    // Step 5: Scoring Constants (BWA-MEM2 compare-and-blend approach)
     // ==================================================================
 
-    // Precompute query profile in SoA format for fast scoring
-    // For each target base (0-3) and query position, precompute the score from the scoring matrix
-    // This is organized as: profile[target_base][query_pos * SIMD_WIDTH + lane]
-    let mut query_profiles: Vec<Vec<i8>> = vec![vec![0i8; MAX_SEQ_LEN * SIMD_WIDTH]; 4];
+    // Instead of query profiles, we use direct compare-and-blend like BWA-MEM2's MAIN_CODE8
+    // This eliminates the scalar gather loop and uses pure SIMD operations
+    let match_score = mat[0]; // A-A match score (mat[0*5+0])
+    let mismatch_score = mat[1]; // A-C mismatch score (mat[0*5+1])
+    let _ambig_score = mat[4 * m as usize + 4]; // N-N score (typically 0 or negative)
 
-    for target_base in 0..4 {
-        for j in 0..max_qlen as usize {
-            for lane in 0..SIMD_WIDTH {
-                let query_base = query_soa[j * SIMD_WIDTH + lane];
-                if query_base < 4 {
-                    // Look up score from scoring matrix: mat[target_base * m + query_base]
-                    let score = mat[(target_base * m + query_base as i32) as usize];
-                    query_profiles[target_base as usize][j * SIMD_WIDTH + lane] = score;
-                } else {
-                    // Padding or ambiguous base
-                    query_profiles[target_base as usize][j * SIMD_WIDTH + lane] = 0;
-                }
-            }
-        }
-    }
+    let match_vec =
+        <Engine as crate::compute::simd_abstraction::SimdEngine>::set1_epi8(match_score);
+    let mismatch_vec =
+        <Engine as crate::compute::simd_abstraction::SimdEngine>::set1_epi8(mismatch_score);
 
     // ==================================================================
     // Step 6: Main DP Loop
@@ -307,6 +297,12 @@ pub unsafe fn simd_banded_swa_batch64(
         );
 
         // Process each query position
+        // Load target bases for all lanes at this row position (outside j loop, BWA-MEM2 pattern)
+        let s1 = <Engine as crate::compute::simd_abstraction::SimdEngine>::loadu_si128(
+            target_soa.as_ptr().add(i * SIMD_WIDTH)
+                as *const <Engine as crate::compute::simd_abstraction::SimdEngine>::Vec8,
+        );
+
         let mut h_diag_curr = h_diag.clone();
         for j in 0..max_qlen as usize {
             // Create mask for positions within band (per-lane)
@@ -353,23 +349,45 @@ pub unsafe fn simd_banded_swa_batch64(
                 h_top,
             );
 
-            // Calculate match/mismatch score using precomputed query profiles
-            let mut score_vals = [0i8; SIMD_WIDTH];
-            for lane in 0..SIMD_WIDTH {
-                let target_base = target_soa[i * SIMD_WIDTH + lane];
-                if target_base < 4 {
-                    score_vals[lane] = query_profiles[target_base as usize][j * SIMD_WIDTH + lane];
-                }
-            }
-            let score_vec = <Engine as crate::compute::simd_abstraction::SimdEngine>::loadu_si128(
-                score_vals.as_ptr()
+            // MAIN_CODE8: Vectorized match/mismatch scoring (BWA-MEM2 pattern)
+            // Load query bases for all lanes at this column position
+            let s2 = <Engine as crate::compute::simd_abstraction::SimdEngine>::loadu_si128(
+                query_soa.as_ptr().add(j * SIMD_WIDTH)
                     as *const <Engine as crate::compute::simd_abstraction::SimdEngine>::Vec8,
             );
 
+            // Compare s1 (target) vs s2 (query) - all 0xFF if equal, 0x00 if different
+            let cmp_eq =
+                <Engine as crate::compute::simd_abstraction::SimdEngine>::cmpeq_epi8(s1, s2);
+
+            // Select match or mismatch score based on comparison
+            // blendv selects mismatch_vec where mask is 0, match_vec where mask is 0xFF
+            let score_vec = <Engine as crate::compute::simd_abstraction::SimdEngine>::blendv_epi8(
+                mismatch_vec,
+                match_vec,
+                cmp_eq,
+            );
+
+            // Detect padding positions (base values >= 0x80 have high bit set)
+            // OR-ing s1 and s2 gives high bit if either is padding
+            let or_bases =
+                <Engine as crate::compute::simd_abstraction::SimdEngine>::or_si128(s1, s2);
+
             // M = H[i-1][j-1] + score (diagonal + score)
             let m_vec = <Engine as crate::compute::simd_abstraction::SimdEngine>::adds_epi8(
-                h_diag_vec, score_vec,
+                h_diag_vec,
+                score_vec,
             );
+
+            // Zero out positions where either base is padding (high bit set in or_bases)
+            // blendv uses high bit of each byte as mask: 1 -> select second operand (zero_vec)
+            let m_vec = <Engine as crate::compute::simd_abstraction::SimdEngine>::blendv_epi8(
+                m_vec,
+                zero_vec,
+                or_bases,
+            );
+
+            // Clamp to non-negative (for unsigned scoring)
             let m_vec =
                 <Engine as crate::compute::simd_abstraction::SimdEngine>::max_epi8(m_vec, zero_vec);
 
