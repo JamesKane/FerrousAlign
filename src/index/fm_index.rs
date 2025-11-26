@@ -4,6 +4,11 @@
 // - Occurrence counting with hardware-optimized popcount
 // - Backward and forward extension for BWT search
 // - Checkpoint data structures for efficient occurrence queries
+//
+// PERFORMANCE OPTIMIZATIONS (Session 51):
+// - Compile-time const mask array (eliminates lazy_static overhead)
+// - Inlined forward_ext (avoids function call and struct copy)
+// - Removed debug logging checks from hot path
 
 use super::index::BwaIndex;
 use crate::alignment::seeding::SMEM;
@@ -24,20 +29,21 @@ pub struct CpOcc {
     pub bwt_encoding_bits: [u64; 4],
 }
 
-// Global one_hot_mask_array (initialized once)
+// Compile-time const one_hot_mask_array
 // Matches C++ bwa-mem2: one_hot_mask_array[i] has the top i bits set
-lazy_static::lazy_static! {
-    static ref ONE_HOT_MASK_ARRAY: Vec<u64> = {
-        let mut array = vec![0u64; 64]; // Size 64 to match C++ (indices 0-63)
-        // array[0] is already 0
-        let base = 0x8000000000000000u64;
-        array[1] = base;  // Explicitly set like C++ does
-        for i in 2..64 {
-            array[i] = (array[i - 1] >> 1) | base;
-        }
-        array
-    };
-}
+// This eliminates lazy_static overhead on every access
+const ONE_HOT_MASK_ARRAY: [u64; 64] = {
+    let base: u64 = 0x8000000000000000;
+    let mut array = [0u64; 64];
+    // array[0] = 0 (already initialized)
+    array[1] = base;
+    let mut i = 2;
+    while i < 64 {
+        array[i] = (array[i - 1] >> 1) | base;
+        i += 1;
+    }
+    array
+};
 
 // Hardware-optimized popcount for 64-bit integers
 // Uses NEON on ARM64 and POPCNT on x86_64
@@ -85,17 +91,17 @@ pub fn popcount64(x: u64) -> i64 {
 
 // Helper function to get occurrences, translating GET_OCC macro
 // Now uses hardware-optimized popcount
+#[inline(always)]
 pub fn get_occ(bwa_idx: &BwaIndex, k: i64, c: u8) -> i64 {
-    let cp_shift = CP_SHIFT as i64;
-    let cp_mask = CP_MASK as i64;
+    let occ_id_k = (k >> CP_SHIFT) as usize;
+    let y_k = (k & CP_MASK as i64) as usize;
 
-    let occ_id_k = k >> cp_shift;
-    let y_k = k & cp_mask;
+    let cp_occ = unsafe { bwa_idx.cp_occ.get_unchecked(occ_id_k) };
+    let occ_k = cp_occ.checkpoint_counts[c as usize];
+    let one_hot_bwt_str_c_k = cp_occ.bwt_encoding_bits[c as usize];
 
-    let occ_k = bwa_idx.cp_occ[occ_id_k as usize].checkpoint_counts[c as usize];
-    let one_hot_bwt_str_c_k = bwa_idx.cp_occ[occ_id_k as usize].bwt_encoding_bits[c as usize];
-
-    let match_mask_k = one_hot_bwt_str_c_k & ONE_HOT_MASK_ARRAY[y_k as usize];
+    // Use direct array indexing (bounds checked at compile time for const array)
+    let match_mask_k = one_hot_bwt_str_c_k & ONE_HOT_MASK_ARRAY[y_k];
     occ_k + popcount64(match_mask_k)
 }
 
@@ -108,23 +114,20 @@ pub fn get_occ(bwa_idx: &BwaIndex, k: i64, c: u8) -> i64 {
 /// Returns [i64; 4] containing occurrence counts for bases 0, 1, 2, 3 (A, C, G, T)
 #[inline(always)]
 pub fn get_occ_all_bases(bwa_idx: &BwaIndex, k: i64) -> [i64; 4] {
-    let cp_shift = CP_SHIFT as i64;
-    let cp_mask = CP_MASK as i64;
+    let occ_id_k = (k >> CP_SHIFT) as usize;
+    let y_k = (k & CP_MASK as i64) as usize;
 
-    let occ_id_k = k >> cp_shift;
-    let y_k = k & cp_mask;
+    // SAFETY: occ_id_k is computed from valid BWT positions
+    let cp_occ = unsafe { bwa_idx.cp_occ.get_unchecked(occ_id_k) };
+    let mask = ONE_HOT_MASK_ARRAY[y_k];
 
-    let cp_occ = &bwa_idx.cp_occ[occ_id_k as usize];
-    let mask = ONE_HOT_MASK_ARRAY[y_k as usize];
-
-    // Process all 4 bases in parallel
-    let mut result = [0i64; 4];
-    for i in 0..4 {
-        let match_mask = cp_occ.bwt_encoding_bits[i] & mask;
-        result[i] = cp_occ.checkpoint_counts[i] + popcount64(match_mask);
-    }
-
-    result
+    // Unroll loop for better instruction-level parallelism
+    [
+        cp_occ.checkpoint_counts[0] + popcount64(cp_occ.bwt_encoding_bits[0] & mask),
+        cp_occ.checkpoint_counts[1] + popcount64(cp_occ.bwt_encoding_bits[1] & mask),
+        cp_occ.checkpoint_counts[2] + popcount64(cp_occ.bwt_encoding_bits[2] & mask),
+        cp_occ.checkpoint_counts[3] + popcount64(cp_occ.bwt_encoding_bits[3] & mask),
+    ]
 }
 
 /// Backward extension matching C++ bwa-mem2 FMI_search::backwardExt()
@@ -134,112 +137,49 @@ pub fn get_occ_all_bases(bwa_idx: &BwaIndex, k: i64) -> [i64; 4] {
 /// BWT information, so the standard BWT interval invariant s = l - k does NOT hold.
 ///
 /// C++ reference: FMI_search.cpp lines 1025-1052
+#[inline(always)]
 pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
-    let debug_enabled = log::log_enabled!(log::Level::Trace);
-
-    if debug_enabled {
-        log::trace!(
-            "backward_ext: input smem(k={}, l={}, s={}), a={}",
-            smem.bwt_interval_start,
-            smem.bwt_interval_end,
-            smem.interval_size,
-            a
-        );
-    }
-
-    let mut k = [0i64; 4];
-    let mut l = [0i64; 4];
-    let mut s = [0i64; 4];
-
-    // Compute k[] and s[] for all 4 bases (matching C++ lines 1030-1039)
-    // OPTIMIZATION: Use vectorized get_occ_all_bases to process all 4 bases at once
+    // Compute occurrence counts for all 4 bases at start and end positions
     let sp = smem.bwt_interval_start as i64;
     let ep = (smem.bwt_interval_start + smem.interval_size) as i64;
 
     let occ_sp = get_occ_all_bases(bwa_idx, sp);
     let occ_ep = get_occ_all_bases(bwa_idx, ep);
 
-    for b in 0..4usize {
-        k[b] = bwa_idx.bwt.cumulative_count[b] as i64 + occ_sp[b];
-        s[b] = occ_ep[b] - occ_sp[b];
+    // Compute k[] and s[] for all 4 bases
+    let cumulative = &bwa_idx.bwt.cumulative_count;
+    let k0 = cumulative[0] as i64 + occ_sp[0];
+    let k1 = cumulative[1] as i64 + occ_sp[1];
+    let k2 = cumulative[2] as i64 + occ_sp[2];
+    let k3 = cumulative[3] as i64 + occ_sp[3];
 
-        if debug_enabled && b == a as usize {
-            log::trace!(
-                "backward_ext: base {}: sp={}, ep={}, occ_sp={}, occ_ep={}, k={}, s={}",
-                b,
-                sp,
-                ep,
-                occ_sp[b],
-                occ_ep[b],
-                k[b],
-                s[b]
-            );
-        }
-    }
+    let s0 = occ_ep[0] - occ_sp[0];
+    let s1 = occ_ep[1] - occ_sp[1];
+    let s2 = occ_ep[2] - occ_sp[2];
+    let s3 = occ_ep[3] - occ_sp[3];
 
     // Sentinel handling (matching C++ lines 1041-1042)
-    let sentinel_offset = if smem.bwt_interval_start <= bwa_idx.sentinel_index as u64
-        && (smem.bwt_interval_start + smem.interval_size) > bwa_idx.sentinel_index as u64
-    {
-        1i64
-    } else {
-        0i64
-    };
-
-    if debug_enabled {
-        log::trace!(
-            "backward_ext: sentinel_offset={}, sentinel_index={}",
-            sentinel_offset,
-            bwa_idx.sentinel_index
-        );
-    }
+    let sentinel_idx = bwa_idx.sentinel_index as u64;
+    let sentinel_offset =
+        ((smem.bwt_interval_start <= sentinel_idx) & ((smem.bwt_interval_start + smem.interval_size) > sentinel_idx)) as i64;
 
     // CRITICAL: Cumulative sum computation for l[] (matching C++ lines 1043-1046)
-    // This is NOT l[b] = k[b] + s[b]!
-    // Instead: l[3] = smem.bwt_interval_end + offset, then l[2] = l[3] + s[3], etc.
-    l[3] = smem.bwt_interval_end as i64 + sentinel_offset;
-    l[2] = l[3] + s[3];
-    l[1] = l[2] + s[2];
-    l[0] = l[1] + s[1];
+    let l3 = smem.bwt_interval_end as i64 + sentinel_offset;
+    let l2 = l3 + s3;
+    let l1 = l2 + s2;
+    let l0 = l1 + s1;
 
-    if debug_enabled {
-        log::trace!(
-            "backward_ext: cumulative l[] = [{}, {}, {}, {}]",
-            l[0],
-            l[1],
-            l[2],
-            l[3]
-        );
-        log::trace!(
-            "backward_ext: k[] = [{}, {}, {}, {}]",
-            k[0],
-            k[1],
-            k[2],
-            k[3]
-        );
-        log::trace!(
-            "backward_ext: s[] = [{}, {}, {}, {}]",
-            s[0],
-            s[1],
-            s[2],
-            s[3]
-        );
-    }
+    // Select results for the requested base 'a'
+    let (k_a, l_a, s_a) = match a {
+        0 => (k0, l0, s0),
+        1 => (k1, l1, s1),
+        2 => (k2, l2, s2),
+        _ => (k3, l3, s3), // 3 or any other value
+    };
 
-    // Update SMEM with results for base 'a' (matching C++ lines 1048-1050)
-    smem.bwt_interval_start = k[a as usize] as u64;
-    smem.bwt_interval_end = l[a as usize] as u64;
-    smem.interval_size = s[a as usize] as u64;
-
-    if debug_enabled {
-        log::trace!(
-            "backward_ext: output smem(k={}, l={}, s={}) for base {}",
-            smem.bwt_interval_start,
-            smem.bwt_interval_end,
-            smem.interval_size,
-            a
-        );
-    }
+    smem.bwt_interval_start = k_a as u64;
+    smem.bwt_interval_end = l_a as u64;
+    smem.interval_size = s_a as u64;
 
     smem
 }
@@ -252,61 +192,26 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
 /// 3. Swap k and l back
 ///
 /// C++ reference: FMI_search.cpp lines 546-554
-#[inline]
+///
+/// OPTIMIZED: Inlined swap operations, eliminated debug logging overhead
+#[inline(always)]
 pub fn forward_ext(bwa_idx: &BwaIndex, smem: SMEM, a: u8) -> SMEM {
-    // Debug logging for forward extension
-    let debug_enabled = log::log_enabled!(log::Level::Trace);
+    // Create swapped SMEM in place (k and l swapped)
+    let smem_swapped = SMEM {
+        read_id: smem.read_id,
+        bwt_interval_start: smem.bwt_interval_end,
+        bwt_interval_end: smem.bwt_interval_start,
+        interval_size: smem.interval_size,
+        query_start: smem.query_start,
+        query_end: smem.query_end,
+        is_reverse_complement: smem.is_reverse_complement,
+    };
 
-    if debug_enabled {
-        log::trace!(
-            "forward_ext: input smem(k={}, l={}, s={}), a={}",
-            smem.bwt_interval_start,
-            smem.bwt_interval_end,
-            smem.interval_size,
-            a
-        );
-    }
-
-    // Step 1: Swap k and l (lines 547-548)
-    let mut smem_swapped = smem;
-    smem_swapped.bwt_interval_start = smem.bwt_interval_end;
-    smem_swapped.bwt_interval_end = smem.bwt_interval_start;
-
-    if debug_enabled {
-        log::trace!(
-            "forward_ext: after swap smem_swapped(k={}, l={})",
-            smem_swapped.bwt_interval_start,
-            smem_swapped.bwt_interval_end
-        );
-    }
-
-    // Step 2: Backward extension with complement base (line 549)
+    // Backward extension with complement base (3 - a)
     let mut result = backward_ext(bwa_idx, smem_swapped, 3 - a);
 
-    if debug_enabled {
-        log::trace!(
-            "forward_ext: after backward_ext result(k={}, l={}, s={})",
-            result.bwt_interval_start,
-            result.bwt_interval_end,
-            result.interval_size
-        );
-    }
-
-    // Step 3: Swap k and l back (lines 552-553)
-    // NOTE: We swap k and l but KEEP s unchanged (matches C++ behavior)
-    // The s value is still valid because it represents interval size
-    let k_temp = result.bwt_interval_start;
-    result.bwt_interval_start = result.bwt_interval_end;
-    result.bwt_interval_end = k_temp;
-
-    if debug_enabled {
-        log::trace!(
-            "forward_ext: after swap back result(k={}, l={}, s={})",
-            result.bwt_interval_start,
-            result.bwt_interval_end,
-            result.interval_size
-        );
-    }
+    // Swap k and l back
+    std::mem::swap(&mut result.bwt_interval_start, &mut result.bwt_interval_end);
 
     result
 }
