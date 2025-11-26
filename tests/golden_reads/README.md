@@ -113,7 +113,7 @@ All SIMD backends must produce identical alignment results. The following tests 
 |---------|----------|-------------|------|-------------|--------|
 | AVX2 (256-bit) | x86_64 | `--release` | 0.84s | `c663c0be36a839cced3d1e3b9e36c543` | ✅ Verified |
 | AVX-512 (512-bit) | x86_64 | `--release --features avx512` | 2.08s | `c663c0be36a839cced3d1e3b9e36c543` | ✅ Verified |
-| NEON (128-bit) | Apple M3 Max | `--release` | 7.19s | `c663c0be36a839cced3d1e3b9e36c543` | ✅ Verified |
+| NEON (128-bit) | Apple M3 Max | `--release` | 1.23s | `c663c0be36a839cced3d1e3b9e36c543` | ✅ Verified |
 
 **Key findings:**
 - All three backends (AVX2, AVX-512, NEON) produce **byte-for-byte identical** alignment outputs
@@ -150,29 +150,21 @@ NEON backend has been verified on Apple Silicon (M3 Max):
 REF=/Library/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna
 cargo build --release
 
-# Test with SIMD disabled (scalar baseline)
-FERROUS_ALIGN_SIMD=0 ./target/release/ferrous-align mem $REF \
+# Run alignment
+./target/release/ferrous-align mem $REF \
     tests/golden_reads/golden_10k_R1.fq \
     tests/golden_reads/golden_10k_R2.fq \
-    > /tmp/simd0.sam 2>&1
-grep -v "^@" /tmp/simd0.sam | grep -v "^\[" | md5
-# Expected: c663c0be36a839cced3d1e3b9e36c543
+    > /tmp/test.sam 2>&1
 
-# Test with SIMD enabled (NEON kernel)
-FERROUS_ALIGN_SIMD=1 ./target/release/ferrous-align mem $REF \
-    tests/golden_reads/golden_10k_R1.fq \
-    tests/golden_reads/golden_10k_R2.fq \
-    > /tmp/simd1.sam 2>&1
-grep -v "^@" /tmp/simd1.sam | grep -v "^\[" | md5
+# Verify output hash
+grep -v "^@" /tmp/test.sam | grep -v "^\[" | md5
 # Expected: c663c0be36a839cced3d1e3b9e36c543
 ```
 
 **Apple M3 Max Results (2025-11-25):**
-- SIMD=0 (scalar): 7.19 sec, 20104 alignments
-- SIMD=1 (NEON):  17.18 sec, 20104 alignments
-- Both produce identical output (MD5: `c663c0be36a839cced3d1e3b9e36c543`)
-
-Note: SIMD=1 is currently slower because it runs both SIMD scoring AND scalar CIGAR generation for verification. Once the SIMD path is fully validated, this dual execution will be removed.
+- Time: 1.23 sec
+- Alignments: 20,104
+- Output hash: `c663c0be36a839cced3d1e3b9e36c543` (matches AVX2/AVX-512)
 
 ## Notes
 
