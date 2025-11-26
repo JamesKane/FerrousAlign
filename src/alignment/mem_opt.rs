@@ -79,7 +79,6 @@ pub struct MemOpt {
     pub treat_alt_as_primary: bool,   // -j: Treat ALT contigs as part of primary assembly
     pub smallest_coord_primary: bool, // -5: For split alignment, take smallest coordinate as primary
     pub output_all_alignments: bool,  // -a: Output all alignments for SE or unpaired PE
-
 }
 
 /// Manual insert size specification (overrides auto-inference)
@@ -294,7 +293,6 @@ pub struct MemCliOptions {
     /// Number of threads (default: all available cores)
     #[arg(short = 't', long, value_name = "INT")]
     pub threads: Option<usize>,
-
 }
 
 /// Parse XA hits string "INT" or "INT,INT"

@@ -428,6 +428,20 @@ impl SimdEngine for SimdEngine256 {
         simd_arch::_mm256_shuffle_epi8(a, b)
     }
 
+    // ===== Unpack Operations =====
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn unpacklo_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm256_unpacklo_epi8(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn unpackhi_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm256_unpackhi_epi8(a, b)
+    }
+
     // ===== Shift Operations =====
 
     #[inline]

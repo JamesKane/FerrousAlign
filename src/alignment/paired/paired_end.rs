@@ -16,7 +16,6 @@ use super::mate_rescue::{
     MateRescueJob, execute_mate_rescue_batch_with_engine, prepare_mate_rescue_jobs_for_anchor,
     result_to_alignment,
 };
-use crate::compute::simd_abstraction::simd::SimdEngineType;
 use super::pairing::mem_pair;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::mark_secondary_alignments;
@@ -25,6 +24,7 @@ use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::pipeline::align_read_deferred;
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
+use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::index::index::BwaIndex;
 use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,

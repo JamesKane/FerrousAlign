@@ -21,8 +21,8 @@
 //! - Pointer arguments to loads/stores must be valid for the accessed size and
 //!   (for the aligned variants) appropriately aligned.
 
-use super::portable_intrinsics::*;
 use super::portable_intrinsics::_mm_storeu_si128;
+use super::portable_intrinsics::*;
 
 use super::types::{__m128i, simd_arch};
 
@@ -432,6 +432,38 @@ impl SimdEngine for SimdEngine128 {
             // Clear lanes where mask is 0xFF
             out = vbicq_u8(out, lane_mask);
             __m128i::from_u8(out)
+        }
+    }
+
+    // ===== Unpack Operations =====
+
+    #[inline]
+    unsafe fn unpacklo_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            _mm_unpacklo_epi8(a, b)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            // NEON: vzip1q_u8 interleaves low halves
+            __m128i::from_u8(vzip1q_u8(a.as_u8(), b.as_u8()))
+        }
+    }
+
+    #[inline]
+    unsafe fn unpackhi_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            _mm_unpackhi_epi8(a, b)
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            // NEON: vzip2q_u8 interleaves high halves
+            __m128i::from_u8(vzip2q_u8(a.as_u8(), b.as_u8()))
         }
     }
 

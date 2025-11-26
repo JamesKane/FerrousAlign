@@ -10,13 +10,13 @@ use std::fmt::Write;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CigarOp {
-    M = b'M', // Match/mismatch
-    I = b'I', // Insertion to reference
-    D = b'D', // Deletion from reference
-    S = b'S', // Soft clip
-    H = b'H', // Hard clip
-    N = b'N', // Skipped region (intron)
-    X = b'X', // Sequence mismatch
+    M = b'M',  // Match/mismatch
+    I = b'I',  // Insertion to reference
+    D = b'D',  // Deletion from reference
+    S = b'S',  // Soft clip
+    H = b'H',  // Hard clip
+    N = b'N',  // Skipped region (intron)
+    X = b'X',  // Sequence mismatch
     Eq = b'=', // Sequence match
 }
 
@@ -147,13 +147,11 @@ pub fn reverse(cigar: &[(u8, i32)]) -> Vec<(u8, i32)> {
 pub fn reference_length(cigar: &[(u8, i32)]) -> i32 {
     cigar
         .iter()
-        .filter_map(|&(op, len)| {
-            if op_consumes_ref(op) {
-                Some(len)
-            } else {
-                None
-            }
-        })
+        .filter_map(
+            |&(op, len)| {
+                if op_consumes_ref(op) { Some(len) } else { None }
+            },
+        )
         .sum()
 }
 

@@ -777,9 +777,7 @@ fn merge_scores_to_regions(
 
             // Convert FM-index position to chromosome coordinates using centralized function
             let coords = crate::alignment::coordinates::fm_to_chromosome_coords(
-                bwa_idx,
-                region.rb,
-                region.re,
+                bwa_idx, region.rb, region.re,
             );
             region.rid = coords.ref_id;
             region.ref_name = coords.ref_name;
@@ -1465,16 +1463,16 @@ mod tests {
         // When query and reference lengths are equal with good score,
         // band width should be small
         let w = infer_band_width(
-            100,  // l_query
-            100,  // l_ref
-            100,  // score (perfect alignment)
-            1,    // match_score
-            6,    // o_del
-            1,    // e_del
-            6,    // o_ins
-            1,    // e_ins
-            100,  // cmd_w
-            50,   // region_w
+            100, // l_query
+            100, // l_ref
+            100, // score (perfect alignment)
+            1,   // match_score
+            6,   // o_del
+            1,   // e_del
+            6,   // o_ins
+            1,   // e_ins
+            100, // cmd_w
+            50,  // region_w
         );
         // Should be 0 because score is good and lengths match
         assert_eq!(w, 0);

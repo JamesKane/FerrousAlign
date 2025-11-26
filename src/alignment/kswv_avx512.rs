@@ -39,7 +39,7 @@
 
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
 
-use crate::alignment::kswv_batch::{SeqPair, KswResult};
+use crate::alignment::kswv_batch::{KswResult, SeqPair};
 use crate::compute::simd_abstraction::{SimdEngine, SimdEngine512};
 // AVX-512 mask operations handled via vector-based masks in portable abstraction
 
@@ -90,20 +90,20 @@ const KSW_XSTOP: i32 = 0x20000;
 #[target_feature(enable = "avx512bw")]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn batch_ksw_align_avx512(
-    seq1_soa: *const u8,      // Reference sequences (SoA layout)
-    seq2_soa: *const u8,      // Query sequences (SoA layout)
-    nrow: i16,                // Reference length
-    ncol: i16,                // Query length
-    pairs: &[SeqPair],        // Sequence pair metadata
+    seq1_soa: *const u8,       // Reference sequences (SoA layout)
+    seq2_soa: *const u8,       // Query sequences (SoA layout)
+    nrow: i16,                 // Reference length
+    ncol: i16,                 // Query length
+    pairs: &[SeqPair],         // Sequence pair metadata
     results: &mut [KswResult], // Output results
-    w_match: i8,              // Match score
-    w_mismatch: i8,           // Mismatch penalty
-    o_del: i32,               // Gap open (deletion)
-    e_del: i32,               // Gap extension (deletion)
-    o_ins: i32,               // Gap open (insertion)
-    e_ins: i32,               // Gap extension (insertion)
-    w_ambig: i8,              // Ambiguous base penalty
-    _phase: i32,              // Processing phase
+    w_match: i8,               // Match score
+    w_mismatch: i8,            // Mismatch penalty
+    o_del: i32,                // Gap open (deletion)
+    e_del: i32,                // Gap extension (deletion)
+    o_ins: i32,                // Gap open (insertion)
+    e_ins: i32,                // Gap extension (insertion)
+    w_ambig: i8,               // Ambiguous base penalty
+    _phase: i32,               // Processing phase
 ) -> usize {
     // ========================================================================
     // SECTION 1: Initialization (kswv.cpp lines 387-469)
@@ -117,17 +117,19 @@ pub unsafe fn batch_ksw_align_avx512(
     // This handles the fact that scores can be negative but we use unsigned arithmetic
     let mdiff = w_match.max(w_mismatch).max(w_ambig);
     let shift_val = w_match.min(w_mismatch).min(w_ambig);
-    let shift = (256i16 - shift_val as i16) as u8;  // 256 - shift_val, wrapping to u8
+    let shift = (256i16 - shift_val as i16) as u8; // 256 - shift_val, wrapping to u8
     let qmax = mdiff;
 
     // Create scoring lookup table for shuffle operation
     // This maps XOR results to match/mismatch/ambig scores
     let mut temp = [0i8; SIMD_WIDTH8];
-    temp[0] = w_match;                                      // Match
-    temp[1] = w_mismatch; temp[2] = w_mismatch; temp[3] = w_mismatch;  // Mismatch
-    temp[4..8].fill(w_ambig);                               // Beyond boundary
-    temp[8..12].fill(w_ambig);                              // SSE2 region
-    temp[12] = w_ambig;                                     // Ambiguous base
+    temp[0] = w_match; // Match
+    temp[1] = w_mismatch;
+    temp[2] = w_mismatch;
+    temp[3] = w_mismatch; // Mismatch
+    temp[4..8].fill(w_ambig); // Beyond boundary
+    temp[8..12].fill(w_ambig); // SSE2 region
+    temp[12] = w_ambig; // Ambiguous base
 
     // Add shift to first 16 elements for shuffle_epi8
     for i in 0..16 {
@@ -219,8 +221,8 @@ pub unsafe fn batch_ksw_align_avx512(
     // Initialize tracking variables for main loop
     let mut max512 = zero512;
     let mut pimax512 = zero512;
-    let mut mask512 = zero512;  // Vector mask for row maxima tracking
-    let mut minsc_msk = zero512;  // Vector mask for minimum score threshold
+    let mut mask512 = zero512; // Vector mask for row maxima tracking
+    let mut minsc_msk = zero512; // Vector mask for minimum score threshold
     let mut qe512 = SimdEngine512::set1_epi8(0);
 
     SimdEngine512::store_si128(h0_buf.as_mut_ptr() as *mut _, zero512);
@@ -230,7 +232,7 @@ pub unsafe fn batch_ksw_align_avx512(
     // SECTION 2: Main DP Loop (kswv.cpp lines 480-547)
     // ========================================================================
 
-    let mut exit0_vec = SimdEngine512::set1_epi8(-1);  // All lanes active (0xFF)
+    let mut exit0_vec = SimdEngine512::set1_epi8(-1); // All lanes active (0xFF)
     let mut limit = nrow as i32;
 
     for i in 0..nrow as usize {
@@ -242,22 +244,15 @@ pub unsafe fn batch_ksw_align_avx512(
         let mut l512 = zero512;
 
         // Load reference base for this row
-        let s1 = SimdEngine512::load_si128(
-            seq1_soa.add(i * SIMD_WIDTH8) as *const _
-        );
+        let s1 = SimdEngine512::load_si128(seq1_soa.add(i * SIMD_WIDTH8) as *const _);
 
         // Inner loop over query positions
         for j in 0..ncol as usize {
             // Load DP values and query base
-            let h00 = SimdEngine512::load_si128(
-                h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _
-            );
-            let s2 = SimdEngine512::load_si128(
-                seq2_soa.add(j * SIMD_WIDTH8) as *const _
-            );
-            let f11 = SimdEngine512::load_si128(
-                f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _
-            );
+            let h00 = SimdEngine512::load_si128(h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _);
+            let s2 = SimdEngine512::load_si128(seq2_soa.add(j * SIMD_WIDTH8) as *const _);
+            let f11 =
+                SimdEngine512::load_si128(f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _);
 
             // ============================================================
             // MAIN_SAM_CODE8_OPT: Core DP computation (kswv.cpp:63-86)
@@ -273,18 +268,11 @@ pub unsafe fn batch_ksw_align_avx512(
 
             // Mask out invalid positions (OR of bases gives non-zero for N)
             let or11 = SimdEngine512::or_si128(s1, s2);
-            let cmp_mask = SimdEngine512::cmpeq_epi8(
-                or11,
-                SimdEngine512::set1_epi8(0)
-            );  // 0xFF where both are valid
+            let cmp_mask = SimdEngine512::cmpeq_epi8(or11, SimdEngine512::set1_epi8(0)); // 0xFF where both are valid
 
             // Compute match score: H[i-1,j-1] + score
             let mut m11 = SimdEngine512::adds_epu8(h00, sbt11);
-            m11 = SimdEngine512::blendv_epi8(
-                zero512,
-                m11,
-                cmp_mask
-            );  // Zero out invalid positions
+            m11 = SimdEngine512::blendv_epi8(zero512, m11, cmp_mask); // Zero out invalid positions
             m11 = SimdEngine512::subs_epu8(m11, sft512);
 
             // Take max of match, gap-extend-E, gap-extend-F
@@ -307,14 +295,8 @@ pub unsafe fn batch_ksw_align_avx512(
             f21 = SimdEngine512::max_epu8(gap_d512, f21);
 
             // Store updated DP values
-            SimdEngine512::store_si128(
-                h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-                h11
-            );
-            SimdEngine512::store_si128(
-                f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-                f21
-            );
+            SimdEngine512::store_si128(h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, h11);
+            SimdEngine512::store_si128(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
 
             // Increment query position counter
             l512 = SimdEngine512::add_epi8(l512, one512);
@@ -328,23 +310,15 @@ pub unsafe fn batch_ksw_align_avx512(
             let mut pimax512_tmp = SimdEngine512::blendv_epi8(pimax512, zero512, msk64);
 
             // Apply minsc threshold mask
-            let minsc_mask_vec = SimdEngine512::set1_epi8(-1);  // TODO: Create from minsc_msk
-            pimax512_tmp = SimdEngine512::blendv_epi8(
-                pimax512_tmp,
-                zero512,
-                minsc_mask_vec
-            );
+            let minsc_mask_vec = SimdEngine512::set1_epi8(-1); // TODO: Create from minsc_msk
+            pimax512_tmp = SimdEngine512::blendv_epi8(pimax512_tmp, zero512, minsc_mask_vec);
 
             // Apply exit mask
-            pimax512_tmp = SimdEngine512::blendv_epi8(
-                pimax512_tmp,
-                zero512,
-                exit0_vec
-            );
+            pimax512_tmp = SimdEngine512::blendv_epi8(pimax512_tmp, zero512, exit0_vec);
 
             SimdEngine512::store_si128(
                 row_max_buf[(i - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-                pimax512_tmp
+                pimax512_tmp,
             );
 
             mask512 = SimdEngine512::andnot_si128(msk64, SimdEngine512::set1_epi8(-1));
@@ -361,7 +335,7 @@ pub unsafe fn batch_ksw_align_avx512(
         cmp0_vec = SimdEngine512::and_si128(cmp0_vec, exit0_vec);
 
         gmax512 = SimdEngine512::blendv_epi8(gmax512, imax512, cmp0_vec);
-        te512 = SimdEngine512::blendv_epi8(te512, i512_vec, cmp0_vec);  // TODO: Handle 16-bit properly
+        te512 = SimdEngine512::blendv_epi8(te512, i512_vec, cmp0_vec); // TODO: Handle 16-bit properly
         // TODO: te512_ for upper 32 lanes
         qe512 = SimdEngine512::blendv_epi8(qe512, iqe512, cmp0_vec);
 
@@ -397,7 +371,7 @@ pub unsafe fn batch_ksw_align_avx512(
     // TODO: Apply minsc_msk and exit0 masks
     SimdEngine512::store_si128(
         row_max_buf[((limit - 1) as usize) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-        pimax512_final
+        pimax512_final,
     );
 
     // ========================================================================
@@ -461,8 +435,8 @@ pub unsafe fn batch_ksw_align_avx512(
     let mut high_arr = AlignedI16Array([0; SIMD_WIDTH8]);
     let mut rlen_arr = AlignedI16Array([0; SIMD_WIDTH8]);
 
-    let mut maxl: i32 = 0;  // Minimum row to scan in forward pass
-    let mut minh: i32 = nrow as i32;  // Maximum row to scan in backward pass
+    let mut maxl: i32 = 0; // Minimum row to scan in forward pass
+    let mut minh: i32 = nrow as i32; // Maximum row to scan in backward pass
 
     for i in 0..SIMD_WIDTH8.min(pairs.len()) {
         // Compute exclusion window size based on score
@@ -485,7 +459,7 @@ pub unsafe fn batch_ksw_align_avx512(
     // Initialize second-best tracking vectors
     let mut max512 = zero512;
     let mut te512 = SimdEngine512::set1_epi16(-1);
-    let te512_ = SimdEngine512::set1_epi16(-1);  // Upper 32 lanes (not used in 64-lane mode)
+    let te512_ = SimdEngine512::set1_epi16(-1); // Upper 32 lanes (not used in 64-lane mode)
 
     // Load exclusion zone boundaries
     let low512 = SimdEngine512::loadu_si128_16(low_arr.0.as_ptr() as *const _);
@@ -511,8 +485,7 @@ pub unsafe fn batch_ksw_align_avx512(
         // Combine masks and convert to 8-bit (for blendv_epi8)
         // TODO: Proper 16-bit to 8-bit mask conversion
         let combined_mask = SimdEngine512::and_si128(
-            mask1,
-            mask2_8bit  // Type mismatch - need proper conversion
+            mask1, mask2_8bit, // Type mismatch - need proper conversion
         );
 
         // Update second-best score and position
@@ -598,11 +571,14 @@ mod tests {
         let seq1 = vec![0u8; 256 * SIMD_WIDTH8];
         let seq2 = vec![0u8; 128 * SIMD_WIDTH8];
 
-        let pairs = vec![SeqPair {
-            ref_len: 10,
-            query_len: 10,
-            ..Default::default()
-        }; SIMD_WIDTH8];
+        let pairs = vec![
+            SeqPair {
+                ref_len: 10,
+                query_len: 10,
+                ..Default::default()
+            };
+            SIMD_WIDTH8
+        ];
 
         let mut results = vec![KswResult::default(); SIMD_WIDTH8];
 
@@ -614,14 +590,14 @@ mod tests {
                 10,
                 &pairs,
                 &mut results,
-                1,   // match
-                -4,  // mismatch
-                6,   // gap open
-                2,   // gap extend
-                6,   // gap open (ins)
-                2,   // gap extend (ins)
-                -1,  // ambig
-                0,   // phase
+                1,  // match
+                -4, // mismatch
+                6,  // gap open
+                2,  // gap extend
+                6,  // gap open (ins)
+                2,  // gap extend (ins)
+                -1, // ambig
+                0,  // phase
             );
         }
 

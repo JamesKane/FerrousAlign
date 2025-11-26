@@ -22,7 +22,7 @@ use crate::alignment::edit_distance;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
-use crate::alignment::kswv_batch::{SoABuffer, SeqPair, KswResult, batch_ksw_align};
+use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
 use crate::compute::simd_abstraction::SimdEngine128;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::index::index::BwaIndex;
@@ -406,12 +406,10 @@ pub fn mem_matesw(
         }
 
         // Get reference sequence at chromosome position
-        let forward_ref = bwa_idx.bns.get_forward_ref(
-            pac,
-            anchor.ref_id,
-            chr_pos,
-            ref_len.max(0) as usize,
-        );
+        let forward_ref =
+            bwa_idx
+                .bns
+                .get_forward_ref(pac, anchor.ref_id, chr_pos, ref_len.max(0) as usize);
 
         // Get aligned query portion
         // For reverse strand, need to handle coordinate transformation
@@ -545,20 +543,15 @@ pub fn execute_mate_rescue_batch_with_engine(
     engine: Option<SimdEngineType>,
 ) -> Vec<MateRescueResult> {
     // Use horizontal SIMD batching if engine is specified and we have enough jobs
-    // NOTE: Horizontal SIMD kernels have a bug in te (target end) tracking - the AVX2 kernel
-    // uses 16-bit values but only has 16 lanes for 32 sequences. This causes incorrect
-    // coordinates and lower properly-paired rates. Disable SIMD for now until te tracking
-    // is fixed with two registers (te_lo/te_hi).
-    // TODO: Fix te tracking in kswv_avx2.rs and kswv_sse_neon.rs
-    let simd_disabled = true;
-    if !simd_disabled {
+    // SIMD kernels use two registers for te tracking (te_lo/te_hi) to handle
+    // 16-bit te values for all sequences (16 for SSE/NEON, 32 for AVX2).
     if let Some(simd_engine) = engine {
         let min_batch_for_simd = match simd_engine {
             #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-            SimdEngineType::Engine512 => 32,  // 50% of 64-way
+            SimdEngineType::Engine512 => 32, // 50% of 64-way
             #[cfg(target_arch = "x86_64")]
-            SimdEngineType::Engine256 => 16,  // 50% of 32-way
-            SimdEngineType::Engine128 => 8,   // 50% of 16-way
+            SimdEngineType::Engine256 => 16, // 50% of 32-way
+            SimdEngineType::Engine128 => 8, // 50% of 16-way
         };
 
         if jobs.len() >= min_batch_for_simd {
@@ -570,7 +563,6 @@ pub fn execute_mate_rescue_batch_with_engine(
             return execute_mate_rescue_batch_simd(jobs, simd_engine);
         }
     }
-    } // end simd_disabled check
 
     // Fallback to scalar/rayon implementation
     execute_mate_rescue_batch_scalar(jobs)
@@ -649,12 +641,12 @@ fn execute_mate_rescue_batch_simd(
         return Vec::new();
     }
 
+    // DEBUG COMPARISON: Run scalar first to get reference results
+    let mut jobs_clone = jobs.to_vec();
+    let scalar_results = execute_mate_rescue_batch_scalar(&mut jobs_clone);
+
     // Use INFO level to ensure it's visible
-    log::info!(
-        "SIMD mate rescue: {} jobs, engine={:?}",
-        jobs.len(),
-        engine
-    );
+    log::info!("SIMD mate rescue: {} jobs, engine={:?}", jobs.len(), engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults for mate rescue)
     let match_score: i8 = 1;
@@ -759,7 +751,7 @@ fn execute_mate_rescue_batch_simd(
         pairs[0].ref_len = chunk_max_ref as i32;
         pairs[0].query_len = chunk_max_query as i32;
 
-        log::info!(
+        log::debug!(
             "Calling batch_ksw_align: chunk={}/{}, nrow={}, ncol={}, batch_size={}, soa_batch_size={}",
             chunk_start,
             jobs.len(),
@@ -775,13 +767,16 @@ fn execute_mate_rescue_batch_simd(
         if nrow > max_ref_len + 16 || ncol > max_query_len + 16 {
             log::error!(
                 "Buffer overflow would occur: nrow={} > max_ref={}, ncol={} > max_query={}",
-                nrow, max_ref_len + 16, ncol, max_query_len + 16
+                nrow,
+                max_ref_len + 16,
+                ncol,
+                max_query_len + 16
             );
             // Fall back to scalar for this batch
             return execute_mate_rescue_batch_scalar(jobs);
         }
 
-        log::info!("Sanity checks passed, calling kernel...");
+        log::debug!("Sanity checks passed, calling kernel...");
 
         let _processed = batch_ksw_align(
             &soa,
@@ -812,6 +807,66 @@ fn execute_mate_rescue_batch_simd(
                 },
             });
         }
+    }
+
+    // DEBUG COMPARISON: Compare scalar vs SIMD results
+    let mut mismatch_count = 0;
+    let mut score_mismatches = 0;
+    let mut te_mismatches = 0;
+    let mut qe_mismatches = 0;
+    for (i, (scalar, simd)) in scalar_results.iter().zip(results.iter()).enumerate() {
+        let score_match = scalar.aln.score == simd.aln.score;
+        let te_match = scalar.aln.te == simd.aln.te;
+        let qe_match = scalar.aln.qe == simd.aln.qe;
+
+        if !score_match || !te_match || !qe_match {
+            mismatch_count += 1;
+            if !score_match {
+                score_mismatches += 1;
+            }
+            if !te_match {
+                te_mismatches += 1;
+            }
+            if !qe_match {
+                qe_mismatches += 1;
+            }
+
+            // Log first 10 mismatches in detail (DEBUG level)
+            if mismatch_count <= 10 {
+                log::debug!(
+                    "MISMATCH[{}]: scalar(score={}, te={}, qe={}) vs simd(score={}, te={}, qe={})",
+                    i,
+                    scalar.aln.score,
+                    scalar.aln.te,
+                    scalar.aln.qe,
+                    simd.aln.score,
+                    simd.aln.te,
+                    simd.aln.qe
+                );
+                log::debug!(
+                    "  Job[{}]: ref_len={}, query_len={}",
+                    i,
+                    jobs[i].ref_seq.len(),
+                    jobs[i].query_seq.len()
+                );
+            }
+        }
+    }
+
+    if mismatch_count > 0 {
+        log::warn!(
+            "SIMD MISMATCH SUMMARY: {} of {} mismatches (score={}, te={}, qe={})",
+            mismatch_count,
+            results.len(),
+            score_mismatches,
+            te_mismatches,
+            qe_mismatches
+        );
+    } else {
+        log::debug!(
+            "SIMD VALIDATION: All {} results match scalar!",
+            results.len()
+        );
     }
 
     results

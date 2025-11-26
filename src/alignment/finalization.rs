@@ -171,7 +171,11 @@ impl Alignment {
 
         // Format mandatory SAM fields
         // For unmapped reads (ref_name == "*"), POS must be 0 per SAM spec
-        let sam_pos = if self.ref_name == "*" { 0 } else { self.pos + 1 };
+        let sam_pos = if self.ref_name == "*" {
+            0
+        } else {
+            self.pos + 1
+        };
         let mut sam_line = format!(
             "{}	{}	{}	{}	{}	{}	{}	{}	{}	{}	{}",
             self.query_name,

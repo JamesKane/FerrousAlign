@@ -1120,8 +1120,15 @@ mod tests {
         let read_id = 0u64; // Test read ID
         let compute_backend = detect_optimal_backend();
         let alignments = super::align_read_deferred(
-            &bwa_idx, pac_data, query_name, query_seq, query_qual, &opt,
-            compute_backend, read_id, false,
+            &bwa_idx,
+            pac_data,
+            query_name,
+            query_seq,
+            query_qual,
+            &opt,
+            compute_backend,
+            read_id,
+            false,
         );
 
         assert!(

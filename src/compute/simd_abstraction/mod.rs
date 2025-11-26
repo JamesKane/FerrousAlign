@@ -191,6 +191,14 @@ pub trait SimdEngine: Sized + Copy {
     /// Maps to `_mm_shuffle_epi8` (SSSE3), `_mm256_shuffle_epi8` (AVX2), `_mm512_shuffle_epi8` (AVX-512).
     unsafe fn shuffle_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
 
+    // ===== Unpack Operations =====
+    /// Interleave low 8 bytes of `a` and `b`.
+    /// Result: [a0,b0,a1,b1,a2,b2,a3,b3,a4,b4,a5,b5,a6,b6,a7,b7]
+    unsafe fn unpacklo_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+    /// Interleave high 8 bytes of `a` and `b`.
+    /// Result: [a8,b8,a9,b9,a10,b10,a11,b11,a12,b12,a13,b13,a14,b14,a15,b15]
+    unsafe fn unpackhi_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+
     // ===== Fixed/portable Shift Operations =====
     /// Shift each i16 lane left by a fixed immediate `imm8` (backend may accept
     /// only certain ranges; out‑of‑range immediates are backend‑defined).

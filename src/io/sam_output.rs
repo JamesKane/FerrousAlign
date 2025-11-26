@@ -204,8 +204,7 @@ pub fn prepare_paired_alignment_read1(
     }
 
     // Determine if mate is unmapped (check both ref_name and flag)
-    let mate_is_unmapped =
-        ctx.mate_ref == "*" || (ctx.mate_flag & sam_flags::UNMAPPED) != 0;
+    let mate_is_unmapped = ctx.mate_ref == "*" || (ctx.mate_flag & sam_flags::UNMAPPED) != 0;
 
     // Set mate unmapped flag if mate is unmapped
     if mate_is_unmapped {
@@ -299,8 +298,7 @@ pub fn prepare_paired_alignment_read2(
     }
 
     // Determine if mate is unmapped (check both ref_name and flag)
-    let mate_is_unmapped =
-        ctx.mate_ref == "*" || (ctx.mate_flag & sam_flags::UNMAPPED) != 0;
+    let mate_is_unmapped = ctx.mate_ref == "*" || (ctx.mate_flag & sam_flags::UNMAPPED) != 0;
 
     // Set mate unmapped flag if mate is unmapped
     if mate_is_unmapped {

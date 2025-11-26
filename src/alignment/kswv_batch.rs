@@ -17,8 +17,8 @@
 // This is appropriate for SIMD-heavy code where nearly every operation is inherently unsafe.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::alloc::{Layout, alloc, dealloc};
 use crate::compute::simd_abstraction::simd::{SimdEngineType, get_simd_batch_sizes};
+use std::alloc::{Layout, alloc, dealloc};
 
 /// Maximum sequence lengths for buffer allocation
 pub const MAX_SEQ_LEN_REF: usize = 2048;
@@ -111,10 +111,10 @@ impl SoABuffer {
         let query_size = max_query_len * batch_size;
 
         // 64-byte alignment for cache line and AVX-512
-        let ref_layout = Layout::from_size_align(ref_size, 64)
-            .expect("Invalid layout for ref buffer");
-        let query_layout = Layout::from_size_align(query_size, 64)
-            .expect("Invalid layout for query buffer");
+        let ref_layout =
+            Layout::from_size_align(ref_size, 64).expect("Invalid layout for ref buffer");
+        let query_layout =
+            Layout::from_size_align(query_size, 64).expect("Invalid layout for query buffer");
 
         let ref_data = unsafe { alloc(ref_layout) };
         let query_data = unsafe { alloc(query_layout) };
@@ -149,23 +149,28 @@ impl SoABuffer {
     /// After this call, position `k` of sequence `j` is at:
     ///   ref_data[k * batch_size + j]
     ///   query_data[k * batch_size + j]
-    pub fn transpose(
-        &mut self,
-        pairs: &[SeqPair],
-        ref_seqs: &[&[u8]],
-        query_seqs: &[&[u8]],
-    ) {
+    pub fn transpose(&mut self, pairs: &[SeqPair], ref_seqs: &[&[u8]], query_seqs: &[&[u8]]) {
         let num_pairs = pairs.len().min(self.batch_size);
 
-        // Clear buffers with padding value
+        // Clear buffers with padding value 0x80 (128)
+        // The SIMD kernels use the HIGH BIT of (s1 | s2) to detect padding
+        // Valid bases are 0-4, so their high bit is 0
+        // Padding 0x80 has high bit set, triggering blendv to zero out those positions
         unsafe {
-            std::ptr::write_bytes(self.ref_data, 0xFF, self.max_ref_len * self.batch_size);
-            std::ptr::write_bytes(self.query_data, 0xFF, self.max_query_len * self.batch_size);
+            std::ptr::write_bytes(self.ref_data, 0x80, self.max_ref_len * self.batch_size);
+            std::ptr::write_bytes(self.query_data, 0x80, self.max_query_len * self.batch_size);
         }
 
         // Transpose reference sequences
-        for (j, (pair, ref_seq)) in pairs.iter().zip(ref_seqs.iter()).enumerate().take(num_pairs) {
-            let len = (pair.ref_len as usize).min(ref_seq.len()).min(self.max_ref_len);
+        for (j, (pair, ref_seq)) in pairs
+            .iter()
+            .zip(ref_seqs.iter())
+            .enumerate()
+            .take(num_pairs)
+        {
+            let len = (pair.ref_len as usize)
+                .min(ref_seq.len())
+                .min(self.max_ref_len);
             for k in 0..len {
                 let base = ref_seq[k];
                 // Handle ambiguous bases (N = 4)
@@ -177,8 +182,15 @@ impl SoABuffer {
         }
 
         // Transpose query sequences
-        for (j, (pair, query_seq)) in pairs.iter().zip(query_seqs.iter()).enumerate().take(num_pairs) {
-            let len = (pair.query_len as usize).min(query_seq.len()).min(self.max_query_len);
+        for (j, (pair, query_seq)) in pairs
+            .iter()
+            .zip(query_seqs.iter())
+            .enumerate()
+            .take(num_pairs)
+        {
+            let len = (pair.query_len as usize)
+                .min(query_seq.len())
+                .min(self.max_query_len);
             for k in 0..len {
                 let base = query_seq[k];
                 let val = if base >= 4 { 4 } else { base };
@@ -268,8 +280,8 @@ impl KswvMemoryPool {
         let per_thread_size = batch_size * max_query_len * std::mem::size_of::<i16>();
         let total_size = per_thread_size * num_threads;
 
-        let layout = Layout::from_size_align(total_size, 64)
-            .expect("Invalid layout for memory pool");
+        let layout =
+            Layout::from_size_align(total_size, 64).expect("Invalid layout for memory pool");
 
         let f_buf = unsafe { alloc(layout) as *mut i16 };
         let h0_buf = unsafe { alloc(layout) as *mut i16 };
@@ -317,11 +329,21 @@ impl KswvMemoryPool {
 impl Drop for KswvMemoryPool {
     fn drop(&mut self) {
         unsafe {
-            if !self.f_buf.is_null() { dealloc(self.f_buf as *mut u8, self.layout); }
-            if !self.h0_buf.is_null() { dealloc(self.h0_buf as *mut u8, self.layout); }
-            if !self.h1_buf.is_null() { dealloc(self.h1_buf as *mut u8, self.layout); }
-            if !self.hmax_buf.is_null() { dealloc(self.hmax_buf as *mut u8, self.layout); }
-            if !self.row_max_buf.is_null() { dealloc(self.row_max_buf as *mut u8, self.layout); }
+            if !self.f_buf.is_null() {
+                dealloc(self.f_buf as *mut u8, self.layout);
+            }
+            if !self.h0_buf.is_null() {
+                dealloc(self.h0_buf as *mut u8, self.layout);
+            }
+            if !self.h1_buf.is_null() {
+                dealloc(self.h1_buf as *mut u8, self.layout);
+            }
+            if !self.hmax_buf.is_null() {
+                dealloc(self.hmax_buf as *mut u8, self.layout);
+            }
+            if !self.row_max_buf.is_null() {
+                dealloc(self.row_max_buf as *mut u8, self.layout);
+            }
         }
     }
 }
@@ -386,7 +408,7 @@ pub fn batch_ksw_align(
                 kswv_avx512::batch_ksw_align_avx512(
                     soa.ref_ptr(),
                     soa.query_ptr(),
-                    pairs[0].ref_len as i16,  // nrow
+                    pairs[0].ref_len as i16,   // nrow
                     pairs[0].query_len as i16, // ncol
                     pairs,
                     results,
@@ -410,7 +432,7 @@ pub fn batch_ksw_align(
                 kswv_avx2::batch_ksw_align_avx2(
                     soa.ref_ptr(),
                     soa.query_ptr(),
-                    pairs[0].ref_len as i16,  // nrow
+                    pairs[0].ref_len as i16,   // nrow
                     pairs[0].query_len as i16, // ncol
                     pairs,
                     results,
@@ -433,7 +455,7 @@ pub fn batch_ksw_align(
                 kswv_sse_neon::batch_ksw_align_sse_neon(
                     soa.ref_ptr(),
                     soa.query_ptr(),
-                    pairs[0].ref_len as i16,  // nrow
+                    pairs[0].ref_len as i16,   // nrow
                     pairs[0].query_len as i16, // ncol
                     pairs,
                     results,
@@ -528,18 +550,26 @@ mod tests {
         let batch_size = soa.batch_size();
 
         let pairs = vec![
-            SeqPair { ref_len: 4, query_len: 4, ..Default::default() },
-            SeqPair { ref_len: 3, query_len: 3, ..Default::default() },
+            SeqPair {
+                ref_len: 4,
+                query_len: 4,
+                ..Default::default()
+            },
+            SeqPair {
+                ref_len: 3,
+                query_len: 3,
+                ..Default::default()
+            },
         ];
 
         let ref_seqs: Vec<&[u8]> = vec![
-            &[0, 1, 2, 3],  // ACGT
-            &[3, 2, 1],     // TGC
+            &[0, 1, 2, 3], // ACGT
+            &[3, 2, 1],    // TGC
         ];
 
         let query_seqs: Vec<&[u8]> = vec![
-            &[0, 0, 1, 1],  // AACC
-            &[2, 2, 3],     // GGT
+            &[0, 0, 1, 1], // AACC
+            &[2, 2, 3],    // GGT
         ];
 
         soa.transpose(&pairs, &ref_seqs, &query_seqs);

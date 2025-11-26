@@ -83,11 +83,7 @@ pub fn fm_to_chromosome_coords(bwa_idx: &BwaIndex, rb: u64, re: u64) -> Chromoso
     // Select input position for bns_depos
     // Forward strand: use alignment start (rb)
     // Reverse strand: use alignment end - 1 (re - 1) to get leftmost SAM position
-    let depos_input = if is_rev {
-        re.saturating_sub(1)
-    } else {
-        rb
-    };
+    let depos_input = if is_rev { re.saturating_sub(1) } else { rb };
 
     // Convert to forward strand position
     let (pos_f, depos_is_rev) = bwa_idx.bns.bns_depos(depos_input as i64);
@@ -102,7 +98,14 @@ pub fn fm_to_chromosome_coords(bwa_idx: &BwaIndex, rb: u64, re: u64) -> Chromoso
 
         log::debug!(
             "COORD_CONVERT: rb={} re={} l_pac={} is_rev={} depos_input={} pos_f={} rid={} chr_pos={}",
-            rb, re, l_pac, is_rev, depos_input, pos_f, rid, chr_pos
+            rb,
+            re,
+            l_pac,
+            is_rev,
+            depos_input,
+            pos_f,
+            rid,
+            chr_pos
         );
 
         ChromosomeCoordinates {
@@ -114,7 +117,10 @@ pub fn fm_to_chromosome_coords(bwa_idx: &BwaIndex, rb: u64, re: u64) -> Chromoso
     } else {
         log::debug!(
             "COORD_CONVERT: rb={} re={} l_pac={} -> unmapped (rid={})",
-            rb, re, l_pac, rid
+            rb,
+            re,
+            l_pac,
+            rid
         );
         ChromosomeCoordinates::default()
     }

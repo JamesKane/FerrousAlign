@@ -1269,9 +1269,15 @@ impl BandedPairWiseSW {
         // Main DP loop using SIMD (16-bit operations)
         unsafe {
             #[cfg(target_arch = "x86_64")]
-            log::trace!("[SIMD] Executing SSE2 intrinsics in DP loop (batch size: {})", SIMD_WIDTH);
+            log::trace!(
+                "[SIMD] Executing SSE2 intrinsics in DP loop (batch size: {})",
+                SIMD_WIDTH
+            );
             #[cfg(target_arch = "aarch64")]
-            log::trace!("[SIMD] Executing NEON intrinsics in DP loop (batch size: {})", SIMD_WIDTH);
+            log::trace!(
+                "[SIMD] Executing NEON intrinsics in DP loop (batch size: {})",
+                SIMD_WIDTH
+            );
 
             let mut max_score_vec = _mm_loadu_si128(max_scores.as_ptr() as *const __m128i);
 
@@ -1817,7 +1823,10 @@ pub fn reverse_cigar(cigar: &[(u8, i32)]) -> Vec<(u8, i32)> {
 /// **Deprecated**: Use `crate::alignment::cigar::normalize()` instead.
 /// This function is kept for internal compatibility only.
 #[inline]
-#[deprecated(since = "0.5.3", note = "Use crate::alignment::cigar::normalize() instead")]
+#[deprecated(
+    since = "0.5.3",
+    note = "Use crate::alignment::cigar::normalize() instead"
+)]
 pub fn merge_cigar_operations(cigar: Vec<(u8, i32)>) -> Vec<(u8, i32)> {
     crate::alignment::cigar::normalize(cigar)
 }

@@ -39,7 +39,7 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::alignment::kswv_batch::{SeqPair, KswResult};
+use crate::alignment::kswv_batch::{KswResult, SeqPair};
 use crate::compute::simd_abstraction::{SimdEngine, SimdEngine256};
 
 /// SIMD width for AVX2: 32 sequences with 8-bit scores
@@ -89,20 +89,20 @@ const KSW_XSTOP: i32 = 0x20000;
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn batch_ksw_align_avx2(
-    seq1_soa: *const u8,      // Reference sequences (SoA layout)
-    seq2_soa: *const u8,      // Query sequences (SoA layout)
-    nrow: i16,                // Reference length
-    ncol: i16,                // Query length
-    pairs: &[SeqPair],        // Sequence pair metadata
+    seq1_soa: *const u8,       // Reference sequences (SoA layout)
+    seq2_soa: *const u8,       // Query sequences (SoA layout)
+    nrow: i16,                 // Reference length
+    ncol: i16,                 // Query length
+    pairs: &[SeqPair],         // Sequence pair metadata
     results: &mut [KswResult], // Output results
-    w_match: i8,              // Match score
-    w_mismatch: i8,           // Mismatch penalty
-    o_del: i32,               // Gap open (deletion)
-    e_del: i32,               // Gap extension (deletion)
-    o_ins: i32,               // Gap open (insertion)
-    e_ins: i32,               // Gap extension (insertion)
-    w_ambig: i8,              // Ambiguous base penalty
-    _phase: i32,              // Processing phase
+    w_match: i8,               // Match score
+    w_mismatch: i8,            // Mismatch penalty
+    o_del: i32,                // Gap open (deletion)
+    e_del: i32,                // Gap extension (deletion)
+    o_ins: i32,                // Gap open (insertion)
+    e_ins: i32,                // Gap extension (insertion)
+    w_ambig: i8,               // Ambiguous base penalty
+    _phase: i32,               // Processing phase
 ) -> usize {
     // ========================================================================
     // SECTION 1: Initialization
@@ -116,12 +116,15 @@ pub unsafe fn batch_ksw_align_avx2(
     let mdiff = w_match.max(w_mismatch).max(w_ambig);
     let shift_val = w_match.min(w_mismatch).min(w_ambig);
     let shift = (256i16 - shift_val as i16) as u8;
+
     let qmax = mdiff;
 
     // Create scoring lookup table for shuffle operation
     let mut temp = [0i8; SIMD_WIDTH8];
     temp[0] = w_match;
-    temp[1] = w_mismatch; temp[2] = w_mismatch; temp[3] = w_mismatch;
+    temp[1] = w_mismatch;
+    temp[2] = w_mismatch;
+    temp[3] = w_mismatch;
     temp[4..8].fill(w_ambig);
     temp[8..12].fill(w_ambig);
     temp[12] = w_ambig;
@@ -142,8 +145,10 @@ pub unsafe fn batch_ksw_align_avx2(
     let five256 = SimdEngine256::set1_epi8(DUMMY5);
 
     // Initialize minsc and endsc arrays from h0 flags
+    // CRITICAL: endsc must default to 255 (max u8) when no early termination requested
+    // Otherwise gmax >= 0 is always true, causing immediate exit after first row!
     let mut minsc = [0u8; SIMD_WIDTH8];
-    let mut endsc = [0u8; SIMD_WIDTH8];
+    let mut endsc = [255u8; SIMD_WIDTH8]; // Default to max (never terminate early)
 
     for i in 0..SIMD_WIDTH8.min(pairs.len()) {
         let xtra = pairs[i].h0;
@@ -159,14 +164,14 @@ pub unsafe fn batch_ksw_align_avx2(
         }
 
         // Check KSW_XSTOP flag for early termination score
-        let val = if (xtra & KSW_XSTOP) != 0 {
-            (xtra & 0xffff) as u32
-        } else {
-            0x10000
-        };
-        if val <= 255 {
-            endsc[i] = val as u8;
+        // Only set if flag is present and value fits in u8
+        if (xtra & KSW_XSTOP) != 0 {
+            let val = (xtra & 0xffff) as u32;
+            if val <= 255 {
+                endsc[i] = val as u8;
+            }
         }
+        // Otherwise keep default of 255 (no early termination)
     }
 
     let minsc256 = SimdEngine256::loadu_si128(minsc.as_ptr() as *const _);
@@ -180,7 +185,9 @@ pub unsafe fn batch_ksw_align_avx2(
 
     // Global maximum and target end position
     let mut gmax256 = zero256;
-    let mut te256 = SimdEngine256::set1_epi16(-1);
+    // For 32 sequences, we need 32 16-bit te values = two 256-bit registers
+    let mut te256_lo = SimdEngine256::set1_epi16(-1); // sequences 0-15
+    let mut te256_hi = SimdEngine256::set1_epi16(-1); // sequences 16-31
 
     // Allocate DP matrices (H, F, rowMax)
     let max_query_len = ncol as usize + 1;
@@ -211,7 +218,7 @@ pub unsafe fn batch_ksw_align_avx2(
     // SECTION 2: Main DP Loop
     // ========================================================================
 
-    let mut exit0_vec = SimdEngine256::set1_epi8(-1);  // All lanes active
+    let mut exit0_vec = SimdEngine256::set1_epi8(-1); // All lanes active
     let mut limit = nrow as i32;
 
     for i in 0..nrow as usize {
@@ -222,23 +229,16 @@ pub unsafe fn batch_ksw_align_avx2(
         let mut i256_vec = SimdEngine256::set1_epi16(i as i16);
         let mut l256 = zero256;
 
-        // Load reference base for this row
-        let s1 = SimdEngine256::load_si128(
-            seq1_soa.add(i * SIMD_WIDTH8) as *const _
-        );
+        // Load reference base for this row (use unaligned load for safety)
+        let s1 = SimdEngine256::loadu_si128(seq1_soa.add(i * SIMD_WIDTH8) as *const _);
 
         // Inner loop over query positions
         for j in 0..ncol as usize {
-            // Load DP values and query base (unaligned for Vec buffers, aligned for SoA)
-            let h00 = SimdEngine256::loadu_si128(
-                h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _
-            );
-            let s2 = SimdEngine256::load_si128(
-                seq2_soa.add(j * SIMD_WIDTH8) as *const _
-            );
-            let f11 = SimdEngine256::loadu_si128(
-                f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _
-            );
+            // Load DP values and query base (unaligned loads for safety)
+            let h00 = SimdEngine256::loadu_si128(h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _);
+            let s2 = SimdEngine256::loadu_si128(seq2_soa.add(j * SIMD_WIDTH8) as *const _);
+            let f11 =
+                SimdEngine256::loadu_si128(f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _);
 
             // ============================================================
             // MAIN_SAM_CODE8_OPT: Core DP computation
@@ -252,16 +252,16 @@ pub unsafe fn batch_ksw_align_avx2(
             let cmpq = SimdEngine256::cmpeq_epi8(s2, five256);
             sbt11 = SimdEngine256::blendv_epi8(sbt11, sft256, cmpq);
 
-            // Mask out invalid positions
+            // Mask out invalid positions (padding)
+            // Padding uses value 0x80 (128), which has high bit set
+            // blendv_epi8 uses the HIGH BIT of each mask byte to select
+            // We want to zero out where high bit of (s1 | s2) is set (padding)
             let or11 = SimdEngine256::or_si128(s1, s2);
-            let cmp_mask = SimdEngine256::cmpeq_epi8(
-                or11,
-                SimdEngine256::set1_epi8(0)
-            );
 
             // Compute match score: H[i-1,j-1] + score
             let mut m11 = SimdEngine256::adds_epu8(h00, sbt11);
-            m11 = SimdEngine256::blendv_epi8(zero256, m11, cmp_mask);
+            // Zero out padding positions (where high bit of or11 is set)
+            m11 = SimdEngine256::blendv_epi8(m11, zero256, or11);
             m11 = SimdEngine256::subs_epu8(m11, sft256);
 
             // Take max of match, gap-extend-E, gap-extend-F
@@ -286,12 +286,9 @@ pub unsafe fn batch_ksw_align_avx2(
             // Store updated DP values (unaligned for Vec buffers)
             SimdEngine256::storeu_si128(
                 h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-                h11
+                h11,
             );
-            SimdEngine256::storeu_si128(
-                f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-                f21
-            );
+            SimdEngine256::storeu_si128(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
 
             // Increment query position counter
             l256 = SimdEngine256::add_epi8(l256, one256);
@@ -306,22 +303,14 @@ pub unsafe fn batch_ksw_align_avx2(
 
             // Apply minsc threshold mask
             let minsc_mask_vec = SimdEngine256::set1_epi8(-1);
-            pimax256_tmp = SimdEngine256::blendv_epi8(
-                pimax256_tmp,
-                zero256,
-                minsc_mask_vec
-            );
+            pimax256_tmp = SimdEngine256::blendv_epi8(pimax256_tmp, zero256, minsc_mask_vec);
 
             // Apply exit mask
-            pimax256_tmp = SimdEngine256::blendv_epi8(
-                pimax256_tmp,
-                zero256,
-                exit0_vec
-            );
+            pimax256_tmp = SimdEngine256::blendv_epi8(pimax256_tmp, zero256, exit0_vec);
 
             SimdEngine256::storeu_si128(
                 row_max_buf[(i - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-                pimax256_tmp
+                pimax256_tmp,
             );
 
             mask256 = SimdEngine256::andnot_si128(msk, SimdEngine256::set1_epi8(-1));
@@ -338,8 +327,40 @@ pub unsafe fn batch_ksw_align_avx2(
         cmp0_vec = SimdEngine256::and_si128(cmp0_vec, exit0_vec);
 
         gmax256 = SimdEngine256::blendv_epi8(gmax256, imax256, cmp0_vec);
-        te256 = SimdEngine256::blendv_epi8(te256, i256_vec, cmp0_vec);
         qe256 = SimdEngine256::blendv_epi8(qe256, iqe256, cmp0_vec);
+
+        // Expand 8-bit comparison mask to two 16-bit masks for te tracking
+        // cmp0_vec has 32 8-bit comparisons (one per sequence)
+        //
+        // CRITICAL: AVX2 unpack operations work within 128-bit lanes, not across
+        // the full 256-bit register. We must extract each 128-bit lane separately
+        // and expand to 256-bit with proper SSE operations.
+        //
+        // Layout of cmp0_vec (256-bit):
+        //   Low lane (bits 0-127):   bytes 0-15  (sequences 0-15)
+        //   High lane (bits 128-255): bytes 16-31 (sequences 16-31)
+        //
+        // We need:
+        //   mask_lo_16: 16 16-bit masks for sequences 0-15
+        //   mask_hi_16: 16 16-bit masks for sequences 16-31
+
+        // Extract each 128-bit lane
+        let cmp_lo_128 = std::arch::x86_64::_mm256_extracti128_si256(cmp0_vec, 0);
+        let cmp_hi_128 = std::arch::x86_64::_mm256_extracti128_si256(cmp0_vec, 1);
+
+        // Expand low lane (seqs 0-15) to 256-bit: [c0,c0, c1,c1, ..., c15,c15]
+        let lo_unpacked_lo = std::arch::x86_64::_mm_unpacklo_epi8(cmp_lo_128, cmp_lo_128); // bytes 0-7 → 16-bit
+        let lo_unpacked_hi = std::arch::x86_64::_mm_unpackhi_epi8(cmp_lo_128, cmp_lo_128); // bytes 8-15 → 16-bit
+        let mask_lo_16 = std::arch::x86_64::_mm256_set_m128i(lo_unpacked_hi, lo_unpacked_lo);
+
+        // Expand high lane (seqs 16-31) to 256-bit: [c16,c16, c17,c17, ..., c31,c31]
+        let hi_unpacked_lo = std::arch::x86_64::_mm_unpacklo_epi8(cmp_hi_128, cmp_hi_128); // bytes 16-23 → 16-bit
+        let hi_unpacked_hi = std::arch::x86_64::_mm_unpackhi_epi8(cmp_hi_128, cmp_hi_128); // bytes 24-31 → 16-bit
+        let mask_hi_16 = std::arch::x86_64::_mm256_set_m128i(hi_unpacked_hi, hi_unpacked_lo);
+
+        // Update both te registers with proper 16-bit blending
+        te256_lo = SimdEngine256::blendv_epi8(te256_lo, i256_vec, mask_lo_16);
+        te256_hi = SimdEngine256::blendv_epi8(te256_hi, i256_vec, mask_hi_16);
 
         // Check for early termination
         cmp0_vec = SimdEngine256::cmpge_epu8(gmax256, endsc256);
@@ -371,7 +392,7 @@ pub unsafe fn batch_ksw_align_avx2(
     let pimax256_final = SimdEngine256::blendv_epi8(pimax256, zero256, msk);
     SimdEngine256::storeu_si128(
         row_max_buf[((limit - 1) as usize) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
-        pimax256_final
+        pimax256_final,
     );
 
     // ========================================================================
@@ -381,17 +402,20 @@ pub unsafe fn batch_ksw_align_avx2(
     #[repr(align(32))]
     struct AlignedScoreArray([u8; SIMD_WIDTH8]);
     #[repr(align(32))]
-    struct AlignedTeArray([i16; SIMD_WIDTH16]);
+    struct AlignedTeArray([i16; SIMD_WIDTH16]); // 16 values per register, need 2 for 32 sequences
     #[repr(align(32))]
     struct AlignedQeArray([u8; SIMD_WIDTH8]);
 
     let mut score_arr = AlignedScoreArray([0; SIMD_WIDTH8]);
-    let mut te_arr = AlignedTeArray([0; SIMD_WIDTH16]);
+    let mut te_arr_lo = AlignedTeArray([0; SIMD_WIDTH16]);
+    let mut te_arr_hi = AlignedTeArray([0; SIMD_WIDTH16]);
     let mut qe_arr = AlignedQeArray([0; SIMD_WIDTH8]);
 
     // Store SIMD vectors to aligned arrays
     SimdEngine256::storeu_si128(score_arr.0.as_mut_ptr() as *mut _, gmax256);
-    SimdEngine256::storeu_si128_16(te_arr.0.as_mut_ptr() as *mut _, te256);
+    // Store both te registers (16 values each, 32 total for 32 sequences)
+    SimdEngine256::storeu_si128_16(te_arr_lo.0.as_mut_ptr() as *mut _, te256_lo);
+    SimdEngine256::storeu_si128_16(te_arr_hi.0.as_mut_ptr() as *mut _, te256_hi);
     SimdEngine256::storeu_si128(qe_arr.0.as_mut_ptr() as *mut _, qe256);
 
     // Extract scores for each sequence in the batch
@@ -406,10 +430,16 @@ pub unsafe fn batch_ksw_align_avx2(
             255
         };
 
-        // Map te from 16-bit array (only 16 lanes) to 32 8-bit lanes
-        let te_idx = l / 2;  // 2 sequences per 16-bit lane
+        // Read te from correct register based on sequence index
+        // Sequences 0-15 use te_arr_lo, sequences 16-31 use te_arr_hi
+        let te_val = if l < 16 {
+            te_arr_lo.0[l]
+        } else {
+            te_arr_hi.0[l - 16]
+        };
+
         results[l].score = final_score as i32;
-        results[l].te = te_arr.0[te_idx] as i32;
+        results[l].te = te_val as i32;
         results[l].qe = qe_arr.0[l] as i32;
 
         if final_score != 255 {
@@ -425,32 +455,43 @@ pub unsafe fn batch_ksw_align_avx2(
     // SECTION 4: Second-Best Score Computation
     // ========================================================================
 
+    // For second-best computation, we use 16 16-bit values per register
     #[repr(align(32))]
-    struct AlignedI16Array([i16; SIMD_WIDTH16]);
+    struct AlignedI16Array16([i16; SIMD_WIDTH16]); // 16 values
 
-    let mut low_arr = AlignedI16Array([0; SIMD_WIDTH16]);
-    let mut high_arr = AlignedI16Array([0; SIMD_WIDTH16]);
-    let mut rlen_arr = AlignedI16Array([0; SIMD_WIDTH16]);
+    let mut low_arr = AlignedI16Array16([0; SIMD_WIDTH16]);
+    let mut high_arr = AlignedI16Array16([0; SIMD_WIDTH16]);
+    let mut rlen_arr = AlignedI16Array16([0; SIMD_WIDTH16]);
 
     let mut maxl: i32 = 0;
     let mut minh: i32 = nrow as i32;
 
-    for i in 0..SIMD_WIDTH16.min(pairs.len()) {
-        let val = (score_arr.0[i * 2] as i32 + qmax as i32 - 1) / qmax as i32;
+    // Second-best computation samples every other sequence (16 of 32)
+    // This is an approximation that matches BWA-MEM2's approach
+    for i in 0..SIMD_WIDTH16.min((pairs.len() + 1) / 2) {
+        let seq_idx = i * 2; // Map to actual sequence index
+        let val = (score_arr.0[seq_idx] as i32 + qmax as i32 - 1) / qmax as i32;
 
-        low_arr.0[i] = (te_arr.0[i] - val as i16).max(0);
-        high_arr.0[i] = (te_arr.0[i] + val as i16).min(nrow as i16 - 1);
-        rlen_arr.0[i] = pairs[i * 2].ref_len as i16;
+        // Get te from correct array based on sequence index
+        let te_val = if seq_idx < 16 {
+            te_arr_lo.0[seq_idx]
+        } else {
+            te_arr_hi.0[seq_idx - 16]
+        };
 
-        if qe_arr.0[i * 2] != 0 {
+        low_arr.0[i] = (te_val - val as i16).max(0);
+        high_arr.0[i] = (te_val + val as i16).min(nrow as i16 - 1);
+        rlen_arr.0[i] = pairs[seq_idx].ref_len as i16;
+
+        if qe_arr.0[seq_idx] != 0 {
             maxl = maxl.max(low_arr.0[i] as i32);
             minh = minh.min(high_arr.0[i] as i32);
         }
     }
 
-    // Initialize second-best tracking
+    // Initialize second-best tracking (16 values for subsampled sequences)
     let mut max256 = zero256;
-    let mut te256 = SimdEngine256::set1_epi16(-1);
+    let mut te2_256 = SimdEngine256::set1_epi16(-1);
 
     let low256 = SimdEngine256::loadu_si128_16(low_arr.0.as_ptr() as *const _);
     let high256 = SimdEngine256::loadu_si128_16(high_arr.0.as_ptr() as *const _);
@@ -468,7 +509,7 @@ pub unsafe fn batch_ksw_align_avx2(
         let combined_mask = SimdEngine256::and_si128(mask1, mask2_8bit);
 
         max256 = SimdEngine256::blendv_epi8(max256, rmax256, combined_mask);
-        te256 = SimdEngine256::blendv_epi8(te256, i256, combined_mask);
+        te2_256 = SimdEngine256::blendv_epi8(te2_256, i256, combined_mask);
     }
 
     // Backward scan (unaligned for Vec buffers)
@@ -488,25 +529,26 @@ pub unsafe fn batch_ksw_align_avx2(
         let combined_mask = SimdEngine256::and_si128(mask1, mask2_8bit);
 
         max256 = SimdEngine256::blendv_epi8(max256, rmax256, combined_mask);
-        te256 = SimdEngine256::blendv_epi8(te256, i256, combined_mask);
+        te2_256 = SimdEngine256::blendv_epi8(te2_256, i256, combined_mask);
     }
 
     // Extract second-best scores
     let mut score2_arr = AlignedScoreArray([0; SIMD_WIDTH8]);
-    let mut te2_arr = AlignedTeArray([0; SIMD_WIDTH16]);
+    let mut te2_arr = AlignedI16Array16([0; SIMD_WIDTH16]);
 
     SimdEngine256::storeu_si128(score2_arr.0.as_mut_ptr() as *mut _, max256);
-    SimdEngine256::storeu_si128_16(te2_arr.0.as_mut_ptr() as *mut _, te256);
+    SimdEngine256::storeu_si128_16(te2_arr.0.as_mut_ptr() as *mut _, te2_256);
 
     for i in 0..pairs.len().min(SIMD_WIDTH8) {
-        let te_idx = i / 2;
+        // Second-best values computed for every other sequence, map back
+        let te2_idx = i / 2;
         if qe_arr.0[i] != 0 {
             results[i].score2 = if score2_arr.0[i] == 0 {
                 -1
             } else {
                 score2_arr.0[i] as i32
             };
-            results[i].te2 = te2_arr.0[te_idx] as i32;
+            results[i].te2 = te2_arr.0[te2_idx] as i32;
         } else {
             results[i].score2 = -1;
             results[i].te2 = -1;
@@ -517,7 +559,7 @@ pub unsafe fn batch_ksw_align_avx2(
         // - For mate rescue, alignments typically start at query position 0
         // - tb is estimated as te - (qe - qb) for same-length alignment
         if results[i].score > 0 && results[i].te >= 0 && results[i].qe >= 0 {
-            results[i].qb = 0;  // Alignment starts at query position 0
+            results[i].qb = 0; // Alignment starts at query position 0
             results[i].tb = (results[i].te - results[i].qe).max(0);
         } else {
             results[i].tb = -1;
@@ -545,11 +587,14 @@ mod tests {
         let seq1 = vec![0u8; 256 * SIMD_WIDTH8];
         let seq2 = vec![0u8; 128 * SIMD_WIDTH8];
 
-        let pairs = vec![SeqPair {
-            ref_len: 10,
-            query_len: 10,
-            ..Default::default()
-        }; SIMD_WIDTH8];
+        let pairs = vec![
+            SeqPair {
+                ref_len: 10,
+                query_len: 10,
+                ..Default::default()
+            };
+            SIMD_WIDTH8
+        ];
 
         let mut results = vec![KswResult::default(); SIMD_WIDTH8];
 

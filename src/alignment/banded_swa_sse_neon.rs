@@ -7,8 +7,8 @@
 // Works on both x86_64 (SSE2+) and aarch64 (NEON)
 
 use crate::alignment::banded_swa::OutScore;
-use crate::compute::simd_abstraction::SimdEngine128 as Engine;
 use crate::compute::simd_abstraction::SimdEngine;
+use crate::compute::simd_abstraction::SimdEngine128 as Engine;
 
 /// SSE/NEON-optimized banded Smith-Waterman for batches of up to 16 alignments
 ///
@@ -266,7 +266,8 @@ pub unsafe fn simd_banded_swa_batch16(
         for j in 0..max_qlen as usize {
             // Create mask for positions within band (per-lane)
             let j_vec = Engine::set1_epi8(j as i8);
-            let in_band_left = Engine::cmpgt_epi8(j_vec, Engine::subs_epi8(current_beg_vec, one_vec));
+            let in_band_left =
+                Engine::cmpgt_epi8(j_vec, Engine::subs_epi8(current_beg_vec, one_vec));
             let in_band_right = Engine::cmpgt_epi8(current_end_vec, j_vec);
             let in_band_mask = Engine::and_si128(in_band_left, in_band_right);
 
@@ -319,8 +320,14 @@ pub unsafe fn simd_banded_swa_batch16(
 
             // Store updated scores
             Engine::storeu_si128(h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut _, h_vec);
-            Engine::storeu_si128(e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut _, e_vec_masked);
-            Engine::storeu_si128(f_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut _, f_vec_masked);
+            Engine::storeu_si128(
+                e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut _,
+                e_vec_masked,
+            );
+            Engine::storeu_si128(
+                f_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut _,
+                f_vec_masked,
+            );
 
             // Track maximum score per lane with positions
             let is_greater = Engine::cmpgt_epi8(h_vec, max_score_vec);
@@ -426,8 +433,9 @@ mod tests {
     #[test]
     fn test_simd_banded_swa_batch16_basic() {
         // Basic test to ensure the function compiles and runs
-        let query = b"ACGT";
-        let target = b"ACGT";
+        // Kernel expects 2-bit encoded bases: A=0, C=1, G=2, T=3
+        let query: [u8; 4] = [0, 1, 2, 3]; // ACGT in 2-bit encoding
+        let target: [u8; 4] = [0, 1, 2, 3]; // ACGT in 2-bit encoding
         let batch = vec![(4, &query[..], 4, &target[..], 10, 0)];
 
         // Default scoring matrix (match=1, mismatch=0)
@@ -438,29 +446,32 @@ mod tests {
 
         let results = unsafe {
             simd_banded_swa_batch16(
-                &batch,
-                6,   // o_del
+                &batch, 6,   // o_del
                 1,   // e_del
                 6,   // o_ins
                 1,   // e_ins
                 100, // zdrop
-                &mat,
-                5,
+                &mat, 5,
             )
         };
 
         assert_eq!(results.len(), 1);
         // Perfect match should have score >= 4
-        assert!(results[0].score >= 4, "Expected score >= 4 for perfect match, got {}", results[0].score);
+        assert!(
+            results[0].score >= 4,
+            "Expected score >= 4 for perfect match, got {}",
+            results[0].score
+        );
     }
 
     #[test]
     fn test_simd_banded_swa_batch16_multiple() {
         // Test with multiple alignments in batch
-        let q1 = b"ACGT";
-        let t1 = b"ACGT";
-        let q2 = b"AAAA";
-        let t2 = b"TTTT";
+        // Kernel expects 2-bit encoded bases: A=0, C=1, G=2, T=3
+        let q1: [u8; 4] = [0, 1, 2, 3]; // ACGT in 2-bit encoding
+        let t1: [u8; 4] = [0, 1, 2, 3]; // ACGT in 2-bit encoding
+        let q2: [u8; 4] = [0, 0, 0, 0]; // AAAA in 2-bit encoding
+        let t2: [u8; 4] = [3, 3, 3, 3]; // TTTT in 2-bit encoding
 
         let batch = vec![
             (4, &q1[..], 4, &t1[..], 10, 0),
@@ -472,17 +483,15 @@ mod tests {
             mat[i * 5 + i] = 1; // Match
         }
 
-        let results = unsafe {
-            simd_banded_swa_batch16(
-                &batch,
-                6, 1, 6, 1, 100, &mat, 5,
-            )
-        };
+        let results = unsafe { simd_banded_swa_batch16(&batch, 6, 1, 6, 1, 100, &mat, 5) };
 
         assert_eq!(results.len(), 2);
         // First alignment (perfect match) should score higher
-        assert!(results[0].score >= results[1].score,
+        assert!(
+            results[0].score >= results[1].score,
             "Perfect match should score >= mismatch: {} vs {}",
-            results[0].score, results[1].score);
+            results[0].score,
+            results[1].score
+        );
     }
 }
