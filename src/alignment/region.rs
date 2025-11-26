@@ -508,16 +508,17 @@ pub fn extend_chains_to_regions(
     let effective_backend = compute_backend.effective_backend();
 
     let (left_scores, right_scores): (Vec<OutScore>, Vec<OutScore>) = match effective_backend {
-        ComputeBackend::CpuSimd(_) => {
+        ComputeBackend::CpuSimd(engine) => {
             // Execute SIMD batch scoring (score-only, no CIGAR)
+            // Uses engine-specific batch sizes: 8 (SSE/NEON), 16 (AVX2), 32 (AVX-512)
             let left = if !left_jobs.is_empty() {
-                execute_simd_scoring(&sw_params, &left_jobs, opt.w)
+                execute_simd_scoring(&sw_params, &left_jobs, opt.w, engine)
             } else {
                 Vec::new()
             };
 
             let right = if !right_jobs.is_empty() {
-                execute_simd_scoring(&sw_params, &right_jobs, opt.w)
+                execute_simd_scoring(&sw_params, &right_jobs, opt.w, engine)
             } else {
                 Vec::new()
             };
@@ -546,13 +547,14 @@ pub fn extend_chains_to_regions(
         // ====================================================================
         ComputeBackend::Gpu => {
             log::debug!("GPU backend requested but not implemented, falling back to CPU SIMD");
+            let engine = crate::compute::simd_abstraction::simd::detect_optimal_simd_engine();
             let left = if !left_jobs.is_empty() {
-                execute_simd_scoring(&sw_params, &left_jobs, opt.w)
+                execute_simd_scoring(&sw_params, &left_jobs, opt.w, engine)
             } else {
                 Vec::new()
             };
             let right = if !right_jobs.is_empty() {
-                execute_simd_scoring(&sw_params, &right_jobs, opt.w)
+                execute_simd_scoring(&sw_params, &right_jobs, opt.w, engine)
             } else {
                 Vec::new()
             };
@@ -570,13 +572,14 @@ pub fn extend_chains_to_regions(
         // ====================================================================
         ComputeBackend::Npu => {
             log::debug!("NPU backend requested but not implemented, falling back to CPU SIMD");
+            let engine = crate::compute::simd_abstraction::simd::detect_optimal_simd_engine();
             let left = if !left_jobs.is_empty() {
-                execute_simd_scoring(&sw_params, &left_jobs, opt.w)
+                execute_simd_scoring(&sw_params, &left_jobs, opt.w, engine)
             } else {
                 Vec::new()
             };
             let right = if !right_jobs.is_empty() {
-                execute_simd_scoring(&sw_params, &right_jobs, opt.w)
+                execute_simd_scoring(&sw_params, &right_jobs, opt.w, engine)
             } else {
                 Vec::new()
             };
@@ -619,17 +622,21 @@ pub fn extend_chains_to_regions(
 
 /// Execute SIMD batch scoring (score-only, no CIGAR)
 ///
-/// Uses existing SIMD infrastructure to compute OutScores.
+/// Uses engine-specific batch sizes for optimal performance:
+/// - SSE/NEON (128-bit): 8 alignments per batch (16-bit precision)
+/// - AVX2 (256-bit): 16 alignments per batch (16-bit precision)
+/// - AVX-512 (512-bit): 32 alignments per batch (16-bit precision)
 fn execute_simd_scoring(
     sw_params: &BandedPairWiseSW,
     jobs: &[ExtensionJob],
     band_width: i32,
+    engine: crate::compute::simd_abstraction::simd::SimdEngineType,
 ) -> Vec<OutScore> {
     if jobs.is_empty() {
         return Vec::new();
     }
 
-    // Convert ExtensionJob to the tuple format expected by simd_banded_swa_batch8_int16
+    // Convert ExtensionJob to the tuple format expected by batch functions
     // Format: (qlen, &query, tlen, &target, w, h0)
     let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = jobs
         .iter()
@@ -645,9 +652,82 @@ fn execute_simd_scoring(
         })
         .collect();
 
-    // Use 16-bit SIMD for better score range (handles scores > 127)
-    // This matches BWA-MEM2's getScores16 usage for typical read lengths
-    sw_params.simd_banded_swa_batch8_int16(&batch)
+    // Dispatch to engine-specific batch function with vectorized scoring
+    // Session 51: Implemented BWA-MEM2 compare-and-blend approach for vectorized scoring
+    // This eliminates the scalar matrix lookup bottleneck that made larger batches slower.
+    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+    {
+        use crate::compute::simd_abstraction::simd::SimdEngineType;
+        match engine {
+            SimdEngineType::Engine512 => {
+                // AVX-512: 32-wide batch with vectorized scoring
+                unsafe {
+                    crate::alignment::banded_swa_avx512::simd_banded_swa_batch32_int16(
+                        &batch,
+                        sw_params.o_del(),
+                        sw_params.e_del(),
+                        sw_params.o_ins(),
+                        sw_params.e_ins(),
+                        sw_params.zdrop(),
+                        sw_params.scoring_matrix(),
+                        5,
+                    )
+                }
+            }
+            SimdEngineType::Engine256 => {
+                // AVX2: 16-wide batch with vectorized scoring
+                unsafe {
+                    crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
+                        &batch,
+                        sw_params.o_del(),
+                        sw_params.e_del(),
+                        sw_params.o_ins(),
+                        sw_params.e_ins(),
+                        sw_params.zdrop(),
+                        sw_params.scoring_matrix(),
+                        5,
+                    )
+                }
+            }
+            SimdEngineType::Engine128 => {
+                // SSE/NEON: Use 8-wide batch function
+                sw_params.simd_banded_swa_batch8_int16(&batch)
+            }
+        }
+    }
+
+    #[cfg(all(target_arch = "x86_64", not(feature = "avx512")))]
+    {
+        use crate::compute::simd_abstraction::simd::SimdEngineType;
+        match engine {
+            SimdEngineType::Engine256 => {
+                // AVX2: 16-wide batch with vectorized scoring
+                unsafe {
+                    crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
+                        &batch,
+                        sw_params.o_del(),
+                        sw_params.e_del(),
+                        sw_params.o_ins(),
+                        sw_params.e_ins(),
+                        sw_params.zdrop(),
+                        sw_params.scoring_matrix(),
+                        5,
+                    )
+                }
+            }
+            SimdEngineType::Engine128 => {
+                // SSE/NEON: Use 8-wide batch function
+                sw_params.simd_banded_swa_batch8_int16(&batch)
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // Non-x86: Use 8-wide batch function
+        let _ = engine;
+        sw_params.simd_banded_swa_batch8_int16(&batch)
+    }
 }
 
 /// Merge left/right extension scores into AlignmentRegions

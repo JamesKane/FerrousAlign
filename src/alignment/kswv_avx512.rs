@@ -605,8 +605,9 @@ mod tests {
                 gap_ext,
                 gap_open,
                 gap_ext,
-                -1, // w_ambig
-                0,  // phase
+                -1,    // w_ambig
+                0,     // phase
+                false, // debug
             );
 
             kswv_avx2::batch_ksw_align_avx2(
@@ -622,8 +623,9 @@ mod tests {
                 gap_ext,
                 gap_open,
                 gap_ext,
-                -1, // w_ambig
-                0,  // phase
+                -1,    // w_ambig
+                0,     // phase
+                false, // debug
             );
         }
 
@@ -716,6 +718,7 @@ mod tests {
                 gap_ext,
                 -1,
                 0,
+                false,
             );
 
             kswv_avx2::batch_ksw_align_avx2(
@@ -733,6 +736,7 @@ mod tests {
                 gap_ext,
                 -1,
                 0,
+                false,
             );
         }
 
@@ -819,6 +823,7 @@ mod tests {
                 gap_ext,
                 -1,
                 0,
+                false,
             );
         }
 
@@ -990,6 +995,7 @@ mod tests {
                 gap_ext,
                 -1,
                 0,
+                false,
             );
 
             kswv_avx2::batch_ksw_align_avx2(
@@ -1007,6 +1013,7 @@ mod tests {
                 gap_ext,
                 -1,
                 0,
+                false,
             );
         }
 
