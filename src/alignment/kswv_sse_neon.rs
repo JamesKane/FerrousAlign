@@ -102,6 +102,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
     e_ins: i32,                // Gap extension (insertion)
     w_ambig: i8,               // Ambiguous base penalty
     _phase: i32,               // Processing phase
+    debug: bool,
 ) -> usize {
     log::debug!(
         "[SIMD] Horizontal kernel (SSE/NEON): processing {} alignments",
@@ -145,7 +146,8 @@ pub unsafe fn batch_ksw_align_sse_neon(
     let perm_sft256 = SimdEngine128::loadu_si128(temp.as_ptr() as *const _);
     let sft256 = SimdEngine128::set1_epi8(shift as i8);
     let cmax256 = SimdEngine128::set1_epi8(255u8 as i8);
-    let five256 = SimdEngine128::set1_epi8(DUMMY5);
+    // N bases are encoded as 4 in the SoA buffer (see kswv_batch.rs transpose())
+    let ambig256 = SimdEngine128::set1_epi8(AMBIG);
 
     // Initialize minsc and endsc arrays from h0 flags
     // CRITICAL: endsc must default to 255 (max u8) when no early termination requested
@@ -252,8 +254,9 @@ pub unsafe fn batch_ksw_align_sse_neon(
             let xor11 = SimdEngine128::xor_si128(s1, s2);
             let mut sbt11 = SimdEngine128::shuffle_epi8(perm_sft256, xor11);
 
-            // Handle ambiguous bases (base == 5)
-            let cmpq = SimdEngine128::cmpeq_epi8(s2, five256);
+            // Handle ambiguous bases (N = 4 in SoA encoding)
+            // When query base is N, use neutral score (just shift, so effective score = 0)
+            let cmpq = SimdEngine128::cmpeq_epi8(s2, ambig256);
             sbt11 = SimdEngine128::blendv_epi8(sbt11, sft256, cmpq);
 
             // Mask out invalid positions (padding)
@@ -402,6 +405,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
 
     // Extract scores for each sequence in the batch
     let mut live = 0;
+
     for l in 0..SIMD_WIDTH8.min(pairs.len()) {
         let score = score_arr.0[l];
 

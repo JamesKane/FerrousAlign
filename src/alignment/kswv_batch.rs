@@ -396,6 +396,7 @@ pub fn batch_ksw_align(
     mismatch_penalty: i8,
     gap_open: i32,
     gap_extend: i32,
+    debug: bool,
 ) -> usize {
     // Dispatch to appropriate SIMD kernel based on engine type
     match engine {
@@ -418,8 +419,9 @@ pub fn batch_ksw_align(
                     gap_extend,
                     gap_open,   // o_ins (same as o_del for now)
                     gap_extend, // e_ins (same as e_del for now)
-                    -1,         // w_ambig
+                    0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
                     0,          // phase
+                    false,      // debug
                 )
             }
         }
@@ -442,8 +444,9 @@ pub fn batch_ksw_align(
                     gap_extend,
                     gap_open,   // o_ins
                     gap_extend, // e_ins
-                    -1,         // w_ambig
+                    0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
                     0,          // phase
+                    false,      // debug
                 )
             }
         }
@@ -465,8 +468,9 @@ pub fn batch_ksw_align(
                     gap_extend,
                     gap_open,   // o_ins
                     gap_extend, // e_ins
-                    -1,         // w_ambig
+                    0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
                     0,          // phase
+                    false,      // debug
                 )
             }
         }

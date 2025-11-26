@@ -864,6 +864,16 @@ fn execute_mate_rescue_batch_simd(
                     jobs[i].ref_seq.len(),
                     jobs[i].query_seq.len()
                 );
+                // For score-only mismatches (same positions), dump sequence info
+                if te_match && qe_match && !score_match {
+                    let score_diff = scalar.aln.score - simd.aln.score;
+                    log::debug!(
+                        "  SCORE-ONLY MISMATCH: diff={}, ref[0..16]={:?}, query[0..16]={:?}",
+                        score_diff,
+                        &jobs[i].ref_seq[..16.min(jobs[i].ref_seq.len())],
+                        &jobs[i].query_seq[..16.min(jobs[i].query_seq.len())]
+                    );
+                }
             }
         }
     }
