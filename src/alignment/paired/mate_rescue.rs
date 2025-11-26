@@ -538,10 +538,24 @@ pub fn execute_mate_rescue_batch(jobs: &mut [MateRescueJob]) -> Vec<MateRescueRe
 /// # Scalar/Rayon Fallback (engine = None)
 /// - Uses per-alignment ksw_align2 with rayon parallel iteration
 /// - Good for small batches or when SIMD overhead isn't worthwhile
+///
+/// # Environment Variables
+/// - `FERROUS_ALIGN_FORCE_SCALAR=1`: Force scalar path for debugging/validation
 pub fn execute_mate_rescue_batch_with_engine(
     jobs: &mut [MateRescueJob],
     engine: Option<SimdEngineType>,
 ) -> Vec<MateRescueResult> {
+    // Check for scalar fallback override via environment variable
+    // This is useful for validating SIMD results against scalar baseline
+    let force_scalar = std::env::var("FERROUS_ALIGN_FORCE_SCALAR")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+
+    if force_scalar {
+        log::info!("FERROUS_ALIGN_FORCE_SCALAR=1: Using scalar path for mate rescue ({} jobs)", jobs.len());
+        return execute_mate_rescue_batch_scalar(jobs);
+    }
+
     // Use horizontal SIMD batching if engine is specified and we have enough jobs
     // SIMD kernels use two registers for te tracking (te_lo/te_hi) to handle
     // 16-bit te values for all sequences (16 for SSE/NEON, 32 for AVX2).

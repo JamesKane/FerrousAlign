@@ -62,9 +62,31 @@ Added comprehensive NEON intrinsics tests in `tests/intrinsics.rs`:
 
 All 18 intrinsics tests pass on aarch64.
 
+## Scalar Fallback Flag (Added)
+
+The `FERROUS_ALIGN_FORCE_SCALAR` environment variable forces scalar mode for mate rescue:
+
+```bash
+# Run with scalar fallback (for debugging/comparison)
+FERROUS_ALIGN_FORCE_SCALAR=1 ./target/release/ferrous-align mem -t 1 \
+  /Library/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  test_data/neon_validation/1k_R1.fq \
+  test_data/neon_validation/1k_R2.fq \
+  > scalar_output.sam 2>&1
+```
+
+### Comparison Results (1K pairs)
+
+| Mode | Properly Paired | Total Mapped | Singletons |
+|------|-----------------|--------------|------------|
+| SIMD | 96.20% (1924/2000) | 98.60% | 1.20% |
+| Scalar | **96.30%** (1926/2000) | 98.70% | 1.10% |
+
+The small gap (2 pairs, 0.10%) confirms remaining SIMD scoring issues.
+
 ## Next Steps
 
-1. **Add scalar fallback flag** for horizontal SIMD to establish baseline
+1. ~~Add scalar fallback flag for horizontal SIMD to establish baseline~~ ✅ Done
 2. **Debug score accumulation** - trace through DP loop to find where scores diverge
 3. **Validate vertical SIMD** (banded_swa.rs) on NEON
 
@@ -169,7 +191,7 @@ cargo test --test intrinsics -- --nocapture
 
 1. `src/compute/simd_abstraction/portable_intrinsics.rs` - Fixed `_mm_blendv_epi8`
 2. `tests/intrinsics.rs` - Added comprehensive NEON intrinsics tests
-3. `src/alignment/paired/mate_rescue.rs` - Fixed missing `debug` parameter
+3. `src/alignment/paired/mate_rescue.rs` - Fixed missing `debug` parameter, added scalar fallback flag
 
 ## Notes
 
