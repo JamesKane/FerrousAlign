@@ -20,6 +20,7 @@ use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
     write_sam_record,
 };
+use crate::utils::cputime;
 use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;
@@ -77,6 +78,7 @@ pub fn process_single_end(
 
     // Track overall statistics
     let start_time = Instant::now();
+    let start_cpu = cputime();
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
     let mut reads_processed = 0u64; // Global read counter for deterministic hash tie-breaking
@@ -126,8 +128,16 @@ pub fn process_single_end(
             total_reads += batch_size;
             total_bases += batch_bp;
 
-            log::info!("Read {} sequences ({} bp)", batch_size, batch_bp);
-            log::debug!("Processing batch of {} reads in parallel", batch_size);
+            log::info!(
+                "read_chunk: {}, work_chunk_size: {}, nseq: {}",
+                reads_per_batch,
+                batch_bp,
+                batch_size
+            );
+
+            // Track per-batch timing
+            let batch_start_cpu = cputime();
+            let batch_start_wall = Instant::now();
 
             // Stage 1: Process batch in parallel (matching C++ kt_pipeline step 1)
             let bwa_idx_clone = Arc::clone(&bwa_idx);
@@ -213,18 +223,30 @@ pub fn process_single_end(
                 }
             }
 
+            // Log per-batch timing (matches BWA-MEM2 format)
+            let batch_cpu_elapsed = cputime() - batch_start_cpu;
+            let batch_wall_elapsed = batch_start_wall.elapsed();
+            log::info!(
+                "Processed {} reads in {:.3} CPU sec, {:.3} real sec",
+                batch_size,
+                batch_cpu_elapsed,
+                batch_wall_elapsed.as_secs_f64()
+            );
+
             if batch_size < reads_per_batch {
                 break; // Last incomplete batch
             }
         }
     }
 
-    // Print summary statistics
+    // Print summary statistics with total CPU + wall time
+    let total_cpu = cputime() - start_cpu;
     let elapsed = start_time.elapsed();
     log::info!(
-        "Processed {} reads ({} bp) in {:.2} sec",
+        "Processed {} reads ({} bp) in {:.3} CPU sec, {:.3} real sec",
         total_reads,
         total_bases,
+        total_cpu,
         elapsed.as_secs_f64()
     );
 }

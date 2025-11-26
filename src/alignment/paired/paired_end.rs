@@ -30,6 +30,7 @@ use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
 };
+use crate::utils::cputime;
 use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;
@@ -91,6 +92,7 @@ pub fn process_paired_end(
 
     // Track overall statistics
     let start_time = Instant::now();
+    let start_cpu = cputime();
     let mut total_reads = 0usize;
     let mut total_bases = 0usize;
     let mut pairs_processed = 0u64; // Global pair counter for deterministic hash tie-breaking
@@ -159,10 +161,15 @@ pub fn process_paired_end(
         first_batch_size
     );
     log::info!(
-        "Read {} sequences ({} bp) [first batch]",
-        first_batch_size * 2,
-        first_batch_bp
+        "read_chunk: {}, work_chunk_size: {}, nseq: {}",
+        BOOTSTRAP_BATCH_SIZE,
+        first_batch_bp,
+        first_batch_size * 2
     );
+
+    // Track per-batch timing
+    let batch_start_cpu = cputime();
+    let batch_start_wall = Instant::now();
 
     // Process first batch in parallel
     let num_pairs = first_batch1.names.len();
@@ -308,7 +315,15 @@ pub fn process_paired_end(
         log::error!("Error writing first batch: {}", e);
         0
     });
-    log::info!("First batch: {} records written", first_batch_records);
+    // Log per-batch timing (matches BWA-MEM2 format)
+    let batch_cpu_elapsed = cputime() - batch_start_cpu;
+    let batch_wall_elapsed = batch_start_wall.elapsed();
+    log::info!(
+        "Processed {} reads in {:.3} CPU sec, {:.3} real sec",
+        first_batch_size * 2,
+        batch_cpu_elapsed,
+        batch_wall_elapsed.as_secs_f64()
+    );
 
     // === PHASE 2: Stream remaining batches with LARGE batch size ===
     log::info!(
@@ -357,7 +372,16 @@ pub fn process_paired_end(
             batch_size,
             total_reads
         );
-        log::info!("Read {} sequences ({} bp)", batch_size * 2, batch_bp);
+        log::info!(
+            "read_chunk: {}, work_chunk_size: {}, nseq: {}",
+            PROCESSING_BATCH_SIZE,
+            batch_bp,
+            batch_size * 2
+        );
+
+        // Track per-batch timing
+        let batch_start_cpu = cputime();
+        let batch_start_wall = Instant::now();
 
         // Process batch in parallel
         let num_pairs = batch1.names.len();
@@ -453,6 +477,16 @@ pub fn process_paired_end(
         });
         total_records += records;
 
+        // Log per-batch timing (matches BWA-MEM2 format)
+        let batch_cpu_elapsed = cputime() - batch_start_cpu;
+        let batch_wall_elapsed = batch_start_wall.elapsed();
+        log::info!(
+            "Processed {} reads in {:.3} CPU sec, {:.3} real sec",
+            batch_size * 2,
+            batch_cpu_elapsed,
+            batch_wall_elapsed.as_secs_f64()
+        );
+
         // Log progress every 10 batches
         if batch_num % 10 == 0 {
             log::info!(
@@ -466,15 +500,17 @@ pub fn process_paired_end(
         // batch_alignments and batch dropped here, memory freed
     }
 
-    // Print summary statistics
+    // Print summary statistics with total CPU + wall time
+    let total_cpu = cputime() - start_cpu;
     let elapsed = start_time.elapsed();
     log::info!(
-        "Complete: {} batches, {} reads ({} bp), {} records, {} pairs rescued in {:.2} sec",
+        "Complete: {} batches, {} reads ({} bp), {} records, {} pairs rescued in {:.3} CPU sec, {:.3} real sec",
         batch_num,
         total_reads,
         total_bases,
         total_records,
         total_rescued,
+        total_cpu,
         elapsed.as_secs_f64()
     );
 }
