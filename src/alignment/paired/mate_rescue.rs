@@ -787,6 +787,7 @@ fn execute_mate_rescue_batch_simd(
             mismatch_penalty,
             gap_open,
             gap_extend,
+            false, // debug
         );
 
         log::debug!("batch_ksw_align returned: processed={}", _processed);

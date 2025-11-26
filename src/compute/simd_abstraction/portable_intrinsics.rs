@@ -409,10 +409,22 @@ pub unsafe fn _mm_blendv_epi8(a: __m128i, b: __m128i, mask: __m128i) -> __m128i 
     }
     #[cfg(target_arch = "aarch64")]
     {
-        // NEON blend: if mask MSB is 1, select b, otherwise a
-        // vbslq_u8 does: if mask bit is 1, select first arg, else second
-        // So we need to pass b first, then a
-        unsafe { __m128i(simd_arch::vbslq_u8(mask.0, b.0, a.0)) }
+        // SSE blendv_epi8 semantics: if mask byte's MSB (bit 7) is 1, select b; else select a
+        // NEON vbslq_u8 semantics: for each BIT, if mask bit is 1, select first arg; else second
+        //
+        // To emulate SSE blendv, we need to expand the MSB of each byte to fill all 8 bits.
+        // We do this by arithmetic right shift by 7 (replicates sign bit).
+        //
+        // vshrq_n_s8 does arithmetic shift, so -128 (0x80) >> 7 = -1 (0xFF)
+        // and 127 (0x7F) >> 7 = 0 (0x00)
+        unsafe {
+            let mask_expanded = simd_arch::vshrq_n_s8::<7>(mask.as_s8());
+            // vbslq_u8(mask, a, b): where mask bit is 1 → select a; else → select b
+            // We want: where MSB was 1 (now 0xFF) → select b; else → select a
+            // So we need: vbslq_u8(mask_expanded, b, a)
+            let mask_u8 = simd_arch::vreinterpretq_u8_s8(mask_expanded);
+            __m128i(simd_arch::vbslq_u8(mask_u8, b.0, a.0))
+        }
     }
 }
 
@@ -635,7 +647,10 @@ macro_rules! mm_slli_epi16 {
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
-            __m128i::from_s16(simd_arch::vshlq_n_s16($a.as_s16(), $imm8))
+            __m128i::from_s16(simd_arch::vshlq_n_s16(
+                $a.as_s16(),
+                $imm8,
+            ))
         }
     }};
 }
@@ -652,7 +667,7 @@ macro_rules! mm_srli_si128 {
             if $imm8 >= 16 {
                 _mm_setzero_si128()
             } else {
-                __m128i(simd_arch::vextq_u8($a.0, simd_arch::vdupq_n_u8(0), $imm8))
+                __m128i(simd_arch::vextq_u8(simd_arch::vdupq_n_u8(0), $a.0, $imm8))
             }
         }
     }};
@@ -668,7 +683,7 @@ macro_rules! mm_alignr_epi8 {
         #[cfg(target_arch = "aarch64")]
         unsafe {
             if $imm8 >= 16 {
-                mm_srli_si128!($a, $imm8 - 16)
+                _mm_srli_si128_var($a, $imm8 - 16)
             } else {
                 __m128i(simd_arch::vextq_u8($b.0, $a.0, $imm8))
             }
