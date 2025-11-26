@@ -523,4 +523,16 @@ impl SimdEngine for SimdEngine512 {
     unsafe fn storeu_si128_16(p: *mut Self::Vec16, a: Self::Vec16) {
         simd_arch::_mm512_storeu_si512(p, a)
     }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn unpacklo_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm512_unpacklo_epi8(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn unpackhi_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm512_unpackhi_epi8(a, b)
+    }
 }
