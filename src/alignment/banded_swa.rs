@@ -115,45 +115,6 @@ pub struct BandedPairWiseSW {
 }
 
 impl BandedPairWiseSW {
-    /// Return whether SIMD is enabled at runtime based on environment and platform defaults.
-    ///
-    /// Control via FERROUS_ALIGN_SIMD env var:
-    /// - "0", "false", "off" => disable SIMD
-    /// - "1", "true", "on" => enable SIMD
-    /// - unset => defaults to enabled on x86_64, disabled on aarch64 (temporary until NEON fully vetted)
-    fn simd_runtime_enabled() -> bool {
-        let result = if let Ok(val) = std::env::var("FERROUS_ALIGN_SIMD") {
-            match val.to_ascii_lowercase().as_str() {
-                "0" | "false" | "off" => {
-                    log::debug!("[SIMD] Runtime control: DISABLED by FERROUS_ALIGN_SIMD={}", val);
-                    false
-                }
-                "1" | "true" | "on" => {
-                    log::debug!("[SIMD] Runtime control: ENABLED by FERROUS_ALIGN_SIMD={}", val);
-                    true
-                }
-                _ => {
-                    log::debug!("[SIMD] Runtime control: invalid value '{}', using platform default", val);
-                    #[cfg(target_arch = "x86_64")]
-                    { true }
-                    #[cfg(not(target_arch = "x86_64"))]
-                    { false }
-                }
-            }
-        } else {
-            #[cfg(target_arch = "x86_64")]
-            {
-                log::debug!("[SIMD] Runtime control: using default (ENABLED on x86_64)");
-                true
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                log::debug!("[SIMD] Runtime control: using default (DISABLED on aarch64)");
-                false
-            }
-        };
-        result
-    }
     pub fn new(
         o_del: i32,
         e_del: i32,
@@ -186,14 +147,13 @@ impl BandedPairWiseSW {
         }
     }
 
-    /// Runtime dispatch for single alignment that respects FERROUS_ALIGN_SIMD flag.
+    /// Main entry point for single alignment with CIGAR generation.
     ///
-    /// This is the main entry point for alignment that should be used in production code.
-    /// It checks the FERROUS_ALIGN_SIMD flag and dispatches to either:
-    /// - SIMD path: Uses simd_banded_swa_dispatch for scoring (AVX2/AVX-512/SSE/NEON)
-    /// - Scalar path: Direct scalar implementation
-    ///
-    /// For tests and benchmarks that explicitly want scalar/SIMD, call those functions directly.
+    /// Note: SIMD kernels only compute scores (no CIGAR). For single alignments,
+    /// scalar is used since it computes both score and CIGAR in one pass.
+    /// SIMD batch functions (simd_banded_swa_dispatch) are used for filtering
+    /// multiple candidates by score before generating CIGARs for survivors.
+    #[inline]
     pub fn banded_swa(
         &self,
         qlen: i32,
@@ -203,56 +163,7 @@ impl BandedPairWiseSW {
         w: i32,
         h0: i32,
     ) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
-        if !Self::simd_runtime_enabled() {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static LOGGED: AtomicBool = AtomicBool::new(false);
-            if !LOGGED.swap(true, Ordering::Relaxed) {
-                log::info!("[SIMD] Runtime dispatch: using SCALAR path (FERROUS_ALIGN_SIMD=0)");
-            }
-            return self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
-        }
-
-        // SIMD enabled: use the unified dispatch for scoring
-        // This routes to AVX2/AVX-512/SSE/NEON based on detected CPU features
-        {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static LOGGED_SIMD: AtomicBool = AtomicBool::new(false);
-            if !LOGGED_SIMD.swap(true, Ordering::Relaxed) {
-                log::info!("[SIMD] Runtime dispatch: using SIMD path (FERROUS_ALIGN_SIMD=1)");
-            }
-        }
-        let batch = vec![(qlen, &query[..], tlen, &target[..], w, h0)];
-        let simd_scores = self.simd_banded_swa_dispatch(&batch);
-
-        // Get SIMD score result
-        let simd_score = simd_scores.into_iter().next().unwrap_or(OutScore {
-            score: 0,
-            target_end_pos: 0,
-            query_end_pos: 0,
-            gtarget_end_pos: 0,
-            global_score: 0,
-            max_offset: 0,
-        });
-
-        // For CIGAR generation, we still use scalar traceback (matches BWA-MEM2 design)
-        // The SIMD kernel gives us the score; scalar gives us the CIGAR
-        let (scalar_score, cigar, ref_aligned, query_aligned) =
-            self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
-
-        // Use SIMD score but scalar CIGAR (hybrid approach)
-        // Note: In production BWA-MEM2, SIMD is used for filtering candidates by score,
-        // then scalar traceback generates CIGARs only for surviving alignments.
-        // For now, we verify SIMD and scalar produce same results.
-        if simd_score.score != scalar_score.score {
-            log::trace!(
-                "[SIMD] Score mismatch: SIMD={} vs scalar={} (qlen={}, tlen={})",
-                simd_score.score, scalar_score.score, qlen, tlen
-            );
-        }
-
-        // Return scalar results (with CIGAR) for correctness
-        // The SIMD path is exercised for testing/debugging purposes
-        (scalar_score, cigar, ref_aligned, query_aligned)
+        self.scalar_banded_swa(qlen, query, tlen, target, w, h0)
     }
 
     pub fn scalar_banded_swa(
@@ -1741,27 +1652,11 @@ impl BandedPairWiseSW {
             return Vec::new();
         }
 
-        // Log-once for 8-bit SIMD selection
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static LOGGED_8BIT_SCALAR: AtomicBool = AtomicBool::new(false);
-        static LOGGED_8BIT_SIMD: AtomicBool = AtomicBool::new(false);
-
-        // Allow forcing scalar path via env var (temporary default on aarch64)
-        if !Self::simd_runtime_enabled() {
-            if !LOGGED_8BIT_SCALAR.swap(true, Ordering::Relaxed) {
-                log::info!("[SIMD] Vertical batch (8-bit): using SCALAR fallback");
-            }
-            // Scalar fallback: process each alignment sequentially
-            let mut results = Vec::with_capacity(batch.len());
-            for &(qlen, query, tlen, target, w, h0) in batch.iter() {
-                let (out, _cigar, _q, _t) = self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
-                results.push(out);
-            }
-            return results;
-        }
-
         let engine = detect_optimal_simd_engine();
 
+        // Log-once for SIMD engine selection
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED_8BIT_SIMD: AtomicBool = AtomicBool::new(false);
         if !LOGGED_8BIT_SIMD.swap(true, Ordering::Relaxed) {
             log::info!("[SIMD] Vertical batch (8-bit): using {:?} engine", engine);
         }
@@ -1843,22 +1738,7 @@ impl BandedPairWiseSW {
 
         // Log-once for 16-bit SIMD selection
         use std::sync::atomic::{AtomicBool, Ordering};
-        static LOGGED_16BIT_SCALAR: AtomicBool = AtomicBool::new(false);
         static LOGGED_16BIT_SIMD: AtomicBool = AtomicBool::new(false);
-
-        // Allow forcing scalar path via env var (temporary default on aarch64)
-        if !Self::simd_runtime_enabled() {
-            if !LOGGED_16BIT_SCALAR.swap(true, Ordering::Relaxed) {
-                log::info!("[SIMD] Vertical batch (16-bit): using SCALAR fallback");
-            }
-            let mut results = Vec::with_capacity(batch.len());
-            for &(qlen, query, tlen, target, w, h0) in batch.iter() {
-                let (out, _cigar, _q, _t) = self.scalar_banded_swa(qlen, query, tlen, target, w, h0);
-                results.push(out);
-            }
-            return results;
-        }
-
         if !LOGGED_16BIT_SIMD.swap(true, Ordering::Relaxed) {
             log::info!("[SIMD] Vertical batch (16-bit): using NEON/SSE 128-bit engine");
         }
