@@ -13,9 +13,10 @@
 
 use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
 use super::mate_rescue::{
-    MateRescueJob, execute_mate_rescue_batch, prepare_mate_rescue_jobs_for_anchor,
+    MateRescueJob, execute_mate_rescue_batch_with_engine, prepare_mate_rescue_jobs_for_anchor,
     result_to_alignment,
 };
+use crate::compute::simd_abstraction::simd::SimdEngineType;
 use super::pairing::mem_pair;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::mark_secondary_alignments;
@@ -261,6 +262,8 @@ pub fn process_paired_end(
     let first_batch_seqs2 = first_batch2.as_tuple_refs();
 
     // Mate rescue on first batch (BWA-MEM2: run unconditionally on top alignments)
+    // Use horizontal SIMD for batched mate rescue when available
+    let simd_engine = compute_ctx.backend.simd_engine();
     let rescued_first = mate_rescue_batch(
         &mut first_batch_alignments,
         &first_batch_seqs1,
@@ -269,6 +272,7 @@ pub fn process_paired_end(
         &stats,
         &bwa_idx,
         opt.max_matesw as usize,
+        simd_engine,
     );
     log::info!("First batch: {} pairs rescued", rescued_first);
 
@@ -403,6 +407,7 @@ pub fn process_paired_end(
         let batch_seqs2 = batch2.as_tuple_refs();
 
         // Mate rescue on this batch (BWA-MEM2: run unconditionally on top alignments)
+        // Use horizontal SIMD for batched mate rescue when available
         let rescued = mate_rescue_batch(
             &mut batch_alignments,
             &batch_seqs1,
@@ -411,6 +416,7 @@ pub fn process_paired_end(
             &stats,
             &bwa_idx,
             opt.max_matesw as usize,
+            simd_engine,
         );
         total_rescued += rescued;
 
@@ -497,6 +503,7 @@ fn mate_rescue_batch(
     stats: &[InsertSizeStats; 4],
     bwa_idx: &BwaIndex,
     max_matesw: usize,
+    simd_engine: Option<SimdEngineType>,
 ) -> usize {
     if pac.is_empty() {
         return 0;
@@ -562,8 +569,9 @@ fn mate_rescue_batch(
     // ========================================================================
     // PHASE 2: Execute all SW in parallel
     // ========================================================================
+    // Use horizontal SIMD batching when a SIMD engine is specified
     let mut jobs_for_execution = all_jobs;
-    let results = execute_mate_rescue_batch(&mut jobs_for_execution);
+    let results = execute_mate_rescue_batch_with_engine(&mut jobs_for_execution, simd_engine);
 
     // ========================================================================
     // PHASE 3: Distribute results back to pairs

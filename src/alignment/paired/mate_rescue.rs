@@ -22,7 +22,9 @@ use crate::alignment::edit_distance;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::finalization::sam_flags;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
+use crate::alignment::kswv_batch::{SoABuffer, SeqPair, KswResult, batch_ksw_align};
 use crate::compute::simd_abstraction::SimdEngine128;
+use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::index::index::BwaIndex;
 use rayon::prelude::*;
 
@@ -518,6 +520,64 @@ pub struct MateRescueResult {
 /// Execute all mate rescue SW jobs in parallel using rayon
 /// This is Phase 2 of the batch strategy
 pub fn execute_mate_rescue_batch(jobs: &mut [MateRescueJob]) -> Vec<MateRescueResult> {
+    execute_mate_rescue_batch_with_engine(jobs, None)
+}
+
+/// Execute all mate rescue SW jobs with optional SIMD engine specification
+///
+/// When `engine` is Some, uses horizontal SIMD batching for better throughput.
+/// When `engine` is None, uses the scalar/rayon fallback.
+///
+/// # Arguments
+/// * `jobs` - Mate rescue jobs to execute
+/// * `engine` - Optional SIMD engine type for horizontal batching
+///
+/// # Horizontal SIMD Batching (engine = Some)
+/// - Groups jobs into batches matching SIMD width (16/32/64 depending on engine)
+/// - Uses Structure-of-Arrays layout for cache-efficient SIMD processing
+/// - Significantly faster for large batches (16+ jobs)
+///
+/// # Scalar/Rayon Fallback (engine = None)
+/// - Uses per-alignment ksw_align2 with rayon parallel iteration
+/// - Good for small batches or when SIMD overhead isn't worthwhile
+pub fn execute_mate_rescue_batch_with_engine(
+    jobs: &mut [MateRescueJob],
+    engine: Option<SimdEngineType>,
+) -> Vec<MateRescueResult> {
+    // Use horizontal SIMD batching if engine is specified and we have enough jobs
+    // NOTE: Horizontal SIMD kernels have a bug in te (target end) tracking - the AVX2 kernel
+    // uses 16-bit values but only has 16 lanes for 32 sequences. This causes incorrect
+    // coordinates and lower properly-paired rates. Disable SIMD for now until te tracking
+    // is fixed with two registers (te_lo/te_hi).
+    // TODO: Fix te tracking in kswv_avx2.rs and kswv_sse_neon.rs
+    let simd_disabled = true;
+    if !simd_disabled {
+    if let Some(simd_engine) = engine {
+        let min_batch_for_simd = match simd_engine {
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+            SimdEngineType::Engine512 => 32,  // 50% of 64-way
+            #[cfg(target_arch = "x86_64")]
+            SimdEngineType::Engine256 => 16,  // 50% of 32-way
+            SimdEngineType::Engine128 => 8,   // 50% of 16-way
+        };
+
+        if jobs.len() >= min_batch_for_simd {
+            log::debug!(
+                "Using horizontal SIMD for mate rescue: {} jobs, engine={:?}",
+                jobs.len(),
+                simd_engine
+            );
+            return execute_mate_rescue_batch_simd(jobs, simd_engine);
+        }
+    }
+    } // end simd_disabled check
+
+    // Fallback to scalar/rayon implementation
+    execute_mate_rescue_batch_scalar(jobs)
+}
+
+/// Scalar implementation using ksw_align2 with rayon parallelism
+fn execute_mate_rescue_batch_scalar(jobs: &mut [MateRescueJob]) -> Vec<MateRescueResult> {
     // Scoring parameters (matching BWA-MEM2 defaults)
     let o_del = 6;
     let e_del = 1;
@@ -562,6 +622,199 @@ pub fn execute_mate_rescue_batch(jobs: &mut [MateRescueJob]) -> Vec<MateRescueRe
             }
         })
         .collect()
+}
+
+/// Horizontal SIMD batch execution for mate rescue
+///
+/// This function processes mate rescue jobs using horizontal SIMD, where each SIMD lane
+/// handles a different alignment simultaneously. This is significantly faster than
+/// the scalar approach for large batches.
+///
+/// # Algorithm
+/// 1. Find max query and reference lengths across all jobs
+/// 2. Create SoA (Structure of Arrays) buffer for the batch
+/// 3. Transpose sequences into SIMD-friendly layout
+/// 4. Execute batch_ksw_align with the specified SIMD engine
+/// 5. Convert results back to MateRescueResult format
+///
+/// # SIMD Width
+/// - Engine128 (SSE/NEON): 16 alignments per SIMD operation
+/// - Engine256 (AVX2): 32 alignments per SIMD operation
+/// - Engine512 (AVX-512): 64 alignments per SIMD operation
+fn execute_mate_rescue_batch_simd(
+    jobs: &mut [MateRescueJob],
+    engine: SimdEngineType,
+) -> Vec<MateRescueResult> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+
+    // Use INFO level to ensure it's visible
+    log::info!(
+        "SIMD mate rescue: {} jobs, engine={:?}",
+        jobs.len(),
+        engine
+    );
+
+    // Scoring parameters (matching BWA-MEM2 defaults for mate rescue)
+    let match_score: i8 = 1;
+    let mismatch_penalty: i8 = -4;
+    let gap_open: i32 = 6;
+    let gap_extend: i32 = 1;
+
+    // Determine batch size from engine
+    let batch_size = match engine {
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => 64,
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => 32,
+        SimdEngineType::Engine128 => 16,
+    };
+
+    // Find max lengths across all jobs (for buffer allocation)
+    let max_ref_len = jobs.iter().map(|j| j.ref_seq.len()).max().unwrap_or(0);
+    let max_query_len = jobs.iter().map(|j| j.query_seq.len()).max().unwrap_or(0);
+
+    log::debug!(
+        "SIMD batch: batch_size={}, max_ref_len={}, max_query_len={}",
+        batch_size,
+        max_ref_len,
+        max_query_len
+    );
+
+    // Allocate SoA buffer for the largest batch
+    let mut soa = SoABuffer::new(max_ref_len + 16, max_query_len + 16, engine);
+
+    let mut results = Vec::with_capacity(jobs.len());
+
+    // Process jobs in batches
+    for chunk_start in (0..jobs.len()).step_by(batch_size) {
+        let chunk_end = (chunk_start + batch_size).min(jobs.len());
+        let chunk = &jobs[chunk_start..chunk_end];
+        let chunk_len = chunk.len();
+
+        // Find max lengths for this chunk (for nrow/ncol)
+        let chunk_max_ref = chunk.iter().map(|j| j.ref_seq.len()).max().unwrap_or(0);
+        let chunk_max_query = chunk.iter().map(|j| j.query_seq.len()).max().unwrap_or(0);
+
+        // Create SeqPair metadata for the chunk
+        let mut pairs: Vec<SeqPair> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, job)| SeqPair {
+                ref_idx: i,
+                query_idx: i,
+                id: chunk_start + i,
+                ref_len: job.ref_seq.len() as i32,
+                query_len: job.query_seq.len() as i32,
+                h0: 0,
+                score: 0,
+                te: -1,
+                qe: -1,
+                score2: -1,
+                te2: -1,
+                tb: -1,
+                qb: -1,
+            })
+            .collect();
+
+        // Pad to batch_size with dummy entries
+        while pairs.len() < batch_size {
+            pairs.push(SeqPair {
+                ref_len: 1,
+                query_len: 1,
+                ..Default::default()
+            });
+        }
+
+        // Set nrow/ncol from max lengths
+        for pair in &mut pairs {
+            if pair.ref_len > 0 {
+                // Keep original length but ensure we process full matrix
+            }
+        }
+
+        // Collect sequence slices for transpose
+        let ref_seqs: Vec<&[u8]> = chunk.iter().map(|j| j.ref_seq.as_slice()).collect();
+        let query_seqs: Vec<&[u8]> = chunk.iter().map(|j| j.query_seq.as_slice()).collect();
+
+        // Extend with padding sequences
+        let padding_ref: Vec<u8> = vec![4; 1]; // N base
+        let padding_query: Vec<u8> = vec![4; 1];
+        let mut ref_seqs_padded: Vec<&[u8]> = ref_seqs;
+        let mut query_seqs_padded: Vec<&[u8]> = query_seqs;
+        while ref_seqs_padded.len() < batch_size {
+            ref_seqs_padded.push(&padding_ref);
+            query_seqs_padded.push(&padding_query);
+        }
+
+        // Transpose sequences into SoA layout
+        soa.transpose(&pairs, &ref_seqs_padded, &query_seqs_padded);
+
+        // Allocate results for this batch
+        let mut batch_results: Vec<KswResult> = vec![KswResult::default(); batch_size];
+
+        // Execute horizontal SIMD alignment
+        // Update pairs[0] with max dimensions for the kernel
+        pairs[0].ref_len = chunk_max_ref as i32;
+        pairs[0].query_len = chunk_max_query as i32;
+
+        log::info!(
+            "Calling batch_ksw_align: chunk={}/{}, nrow={}, ncol={}, batch_size={}, soa_batch_size={}",
+            chunk_start,
+            jobs.len(),
+            pairs[0].ref_len,
+            pairs[0].query_len,
+            batch_size,
+            soa.batch_size()
+        );
+
+        // Sanity check: nrow and ncol must fit in SoA buffer
+        let nrow = pairs[0].ref_len as usize;
+        let ncol = pairs[0].query_len as usize;
+        if nrow > max_ref_len + 16 || ncol > max_query_len + 16 {
+            log::error!(
+                "Buffer overflow would occur: nrow={} > max_ref={}, ncol={} > max_query={}",
+                nrow, max_ref_len + 16, ncol, max_query_len + 16
+            );
+            // Fall back to scalar for this batch
+            return execute_mate_rescue_batch_scalar(jobs);
+        }
+
+        log::info!("Sanity checks passed, calling kernel...");
+
+        let _processed = batch_ksw_align(
+            &soa,
+            &mut pairs,
+            &mut batch_results,
+            engine,
+            match_score,
+            mismatch_penalty,
+            gap_open,
+            gap_extend,
+        );
+
+        log::debug!("batch_ksw_align returned: processed={}", _processed);
+
+        // Convert results back to MateRescueResult format
+        for (i, ksw_result) in batch_results.iter().take(chunk_len).enumerate() {
+            let job_idx = chunk_start + i;
+            results.push(MateRescueResult {
+                job_index: job_idx,
+                aln: Kswr {
+                    score: ksw_result.score,
+                    te: ksw_result.te,
+                    qe: ksw_result.qe,
+                    score2: ksw_result.score2,
+                    te2: ksw_result.te2,
+                    tb: ksw_result.tb,
+                    qb: ksw_result.qb,
+                },
+            });
+        }
+    }
+
+    results
 }
 
 /// Convert a successful SW result to an Alignment

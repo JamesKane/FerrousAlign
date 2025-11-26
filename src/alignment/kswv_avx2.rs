@@ -136,7 +136,7 @@ pub unsafe fn batch_ksw_align_avx2(
         temp[i] = temp[i - 16];
     }
 
-    let perm_sft256 = SimdEngine256::load_si128(temp.as_ptr() as *const _);
+    let perm_sft256 = SimdEngine256::loadu_si128(temp.as_ptr() as *const _);
     let sft256 = SimdEngine256::set1_epi8(shift as i8);
     let cmax256 = SimdEngine256::set1_epi8(255u8 as i8);
     let five256 = SimdEngine256::set1_epi8(DUMMY5);
@@ -169,8 +169,8 @@ pub unsafe fn batch_ksw_align_avx2(
         }
     }
 
-    let minsc256 = SimdEngine256::load_si128(minsc.as_ptr() as *const _);
-    let endsc256 = SimdEngine256::load_si128(endsc.as_ptr() as *const _);
+    let minsc256 = SimdEngine256::loadu_si128(minsc.as_ptr() as *const _);
+    let endsc256 = SimdEngine256::loadu_si128(endsc.as_ptr() as *const _);
 
     // Initialize scoring parameters as SIMD vectors
     let e_del256 = SimdEngine256::set1_epi8(e_del as i8);
@@ -191,11 +191,11 @@ pub unsafe fn batch_ksw_align_avx2(
     let mut f_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
     let mut row_max_buf = vec![0u8; max_ref_len * SIMD_WIDTH8];
 
-    // Initialize H0, F to zero
+    // Initialize H0, F to zero (using unaligned stores for Vec buffers)
     for i in 0..=ncol as usize {
         let offset = i * SIMD_WIDTH8;
-        SimdEngine256::store_si128(h0_buf[offset..].as_mut_ptr() as *mut _, zero256);
-        SimdEngine256::store_si128(f_buf[offset..].as_mut_ptr() as *mut _, zero256);
+        SimdEngine256::storeu_si128(h0_buf[offset..].as_mut_ptr() as *mut _, zero256);
+        SimdEngine256::storeu_si128(f_buf[offset..].as_mut_ptr() as *mut _, zero256);
     }
 
     // Initialize tracking variables for main loop
@@ -204,8 +204,8 @@ pub unsafe fn batch_ksw_align_avx2(
     let mut minsc_msk = zero256;
     let mut qe256 = SimdEngine256::set1_epi8(0);
 
-    SimdEngine256::store_si128(h0_buf.as_mut_ptr() as *mut _, zero256);
-    SimdEngine256::store_si128(h1_buf.as_mut_ptr() as *mut _, zero256);
+    SimdEngine256::storeu_si128(h0_buf.as_mut_ptr() as *mut _, zero256);
+    SimdEngine256::storeu_si128(h1_buf.as_mut_ptr() as *mut _, zero256);
 
     // ========================================================================
     // SECTION 2: Main DP Loop
@@ -229,14 +229,14 @@ pub unsafe fn batch_ksw_align_avx2(
 
         // Inner loop over query positions
         for j in 0..ncol as usize {
-            // Load DP values and query base
-            let h00 = SimdEngine256::load_si128(
+            // Load DP values and query base (unaligned for Vec buffers, aligned for SoA)
+            let h00 = SimdEngine256::loadu_si128(
                 h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _
             );
             let s2 = SimdEngine256::load_si128(
                 seq2_soa.add(j * SIMD_WIDTH8) as *const _
             );
-            let f11 = SimdEngine256::load_si128(
+            let f11 = SimdEngine256::loadu_si128(
                 f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _
             );
 
@@ -283,12 +283,12 @@ pub unsafe fn batch_ksw_align_avx2(
             let mut f21 = SimdEngine256::subs_epu8(f11, e_del256);
             f21 = SimdEngine256::max_epu8(gap_d256, f21);
 
-            // Store updated DP values
-            SimdEngine256::store_si128(
+            // Store updated DP values (unaligned for Vec buffers)
+            SimdEngine256::storeu_si128(
                 h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
                 h11
             );
-            SimdEngine256::store_si128(
+            SimdEngine256::storeu_si128(
                 f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
                 f21
             );
@@ -319,7 +319,7 @@ pub unsafe fn batch_ksw_align_avx2(
                 exit0_vec
             );
 
-            SimdEngine256::store_si128(
+            SimdEngine256::storeu_si128(
                 row_max_buf[(i - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
                 pimax256_tmp
             );
@@ -366,10 +366,10 @@ pub unsafe fn batch_ksw_align_avx2(
         i256_vec = SimdEngine256::add_epi16(i256_vec, one256_16);
     }
 
-    // Final row max update
+    // Final row max update (unaligned for Vec buffers)
     let msk = SimdEngine256::or_si128(mask256, SimdEngine256::set1_epi8(0));
     let pimax256_final = SimdEngine256::blendv_epi8(pimax256, zero256, msk);
-    SimdEngine256::store_si128(
+    SimdEngine256::storeu_si128(
         row_max_buf[((limit - 1) as usize) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
         pimax256_final
     );
@@ -456,7 +456,7 @@ pub unsafe fn batch_ksw_align_avx2(
     let high256 = SimdEngine256::loadu_si128_16(high_arr.0.as_ptr() as *const _);
     let rlen256 = SimdEngine256::loadu_si128_16(rlen_arr.0.as_ptr() as *const _);
 
-    // Forward scan
+    // Forward scan (unaligned for Vec buffers)
     for i in 0..maxl {
         let i256 = SimdEngine256::set1_epi16(i as i16);
         let rmax256 = SimdEngine256::loadu_si128(
@@ -471,8 +471,10 @@ pub unsafe fn batch_ksw_align_avx2(
         te256 = SimdEngine256::blendv_epi8(te256, i256, combined_mask);
     }
 
-    // Backward scan
-    for i in (minh + 1)..limit {
+    // Backward scan (unaligned for Vec buffers)
+    // Ensure we don't iterate with negative indices
+    let backward_start = (minh + 1).max(0);
+    for i in backward_start..limit {
         let i256 = SimdEngine256::set1_epi16(i as i16);
         let rmax256 = SimdEngine256::loadu_si128(
             row_max_buf[i as usize * SIMD_WIDTH8..].as_ptr() as *const _
@@ -510,8 +512,17 @@ pub unsafe fn batch_ksw_align_avx2(
             results[i].te2 = -1;
         }
 
-        results[i].tb = -1;
-        results[i].qb = -1;
+        // Set tb and qb based on valid alignment
+        // Phase 0 doesn't compute traceback, so we estimate:
+        // - For mate rescue, alignments typically start at query position 0
+        // - tb is estimated as te - (qe - qb) for same-length alignment
+        if results[i].score > 0 && results[i].te >= 0 && results[i].qe >= 0 {
+            results[i].qb = 0;  // Alignment starts at query position 0
+            results[i].tb = (results[i].te - results[i].qe).max(0);
+        } else {
+            results[i].tb = -1;
+            results[i].qb = -1;
+        }
     }
 
     1

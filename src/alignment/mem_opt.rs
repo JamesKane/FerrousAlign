@@ -182,7 +182,7 @@ pub struct MemCliOptions {
     pub min_chain_weight: i32,
 
     /// Perform at most INT rounds of mate rescues for each read
-    #[arg(short = 'r', long, value_name = "INT", default_value_t = MAX_MATE_RESCUES)]
+    #[arg(short = 'M', long, value_name = "INT", default_value_t = MAX_MATE_RESCUES)]
     pub max_mate_rescues: i32,
 
     /// Skip mate rescue

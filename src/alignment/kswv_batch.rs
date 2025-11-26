@@ -13,6 +13,10 @@
 // BWA-MEM2 reference: src/kswv.cpp, src/kswv.h
 // ============================================================================
 
+// Allow unsafe operations within unsafe functions without explicit unsafe blocks.
+// This is appropriate for SIMD-heavy code where nearly every operation is inherently unsafe.
+#![allow(unsafe_op_in_unsafe_fn)]
+
 use std::alloc::{Layout, alloc, dealloc};
 use crate::compute::simd_abstraction::simd::{SimdEngineType, get_simd_batch_sizes};
 
