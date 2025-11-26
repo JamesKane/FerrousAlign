@@ -655,12 +655,7 @@ fn execute_mate_rescue_batch_simd(
         return Vec::new();
     }
 
-    // DEBUG COMPARISON: Run scalar first to get reference results
-    let mut jobs_clone = jobs.to_vec();
-    let scalar_results = execute_mate_rescue_batch_scalar(&mut jobs_clone);
-
-    // Use INFO level to ensure it's visible
-    log::info!("SIMD mate rescue: {} jobs, engine={:?}", jobs.len(), engine);
+    log::debug!("SIMD mate rescue: {} jobs, engine={:?}", jobs.len(), engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults for mate rescue)
     let match_score: i8 = 1;
@@ -822,76 +817,6 @@ fn execute_mate_rescue_batch_simd(
                 },
             });
         }
-    }
-
-    // DEBUG COMPARISON: Compare scalar vs SIMD results
-    let mut mismatch_count = 0;
-    let mut score_mismatches = 0;
-    let mut te_mismatches = 0;
-    let mut qe_mismatches = 0;
-    for (i, (scalar, simd)) in scalar_results.iter().zip(results.iter()).enumerate() {
-        let score_match = scalar.aln.score == simd.aln.score;
-        let te_match = scalar.aln.te == simd.aln.te;
-        let qe_match = scalar.aln.qe == simd.aln.qe;
-
-        if !score_match || !te_match || !qe_match {
-            mismatch_count += 1;
-            if !score_match {
-                score_mismatches += 1;
-            }
-            if !te_match {
-                te_mismatches += 1;
-            }
-            if !qe_match {
-                qe_mismatches += 1;
-            }
-
-            // Log first 10 mismatches in detail (DEBUG level)
-            if mismatch_count <= 10 {
-                log::debug!(
-                    "MISMATCH[{}]: scalar(score={}, te={}, qe={}) vs simd(score={}, te={}, qe={})",
-                    i,
-                    scalar.aln.score,
-                    scalar.aln.te,
-                    scalar.aln.qe,
-                    simd.aln.score,
-                    simd.aln.te,
-                    simd.aln.qe
-                );
-                log::debug!(
-                    "  Job[{}]: ref_len={}, query_len={}",
-                    i,
-                    jobs[i].ref_seq.len(),
-                    jobs[i].query_seq.len()
-                );
-                // For score-only mismatches (same positions), dump sequence info
-                if te_match && qe_match && !score_match {
-                    let score_diff = scalar.aln.score - simd.aln.score;
-                    log::debug!(
-                        "  SCORE-ONLY MISMATCH: diff={}, ref[0..16]={:?}, query[0..16]={:?}",
-                        score_diff,
-                        &jobs[i].ref_seq[..16.min(jobs[i].ref_seq.len())],
-                        &jobs[i].query_seq[..16.min(jobs[i].query_seq.len())]
-                    );
-                }
-            }
-        }
-    }
-
-    if mismatch_count > 0 {
-        log::warn!(
-            "SIMD MISMATCH SUMMARY: {} of {} mismatches (score={}, te={}, qe={})",
-            mismatch_count,
-            results.len(),
-            score_mismatches,
-            te_mismatches,
-            qe_mismatches
-        );
-    } else {
-        log::debug!(
-            "SIMD VALIDATION: All {} results match scalar!",
-            results.len()
-        );
     }
 
     results
