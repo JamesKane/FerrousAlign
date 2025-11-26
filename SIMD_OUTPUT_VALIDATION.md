@@ -2,7 +2,7 @@
 
 **Date**: 2025-11-26
 **Branch**: feature/session49-frontloading-optimization
-**Status**: ✅ COMPLETE - All backends validated
+**Status**: ⚠️ x86 COMPLETE, NEON PARTIALLY FIXED - ARM mismatch reduced from 100% to ~40%
 
 ## Objective
 
@@ -99,11 +99,99 @@ Additional validation using the T2T CHM13v2 reference genome to ensure results a
 
 This confirms that the horizontal SIMD implementation is reference-agnostic and produces consistent results across different genome assemblies.
 
+## NEON (ARM) Validation - GRCh38
+
+**Platform**: Apple M3 (aarch64)
+**Reference**: GRCh38 (GCA_000001405.15_GRCh38_no_alt_analysis_set.fna)
+**Date**: 2025-11-26
+
+### NEON Output Quality (After `_mm_blendv_epi8` Fix)
+
+| Dataset | Total Alignments | Properly Paired (SIMD) | Properly Paired (Scalar) |
+|---------|------------------|------------------------|--------------------------|
+| 1K pairs | 2,006 | 96.20% (1924/2000) | 96.30% (1926/2000) |
+
+### NEON SIMD vs Scalar Mismatch
+
+**Progress**: Fixed `_mm_blendv_epi8` NEON implementation - mismatch rate reduced from 100% to ~40%.
+
+**Before Fix (Session 49 start)**:
+```
+[WARN ] SIMD MISMATCH SUMMARY: 791 of 791 mismatches (score=790, te=688, qe=726)
+```
+
+**After Fix**:
+```
+[WARN ] SIMD MISMATCH SUMMARY: 449 of 791 mismatches (score=263, te=87, qe=266)
+```
+
+| Metric | Before Fix | After Fix |
+|--------|------------|-----------|
+| Mismatch rate | 100% | ~40% |
+| Score mismatches | 790/791 | 263/791 |
+| te mismatches | 688/791 | 87/791 |
+| qe mismatches | 726/791 | 266/791 |
+
+**Root Cause Fixed**: `_mm_blendv_epi8` NEON translation was using `vbslq_u8` directly, which uses ALL bits of the mask. SSE `blendv_epi8` only uses the MSB (bit 7). Fixed by expanding MSB to all 8 bits via arithmetic right shift before calling `vbslq_u8`.
+
+**Remaining Issue**: Score accumulation still differs between scalar and SIMD (~40% mismatch). Alignment positions (te, qe) now largely match, but scores are consistently lower in SIMD. Possible causes:
+- Shift arithmetic in the 8-bit scoring path
+- Ambiguous base handling differences
+- Another undiscovered intrinsic issue
+
+### Scalar Fallback Flag
+
+Added `FERROUS_ALIGN_FORCE_SCALAR` environment variable to force scalar mode for debugging:
+
+```bash
+# Force scalar mode for comparison
+FERROUS_ALIGN_FORCE_SCALAR=1 ./target/release/ferrous-align mem -t 1 \
+  /Library/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  test_data/neon_validation/1k_R1.fq \
+  test_data/neon_validation/1k_R2.fq \
+  > scalar_output.sam 2>&1
+```
+
+### Validation Commands (NEON)
+
+```bash
+# Build with native NEON
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+
+# Run intrinsics unit tests
+cargo test --test intrinsics -- --nocapture
+
+# Run alignment (SIMD mode)
+./target/release/ferrous-align mem -t 1 \
+  /Library/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  test_data/neon_validation/1k_R1.fq \
+  test_data/neon_validation/1k_R2.fq \
+  > simd_output.sam 2>&1
+
+# Run alignment (scalar mode for comparison)
+FERROUS_ALIGN_FORCE_SCALAR=1 ./target/release/ferrous-align mem -t 1 \
+  /Library/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  test_data/neon_validation/1k_R1.fq \
+  test_data/neon_validation/1k_R2.fq \
+  > scalar_output.sam 2>&1
+
+# Compare properly paired rates
+samtools flagstat simd_output.sam
+samtools flagstat scalar_output.sam
+```
+
 ## Conclusion
 
-The horizontal SIMD implementation is **fully validated**:
-1. ✅ All three backends (SSE, AVX2, AVX-512) produce **100% identical output**
+**x86 (SSE/AVX2/AVX-512)**:
+1. ✅ All three backends produce **100% identical output**
 2. ✅ Tested across 100, 1K, and 10K read pairs on GRCh38
 3. ✅ Verified on CHM13v2 reference (100% concordance)
 4. ✅ ~2% difference vs main branch is expected (tie-breaking changes)
-5. ✅ Ready for NEON testing on ARM (uses same kswv_sse_neon.rs code path)
+
+**ARM (NEON)**:
+1. ⚠️ NEON horizontal kswv mismatch reduced from 100% to ~40% (blendv fix)
+2. ✅ Properly paired rate: 96.20% SIMD vs 96.30% scalar (0.10% gap)
+3. ✅ 18 intrinsics unit tests pass
+4. 🔧 **REMAINING**: Debug score accumulation in horizontal SIMD DP loop
+
+**See Also**: `NEON_REPAIR_PLAN.md` for detailed NEON debugging status
