@@ -1186,6 +1186,12 @@ impl BandedPairWiseSW {
         let mut query_soa = vec![0u8; MAX_SEQ_LEN * SIMD_WIDTH];
         let mut target_soa = vec![0u8; MAX_SEQ_LEN * SIMD_WIDTH];
 
+        // 16-bit SoA for vectorized scoring (SSE compare-and-blend approach from BWA-MEM2)
+        // Using 0x7FFF as padding ensures ambiguous base detection works correctly
+        const PADDING_VALUE: i16 = 0x7FFF;
+        let mut query_soa_16 = vec![PADDING_VALUE; MAX_SEQ_LEN * SIMD_WIDTH];
+        let mut target_soa_16 = vec![PADDING_VALUE; MAX_SEQ_LEN * SIMD_WIDTH];
+
         // Transform query and target sequences to SoA layout
         for i in 0..SIMD_WIDTH {
             let (q_len, query, t_len, target, _, _) = padded_batch[i];
@@ -1195,20 +1201,24 @@ impl BandedPairWiseSW {
             let safe_q_len = (q_len as usize).min(actual_q_len);
             let safe_t_len = (t_len as usize).min(actual_t_len);
 
-            // Copy query (interleaved)
+            // Copy query (interleaved) - both 8-bit and 16-bit layouts
             for j in 0..safe_q_len {
                 query_soa[j * SIMD_WIDTH + i] = query[j];
+                query_soa_16[j * SIMD_WIDTH + i] = query[j] as i16;
             }
             for j in (q_len as usize)..MAX_SEQ_LEN {
                 query_soa[j * SIMD_WIDTH + i] = 0xFF;
+                // query_soa_16 already initialized to PADDING_VALUE
             }
 
-            // Copy target (interleaved)
+            // Copy target (interleaved) - both 8-bit and 16-bit layouts
             for j in 0..safe_t_len {
                 target_soa[j * SIMD_WIDTH + i] = target[j];
+                target_soa_16[j * SIMD_WIDTH + i] = target[j] as i16;
             }
             for j in (t_len as usize)..MAX_SEQ_LEN {
                 target_soa[j * SIMD_WIDTH + i] = 0xFF;
+                // target_soa_16 already initialized to PADDING_VALUE
             }
         }
 
@@ -1234,6 +1244,16 @@ impl BandedPairWiseSW {
         let oe_ins_vec = unsafe { _mm_set1_epi16(oe_ins) };
         let e_del_vec = unsafe { _mm_set1_epi16(self.e_del as i16) };
         let e_ins_vec = unsafe { _mm_set1_epi16(self.e_ins as i16) };
+
+        // Vectorized scoring constants (BWA-MEM2 compare-and-blend approach)
+        let mat = self.scoring_matrix();
+        let match_score = mat[0] as i16; // A-A match score
+        let mismatch_score = mat[1] as i16; // A-C mismatch score
+        let ambig_score = mat[4 * 5 + 4] as i16; // N-N score (ambiguous bases)
+        let match_score_vec = unsafe { _mm_set1_epi16(match_score) };
+        let mismatch_score_vec = unsafe { _mm_set1_epi16(mismatch_score) };
+        let ambig_score_vec = unsafe { _mm_set1_epi16(ambig_score) };
+        let three_vec = unsafe { _mm_set1_epi16(3) }; // For detecting ambiguous bases (> 3)
 
         // Band tracking (16-bit)
         let mut beg = [0i16; SIMD_WIDTH];
@@ -1282,16 +1302,6 @@ impl BandedPairWiseSW {
             let mut max_score_vec = _mm_loadu_si128(max_scores.as_ptr() as *const __m128i);
 
             for i in 0..max_tlen as usize {
-                // Load target base for this row
-                let mut target_bases = [0u8; SIMD_WIDTH];
-                for lane in 0..SIMD_WIDTH {
-                    if i < tlen[lane] as usize {
-                        target_bases[lane] = target_soa[i * SIMD_WIDTH + lane];
-                    } else {
-                        target_bases[lane] = 0xFF;
-                    }
-                }
-
                 // Update band bounds per lane
                 let mut current_beg = beg;
                 let mut current_end = end;
@@ -1315,6 +1325,10 @@ impl BandedPairWiseSW {
                 // Process columns within band
                 let global_beg = *current_beg.iter().min().unwrap_or(&0) as usize;
                 let global_end = *current_end.iter().max().unwrap_or(&0) as usize;
+
+                // Load target base for this row as 16-bit SIMD vector (vectorized scoring)
+                let t_vec =
+                    _mm_loadu_si128(target_soa_16.as_ptr().add(i * SIMD_WIDTH) as *const __m128i);
 
                 let mut h1_vec = zero_vec; // H(i, j-1) for first column
 
@@ -1340,27 +1354,27 @@ impl BandedPairWiseSW {
                     let e_vec =
                         _mm_loadu_si128(e_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m128i);
 
-                    // Compute match/mismatch score
-                    let mut match_scores = [0i16; SIMD_WIDTH];
-                    for lane in 0..SIMD_WIDTH {
-                        if terminated[lane]
-                            || j >= current_end[lane] as usize
-                            || j < current_beg[lane] as usize
-                        {
-                            match_scores[lane] = 0;
-                            continue;
-                        }
-                        let qbase = query_soa[j * SIMD_WIDTH + lane];
-                        let tbase = target_bases[lane];
-                        if qbase >= 5 || tbase >= 5 || qbase == 0xFF || tbase == 0xFF {
-                            match_scores[lane] = self.w_ambig as i16;
-                        } else if qbase == tbase {
-                            match_scores[lane] = self.w_match as i16;
-                        } else {
-                            match_scores[lane] = self.w_mismatch as i16;
-                        }
-                    }
-                    let match_vec = _mm_loadu_si128(match_scores.as_ptr() as *const __m128i);
+                    // Vectorized match/mismatch score computation (BWA-MEM2 compare-and-blend pattern)
+                    // Load query bases as 16-bit vector
+                    let q_vec =
+                        _mm_loadu_si128(query_soa_16.as_ptr().add(j * SIMD_WIDTH) as *const __m128i);
+
+                    // Compare query and target bases for equality
+                    // cmpeq returns 0xFFFF for equal, 0x0000 otherwise
+                    let cmp_eq = _mm_cmpeq_epi16(q_vec, t_vec);
+
+                    // Blend: select match_score where equal, mismatch_score where not
+                    // blendv_epi8 selects from first arg where mask bit is 0, second arg where 1
+                    let score_vec = _mm_blendv_epi8(mismatch_score_vec, match_score_vec, cmp_eq);
+
+                    // Handle ambiguous bases (base value > 3 indicates N or padding)
+                    // This matches the C++ pattern: max(q, t) > 3 means ambiguous
+                    let q_gt3 = _mm_cmpgt_epi16(q_vec, three_vec);
+                    let t_gt3 = _mm_cmpgt_epi16(t_vec, three_vec);
+                    let ambig_mask = _mm_or_si128(q_gt3, t_gt3);
+
+                    // Apply ambiguous score where either base is ambiguous
+                    let match_vec = _mm_blendv_epi8(score_vec, ambig_score_vec, ambig_mask);
 
                     // M = H(i-1, j-1) + match/mismatch score
                     let m_vec = _mm_add_epi16(h00_vec, match_vec);
