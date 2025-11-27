@@ -592,7 +592,8 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     mat: &[i8; 25],                               // Scoring matrix (5x5 for A, C, G, T, N)
     _m: i32,                                      // Matrix dimension (typically 5)
 ) -> Vec<OutScore> {
-    use std::arch::x86_64::*;
+    // Use SimdEngine256 abstraction instead of raw intrinsics
+    use crate::compute::simd_abstraction::SimdEngine;
 
     const SIMD_WIDTH: usize = 16; // 256-bit / 16-bit = 16 lanes
     const MAX_SEQ_LEN: usize = 512; // 16-bit supports longer sequences
@@ -700,24 +701,24 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     let gscores = vec![0i16; SIMD_WIDTH];
     let max_ie = vec![0i16; SIMD_WIDTH];
 
-    // SIMD constants (16-bit)
-    let zero_vec = _mm256_setzero_si256();
+    // SIMD constants (16-bit) - using SimdEngine256 abstraction
+    let zero_vec = Engine::setzero_epi16();
     let oe_del = (o_del + e_del) as i16;
     let oe_ins = (o_ins + e_ins) as i16;
-    let oe_del_vec = _mm256_set1_epi16(oe_del);
-    let oe_ins_vec = _mm256_set1_epi16(oe_ins);
-    let e_del_vec = _mm256_set1_epi16(e_del as i16);
-    let e_ins_vec = _mm256_set1_epi16(e_ins as i16);
+    let oe_del_vec = Engine::set1_epi16(oe_del);
+    let oe_ins_vec = Engine::set1_epi16(oe_ins);
+    let e_del_vec = Engine::set1_epi16(e_del as i16);
+    let e_ins_vec = Engine::set1_epi16(e_ins as i16);
 
     // Vectorized scoring constants (matching BWA-MEM2 compare-and-blend approach)
     // Extract match/mismatch/ambig scores from scoring matrix
     let match_score = mat[0] as i16; // mat[0] = A vs A = match score
     let mismatch_score = mat[1] as i16; // mat[1] = A vs C = mismatch score
     let ambig_score = mat[4 * 5 + 4] as i16; // mat[24] = N vs N = ambig score
-    let match_score_vec = _mm256_set1_epi16(match_score);
-    let mismatch_score_vec = _mm256_set1_epi16(mismatch_score);
-    let ambig_score_vec = _mm256_set1_epi16(ambig_score);
-    let three_vec = _mm256_set1_epi16(3); // Threshold for ambiguous base detection
+    let match_score_vec = Engine::set1_epi16(match_score);
+    let mismatch_score_vec = Engine::set1_epi16(mismatch_score);
+    let ambig_score_vec = Engine::set1_epi16(ambig_score);
+    let three_vec = Engine::set1_epi16(3); // Threshold for ambiguous base detection
 
     // Band tracking
     let mut beg = [0i16; SIMD_WIDTH];
@@ -754,15 +755,18 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     // Step 4: Main DP Loop (16-bit SIMD)
     // ==================================================================
 
-    let mut max_score_vec = _mm256_loadu_si256(max_scores.as_ptr() as *const __m256i);
+    // Use type alias for brevity in pointer casts
+    type Vec16 = std::arch::x86_64::__m256i;
+
+    let mut max_score_vec = Engine::loadu_si128_16(max_scores.as_ptr() as *const Vec16);
     // SIMD vectors for position tracking (initialized to -1)
-    let mut max_i_vec = _mm256_set1_epi16(-1);
-    let mut max_j_vec = _mm256_set1_epi16(-1);
+    let mut max_i_vec = Engine::set1_epi16(-1);
+    let mut max_j_vec = Engine::set1_epi16(-1);
 
     for i in 0..max_tlen as usize {
         // Load target bases for this row as 16-bit SIMD vector
         // (vectorized load instead of per-lane scalar loop)
-        let t_vec = _mm256_loadu_si256(target_soa_16.as_ptr().add(i * SIMD_WIDTH) as *const __m256i);
+        let t_vec = Engine::loadu_si128_16(target_soa_16.as_ptr().add(i * SIMD_WIDTH) as *const Vec16);
 
         // Update band bounds per lane
         let mut current_beg = beg;
@@ -812,8 +816,8 @@ pub unsafe fn simd_banded_swa_batch16_int16(
         for j in global_beg..global_end.min(MAX_SEQ_LEN) {
             // Load H(i-1, j-1) from h_matrix (wavefront storage pattern)
             // and E from e_matrix
-            let h00_vec = _mm256_loadu_si256(h_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m256i);
-            let e_vec = _mm256_loadu_si256(e_matrix.as_ptr().add(j * SIMD_WIDTH) as *const __m256i);
+            let h00_vec = Engine::loadu_si128_16(h_matrix.as_ptr().add(j * SIMD_WIDTH) as *const Vec16);
+            let e_vec = Engine::loadu_si128_16(e_matrix.as_ptr().add(j * SIMD_WIDTH) as *const Vec16);
 
             // ==================================================================
             // VECTORIZED SCORING (BWA-MEM2 compare-and-blend approach)
@@ -822,48 +826,48 @@ pub unsafe fn simd_banded_swa_batch16_int16(
             // Reference: BWA-MEM2 MAIN_CODE16 macro in bandedSWA.cpp:327-346
 
             // Load query bases for column j as 16-bit SIMD vector
-            let q_vec = _mm256_loadu_si256(query_soa_16.as_ptr().add(j * SIMD_WIDTH) as *const __m256i);
+            let q_vec = Engine::loadu_si128_16(query_soa_16.as_ptr().add(j * SIMD_WIDTH) as *const Vec16);
 
             // Step 1: Compare bases for equality (0xFFFF where equal, 0x0000 otherwise)
-            let cmp_eq = _mm256_cmpeq_epi16(q_vec, t_vec);
+            let cmp_eq = Engine::cmpeq_epi16(q_vec, t_vec);
 
             // Step 2: Select match or mismatch score based on comparison
-            // _mm256_blendv_epi8 uses byte MSB: cmp_eq=0xFFFF -> both bytes MSB=1 -> select match
-            let score_vec = _mm256_blendv_epi8(mismatch_score_vec, match_score_vec, cmp_eq);
+            // blendv_epi8 uses byte MSB: cmp_eq=0xFFFF -> both bytes MSB=1 -> select match
+            let score_vec = Engine::blendv_epi8(mismatch_score_vec, match_score_vec, cmp_eq);
 
             // Step 3: Handle ambiguous bases (either base > 3)
             // If q > 3 OR t > 3, use ambig_score instead
-            let q_gt3 = _mm256_cmpgt_epi16(q_vec, three_vec); // 0xFFFF where q > 3
-            let t_gt3 = _mm256_cmpgt_epi16(t_vec, three_vec); // 0xFFFF where t > 3
-            let ambig_mask = _mm256_or_si256(q_gt3, t_gt3); // 0xFFFF where either > 3
+            let q_gt3 = Engine::cmpgt_epi16(q_vec, three_vec); // 0xFFFF where q > 3
+            let t_gt3 = Engine::cmpgt_epi16(t_vec, three_vec); // 0xFFFF where t > 3
+            let ambig_mask = Engine::or_si128(q_gt3, t_gt3); // 0xFFFF where either > 3
 
             // Final match/mismatch/ambig score selection
-            let match_vec = _mm256_blendv_epi8(score_vec, ambig_score_vec, ambig_mask);
+            let match_vec = Engine::blendv_epi8(score_vec, ambig_score_vec, ambig_mask);
 
             // M = H(i-1, j-1) + match/mismatch score
-            let m_vec = _mm256_add_epi16(h00_vec, match_vec);
+            let m_vec = Engine::add_epi16(h00_vec, match_vec);
 
             // H(i,j) = max(M, E, F, 0)
-            let h11_vec = _mm256_max_epi16(m_vec, e_vec);
-            let h11_vec = _mm256_max_epi16(h11_vec, f_vec);
-            let h11_vec = _mm256_max_epi16(h11_vec, zero_vec);
+            let h11_vec = Engine::max_epi16(m_vec, e_vec);
+            let h11_vec = Engine::max_epi16(h11_vec, f_vec);
+            let h11_vec = Engine::max_epi16(h11_vec, zero_vec);
 
             // Store h1_vec (H(i, j-1) from previous column) into h_matrix[j]
             // This maintains the wavefront pattern for the next row
-            _mm256_storeu_si256(h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m256i, h1_vec);
+            Engine::storeu_si128_16(h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut Vec16, h1_vec);
 
             // Compute E(i+1, j) = max(M - oe_del, E - e_del)
-            let e_from_m = _mm256_subs_epi16(m_vec, oe_del_vec);
-            let e_from_e = _mm256_subs_epi16(e_vec, e_del_vec);
-            let new_e_vec = _mm256_max_epi16(e_from_m, e_from_e);
-            let new_e_vec = _mm256_max_epi16(new_e_vec, zero_vec);
-            _mm256_storeu_si256(e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m256i, new_e_vec);
+            let e_from_m = Engine::subs_epi16(m_vec, oe_del_vec);
+            let e_from_e = Engine::subs_epi16(e_vec, e_del_vec);
+            let new_e_vec = Engine::max_epi16(e_from_m, e_from_e);
+            let new_e_vec = Engine::max_epi16(new_e_vec, zero_vec);
+            Engine::storeu_si128_16(e_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut Vec16, new_e_vec);
 
             // Compute F(i, j+1) = max(M - oe_ins, F - e_ins)
-            let f_from_m = _mm256_subs_epi16(m_vec, oe_ins_vec);
-            let f_from_f = _mm256_subs_epi16(f_vec, e_ins_vec);
-            f_vec = _mm256_max_epi16(f_from_m, f_from_f);
-            f_vec = _mm256_max_epi16(f_vec, zero_vec);
+            let f_from_m = Engine::subs_epi16(m_vec, oe_ins_vec);
+            let f_from_f = Engine::subs_epi16(f_vec, e_ins_vec);
+            f_vec = Engine::max_epi16(f_from_m, f_from_f);
+            f_vec = Engine::max_epi16(f_vec, zero_vec);
 
             // ==================================================================
             // VECTORIZED MAX TRACKING (eliminates scalar loop)
@@ -872,26 +876,26 @@ pub unsafe fn simd_banded_swa_batch16_int16(
             // This replaces the 16-iteration scalar loop with ~5 SIMD instructions
 
             // Compare h11 > max_score (0xFFFF where true)
-            let cmp_gt = _mm256_cmpgt_epi16(h11_vec, max_score_vec);
+            let cmp_gt = Engine::cmpgt_epi16(h11_vec, max_score_vec);
 
             // Update max_score_vec where h11 > current max
-            max_score_vec = _mm256_max_epi16(h11_vec, max_score_vec);
+            max_score_vec = Engine::max_epi16(h11_vec, max_score_vec);
 
             // Broadcast current i and j to SIMD vectors
-            let i_vec = _mm256_set1_epi16(i as i16);
-            let j_vec = _mm256_set1_epi16(j as i16);
+            let i_vec = Engine::set1_epi16(i as i16);
+            let j_vec = Engine::set1_epi16(j as i16);
 
             // Update max_i_vec and max_j_vec where comparison was true
-            // _mm256_blendv_epi8 uses byte MSB: cmp_gt=0xFFFF -> both bytes MSB=1 -> select new
-            max_i_vec = _mm256_blendv_epi8(max_i_vec, i_vec, cmp_gt);
-            max_j_vec = _mm256_blendv_epi8(max_j_vec, j_vec, cmp_gt);
+            // blendv_epi8 uses byte MSB: cmp_gt=0xFFFF -> both bytes MSB=1 -> select new
+            max_i_vec = Engine::blendv_epi8(max_i_vec, i_vec, cmp_gt);
+            max_j_vec = Engine::blendv_epi8(max_j_vec, j_vec, cmp_gt);
 
             // ==================================================================
             // VECTORIZED ROW MAX TRACKING (for Z-drop)
             // ==================================================================
             // Track maximum H score in current row for all 16 lanes simultaneously.
             // This replaces the nested loop that would scan h_matrix after the row.
-            row_max_vec = _mm256_max_epi16(row_max_vec, h11_vec);
+            row_max_vec = Engine::max_epi16(row_max_vec, h11_vec);
 
             // h1_vec = H(i, j) for the next column
             h1_vec = h11_vec;
@@ -905,12 +909,12 @@ pub unsafe fn simd_banded_swa_batch16_int16(
 
         // Extract max scores for Z-drop comparison
         let mut max_score_vals = [0i16; SIMD_WIDTH];
-        _mm256_storeu_si256(max_score_vals.as_mut_ptr() as *mut __m256i, max_score_vec);
+        Engine::storeu_si128_16(max_score_vals.as_mut_ptr() as *mut Vec16, max_score_vec);
 
         if zdrop > 0 {
             // Extract row maxes (computed incrementally during column loop)
             let mut row_max_vals = [0i16; SIMD_WIDTH];
-            _mm256_storeu_si256(row_max_vals.as_mut_ptr() as *mut __m256i, row_max_vec);
+            Engine::storeu_si128_16(row_max_vals.as_mut_ptr() as *mut Vec16, row_max_vec);
 
             // Check Z-drop condition for each lane (O(16) not O(16 × band))
             for lane in 0..SIMD_WIDTH {
@@ -931,9 +935,9 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     // ==================================================================
 
     // Extract final values from SIMD vectors
-    _mm256_storeu_si256(max_scores.as_mut_ptr() as *mut __m256i, max_score_vec);
-    _mm256_storeu_si256(max_i.as_mut_ptr() as *mut __m256i, max_i_vec);
-    _mm256_storeu_si256(max_j.as_mut_ptr() as *mut __m256i, max_j_vec);
+    Engine::storeu_si128_16(max_scores.as_mut_ptr() as *mut Vec16, max_score_vec);
+    Engine::storeu_si128_16(max_i.as_mut_ptr() as *mut Vec16, max_i_vec);
+    Engine::storeu_si128_16(max_j.as_mut_ptr() as *mut Vec16, max_j_vec);
 
     let mut results = Vec::with_capacity(batch_size);
     for lane in 0..batch_size {

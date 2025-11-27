@@ -348,6 +348,12 @@ pub unsafe fn batch_ksw_align_avx2(
         // We need:
         //   mask_lo_16: 16 16-bit masks for sequences 0-15
         //   mask_hi_16: 16 16-bit masks for sequences 16-31
+        //
+        // NOTE: This section uses raw intrinsics (_mm256_extracti128_si256, _mm_unpacklo_epi8,
+        // _mm256_set_m128i) because these operations are AVX2-specific lane manipulations that
+        // don't have equivalents in the SimdEngine256 abstraction. The abstraction focuses on
+        // portable operations with ARM NEON equivalents; these 128-bit lane extractions and
+        // reconstructions are inherently x86-specific. This is an acceptable deviation.
 
         // Extract each 128-bit lane
         let cmp_lo_128 = std::arch::x86_64::_mm256_extracti128_si256(cmp0_vec, 0);

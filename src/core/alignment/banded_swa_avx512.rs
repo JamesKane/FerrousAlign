@@ -599,6 +599,13 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     mat: &[i8; 25],                               // Scoring matrix (5x5 for A, C, G, T, N)
     _m: i32,                                      // Matrix dimension (typically 5)
 ) -> Vec<OutScore> {
+    // NOTE: This function intentionally uses raw AVX-512 intrinsics rather than SimdEngine512.
+    // Reason: AVX-512's native __mmask32 operations (_mm512_cmpeq_epi16_mask,
+    // _mm512_mask_blend_epi16, etc.) are a key performance advantage over vector-based masks.
+    // The SimdEngine512 trait uses vector masks (Vec8/Vec16 with 0xFF/0x00 bytes) which would
+    // require costly mask<->vector conversions and lose the benefits of native mask operations.
+    // This is an acceptable deviation from the abstraction guideline for performance-critical
+    // AVX-512-specific code paths.
     use std::arch::x86_64::*;
 
     const SIMD_WIDTH: usize = 32; // 512-bit / 16-bit = 32 lanes
