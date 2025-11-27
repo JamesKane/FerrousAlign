@@ -4,8 +4,8 @@
 // This module provides a clean separation between alignment computation
 // and I/O concerns.
 
-use crate::alignment::finalization::{Alignment, sam_flags};
-use crate::alignment::mem_opt::MemOpt;
+use crate::pipelines::linear::finalization::{Alignment, sam_flags};
+use crate::pipelines::linear::mem_opt::MemOpt;
 use std::io::Write;
 
 // ============================================================================

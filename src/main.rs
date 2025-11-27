@@ -8,9 +8,9 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 use clap::{Parser, Subcommand};
-use ferrous_align::alignment;
-use ferrous_align::alignment::mem_opt::MemCliOptions;
-use ferrous_align::index::bwa_index;
+use ferrous_align::pipelines::linear;
+use ferrous_align::pipelines::linear::mem_opt::MemCliOptions;
+use ferrous_align::pipelines::linear::index::bwa_index;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -101,7 +101,7 @@ fn main() {
             }
 
             // The mem::main_mem function now directly accepts MemCliOptions
-            alignment::mem::main_mem(&options).expect("FerrousAlign encountered a fatal error.");
+            linear::mem::main_mem(&options).expect("FerrousAlign encountered a fatal error.");
         }
     }
 }

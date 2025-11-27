@@ -11,7 +11,7 @@
 // - Removed debug logging checks from hot path
 
 use super::index::BwaIndex;
-use crate::alignment::seeding::SMEM;
+use super::super::seeding::SMEM;
 
 // Constants from FMI_search.h
 const CP_MASK: u64 = 63;

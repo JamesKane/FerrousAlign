@@ -4,7 +4,7 @@
 //! in the hot alignment path. Each thread gets its own workspace that is reused
 //! across reads, reducing allocation overhead by ~10%.
 
-use crate::alignment::seeding::SMEM;
+use crate::pipelines::linear::seeding::SMEM;
 use std::cell::RefCell;
 
 /// Maximum expected read length for pre-allocation

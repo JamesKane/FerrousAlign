@@ -2,18 +2,26 @@
 #![cfg_attr(feature = "avx512", feature(stdarch_x86_avx512))]
 #![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
 
-pub mod alignment;
-pub mod compute; // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
-pub mod defaults;
-pub mod utils;
+// Core reusable components (reference-agnostic)
+pub mod core;
 
-// New modules
-pub mod index;
-pub mod io;
+// Alignment pipelines (reference-specific)
+pub mod pipelines;
+
+// Shared defaults
+pub mod defaults;
+
+// Re-exports for backwards compatibility
+// These allow existing code to use the old paths while we transition
+pub use core::alignment;
+pub use core::compute;
+pub use core::io;
+pub use core::utils;
+pub use pipelines::linear::index;
 
 // Test modules
 #[cfg(test)]
-#[path = "io/fastq_reader_test.rs"]
+#[path = "core/io/fastq_reader_test.rs"]
 mod fastq_reader_test;
 
 // Note: SAIS implementation removed - we use the `bio` crate's suffix array construction instead

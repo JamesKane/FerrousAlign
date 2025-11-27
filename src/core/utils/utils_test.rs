@@ -9,7 +9,7 @@ mod tests {
     use std::fs;
     use std::io::{self, Write};
     // Add Write trait
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     // Helper for creating temporary files
     fn create_temp_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<PathBuf> {

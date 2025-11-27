@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::index::bwt::Bwt;
+    use crate::pipelines::linear::index::bwt::Bwt;
     use std::fs;
     use std::io::{self, Read};
     use std::path::Path;

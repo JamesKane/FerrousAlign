@@ -1,7 +1,7 @@
-use crate::alignment::mem_opt::{MemCliOptions, MemOpt};
-use crate::alignment::paired::paired_end::process_paired_end;
-use crate::alignment::single_end::process_single_end;
-use crate::index::index::BwaIndex;
+use super::mem_opt::{MemCliOptions, MemOpt};
+use super::paired::paired_end::process_paired_end;
+use super::single_end::process_single_end;
+use super::index::index::BwaIndex;
 use anyhow::Result;
 use std::fs::File;
 use std::io::{self, Write};
@@ -74,7 +74,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // Output options
     opt.t = opts.min_score;
     let (max_xa_hits, max_xa_hits_alt) =
-        crate::alignment::mem_opt::parse_xa_hits(&opts.max_xa_hits) // Corrected path
+        super::mem_opt::parse_xa_hits(&opts.max_xa_hits) // Corrected path
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     opt.max_xa_hits = max_xa_hits;
     opt.max_xa_hits_alt = max_xa_hits_alt;

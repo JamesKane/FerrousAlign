@@ -1,20 +1,20 @@
-use crate::alignment::chaining::Chain;
-use crate::alignment::chaining::chain_seeds;
-use crate::alignment::chaining::filter_chains;
-use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::mark_secondary_alignments;
-use crate::alignment::finalization::sam_flags;
-use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::seeding::SMEM;
-use crate::alignment::seeding::Seed;
-use crate::alignment::seeding::forward_only_seed_strategy;
-use crate::alignment::seeding::generate_smems_for_strand;
-use crate::alignment::seeding::generate_smems_from_position;
+use super::chaining::Chain;
+use super::chaining::chain_seeds;
+use super::chaining::filter_chains;
+use super::finalization::Alignment;
+use super::finalization::mark_secondary_alignments;
+use super::finalization::sam_flags;
+use super::mem_opt::MemOpt;
+use super::seeding::SMEM;
+use super::seeding::Seed;
+use super::seeding::forward_only_seed_strategy;
+use super::seeding::generate_smems_for_strand;
+use super::seeding::generate_smems_from_position;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::alignment::workspace::with_workspace;
 use crate::compute::ComputeBackend;
-use crate::index::index::BwaIndex;
+use super::index::index::BwaIndex;
 
 // ============================================================================
 // SEED GENERATION (SMEM EXTRACTION)
@@ -452,7 +452,7 @@ pub fn find_seeds(
 
         // Use the new get_sa_entries function to get multiple reference positions
         // It samples evenly across the entire BWT interval using floating-point step
-        let ref_positions = crate::alignment::seeding::get_sa_entries(
+        let ref_positions = super::seeding::get_sa_entries(
             bwa_idx,
             smem.bwt_interval_start,
             smem.interval_size,
@@ -681,7 +681,7 @@ pub fn align_read_deferred(
     read_id: u64,
     skip_secondary_marking: bool,
 ) -> Vec<Alignment> {
-    use crate::alignment::region::{extend_chains_to_regions, generate_cigar_from_region};
+    use super::region::{extend_chains_to_regions, generate_cigar_from_region};
 
     // Phase 1: Seeding (same as standard pipeline)
     let (seeds, encoded_query, encoded_query_rc) = find_seeds(bwa_idx, query_name, query_seq, opt);
@@ -846,7 +846,7 @@ pub fn align_read_deferred(
     }
 
     // Apply standard redundancy removal (matching finalize_candidates behavior)
-    crate::alignment::finalization::remove_redundant_alignments(&mut alignments, opt);
+    super::finalization::remove_redundant_alignments(&mut alignments, opt);
 
     if alignments.is_empty() {
         log::debug!(
@@ -874,9 +874,9 @@ pub fn align_read_deferred(
 ///
 /// Matches BWA-MEM2's mem_sort_dedup_patch behavior for regions.
 fn remove_redundant_regions(
-    regions: Vec<crate::alignment::region::AlignmentRegion>,
+    regions: Vec<super::region::AlignmentRegion>,
     mask_level: f32,
-) -> Vec<crate::alignment::region::AlignmentRegion> {
+) -> Vec<super::region::AlignmentRegion> {
     if regions.len() <= 1 {
         return regions;
     }
@@ -941,9 +941,9 @@ fn create_unmapped_alignment(query_name: &str) -> Alignment {
 
 #[cfg(test)]
 mod tests {
-    use crate::alignment::mem_opt::MemOpt;
-    use crate::alignment::pipeline::sam_flags;
-    use crate::index::index::BwaIndex;
+    use super::super::mem_opt::MemOpt;
+    use super::super::finalization::sam_flags;
+    use super::super::index::index::BwaIndex;
 
     // ========================================================================
     // CIGAR REFERENCE LENGTH CALCULATION TESTS

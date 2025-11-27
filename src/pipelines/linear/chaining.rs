@@ -1,5 +1,5 @@
-use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::seeding::Seed;
+use super::mem_opt::MemOpt;
+use super::seeding::Seed;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]

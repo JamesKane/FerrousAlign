@@ -11,12 +11,12 @@
 //! Reference: BWA-MEM2 `mem_chain2aln_across_reads_V2()` in bwamem.cpp
 
 use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
-use crate::alignment::chaining::{cal_max_gap, Chain};
-use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::region::{ChainExtensionMapping, SeedExtensionMapping};
-use crate::alignment::seeding::Seed;
+use super::chaining::{cal_max_gap, Chain};
+use super::mem_opt::MemOpt;
+use super::region::{ChainExtensionMapping, SeedExtensionMapping};
+use super::seeding::Seed;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::index::index::BwaIndex;
+use super::index::index::BwaIndex;
 use std::sync::Arc;
 
 /// Direction of extension from seed
@@ -665,9 +665,9 @@ pub fn convert_batch_results_to_outscores(
 //
 // ============================================================================
 
-use crate::alignment::finalization::{mark_secondary_alignments, Alignment};
-use crate::alignment::pipeline::{build_and_filter_chains, find_seeds};
-use crate::alignment::region::{generate_cigar_from_region, merge_extension_scores_to_regions};
+use super::finalization::{mark_secondary_alignments, Alignment};
+use super::pipeline::{build_and_filter_chains, find_seeds};
+use super::region::{generate_cigar_from_region, merge_extension_scores_to_regions};
 use rayon::prelude::*;
 
 /// Process a batch of reads using cross-read SIMD batching
@@ -890,7 +890,7 @@ pub fn process_batch_cross_read(
                 };
 
                 let flag = if region.is_rev {
-                    crate::alignment::finalization::sam_flags::REVERSE
+                    super::finalization::sam_flags::REVERSE
                 } else {
                     0
                 };
@@ -961,7 +961,7 @@ pub fn process_batch_cross_read(
 
 /// Create an unmapped alignment record (internal helper)
 fn create_unmapped_alignment_internal(query_name: &str) -> Alignment {
-    use crate::alignment::finalization::sam_flags;
+    use super::finalization::sam_flags;
 
     Alignment {
         query_name: query_name.to_string(),
@@ -1236,7 +1236,7 @@ fn process_sub_batch_internal(
                 };
 
                 let flag = if region.is_rev {
-                    crate::alignment::finalization::sam_flags::REVERSE
+                    super::finalization::sam_flags::REVERSE
                 } else {
                     0
                 };

@@ -1,5 +1,5 @@
-use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::sam_flags;
+use super::super::finalization::Alignment;
+use super::super::finalization::sam_flags;
 
 // Insert size statistics module
 //

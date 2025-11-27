@@ -1,21 +1,17 @@
+//! Core alignment kernels - SIMD-accelerated Smith-Waterman implementations.
+//!
+//! These modules provide the computational heart of the aligner and are
+//! agnostic to reference structure. They can be used for aligning reads
+//! to paths extracted from graphs or linear references.
+
 pub mod banded_swa;
 pub mod banded_swa_sse_neon; // Baseline 128-bit vertical SIMD kernel (SSE/NEON)
-pub mod batch_extension; // Cross-read batched extension for SIMD utilization
-pub mod chaining;
+// Note: batch_extension moved to pipelines::linear since it depends on linear-specific types
 pub mod cigar;
-pub mod coordinates;
 pub mod edit_distance;
-pub mod finalization;
 pub mod ksw_affine_gap;
 pub mod kswv_batch; // Horizontal SIMD batching infrastructure
 pub mod kswv_sse_neon; // Baseline 128-bit horizontal SIMD kernel
-pub mod mem;
-pub mod mem_opt;
-pub mod paired;
-pub mod pipeline;
-pub mod region;
-pub mod seeding;
-pub mod single_end;
 pub mod utils;
 pub mod workspace; // Thread-local buffer pools for allocation reuse
 

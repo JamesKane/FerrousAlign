@@ -19,13 +19,13 @@
 
 use super::insert_size::InsertSizeStats;
 use crate::alignment::edit_distance;
-use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::sam_flags;
+use super::super::finalization::Alignment;
+use super::super::finalization::sam_flags;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
 use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
 use crate::compute::simd_abstraction::SimdEngine128;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::index::index::BwaIndex;
+use super::super::index::index::BwaIndex;
 use rayon::prelude::*;
 
 /// A mate rescue SW job prepared for batch execution

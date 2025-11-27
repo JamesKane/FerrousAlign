@@ -10,14 +10,14 @@
 // - Selection: sam_output::select_single_end_alignments() filters output
 // - Output: sam_output::write_sam_record() writes to stream
 
-use crate::alignment::batch_extension::{process_batch_cross_read, process_batch_parallel_subbatch};
-use crate::alignment::finalization::Alignment;
-use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::pipeline::align_read_deferred;
+use super::batch_extension::{process_batch_cross_read, process_batch_parallel_subbatch};
+use super::finalization::Alignment;
+use super::mem_opt::MemOpt;
+use super::pipeline::align_read_deferred;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::compute::ComputeBackend;
 use crate::compute::ComputeContext;
-use crate::index::index::BwaIndex;
+use super::index::index::BwaIndex;
 use crate::io::fastq_reader::FastqReader;
 use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
@@ -229,7 +229,7 @@ pub fn process_single_end(
             let rg_id = opt
                 .read_group
                 .as_ref()
-                .and_then(|rg| crate::alignment::mem_opt::MemOpt::extract_rg_id(rg));
+                .and_then(|rg| super::mem_opt::MemOpt::extract_rg_id(rg));
 
             for (read_idx, mut alignment_vec) in alignments.into_iter().enumerate() {
                 // Get original seq/qual from batch

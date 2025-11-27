@@ -17,15 +17,15 @@ use super::mate_rescue::{
     result_to_alignment,
 };
 use super::pairing::mem_pair;
-use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::mark_secondary_alignments;
-use crate::alignment::finalization::sam_flags;
-use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::pipeline::align_read_deferred;
+use super::super::finalization::Alignment;
+use super::super::finalization::mark_secondary_alignments;
+use super::super::finalization::sam_flags;
+use super::super::mem_opt::MemOpt;
+use super::super::pipeline::align_read_deferred;
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::index::index::BwaIndex;
+use super::super::index::index::BwaIndex;
 use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
@@ -918,7 +918,7 @@ fn format_batch_paired_parallel(
     let rg_id = opt
         .read_group
         .as_ref()
-        .and_then(|rg| crate::alignment::mem_opt::MemOpt::extract_rg_id(rg));
+        .and_then(|rg| super::super::mem_opt::MemOpt::extract_rg_id(rg));
 
     // Process all pairs in parallel - this is where the CPU work happens
     batch_pairs

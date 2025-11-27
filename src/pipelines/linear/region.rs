@@ -22,12 +22,12 @@
 // ============================================================================
 
 use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
-use crate::alignment::chaining::{Chain, cal_max_gap};
+use super::chaining::{Chain, cal_max_gap};
 use crate::alignment::edit_distance;
-use crate::alignment::mem_opt::MemOpt;
-use crate::alignment::seeding::Seed;
+use super::mem_opt::MemOpt;
+use super::seeding::Seed;
 use crate::compute::ComputeBackend;
-use crate::index::index::BwaIndex;
+use super::index::index::BwaIndex;
 
 /// Alignment region with boundaries but NO CIGAR
 ///
@@ -944,7 +944,7 @@ fn merge_scores_to_regions(
             }
 
             // Convert FM-index position to chromosome coordinates using centralized function
-            let coords = crate::alignment::coordinates::fm_to_chromosome_coords(
+            let coords = super::coordinates::fm_to_chromosome_coords(
                 bwa_idx, region.rb, region.re,
             );
             region.rid = coords.ref_id;

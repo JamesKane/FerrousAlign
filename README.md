@@ -325,6 +325,12 @@ For developers interested in contributing or understanding the internals:
 - [ ] GPU acceleration (Metal/CUDA/ROCm)
 - [ ] Advanced alignment algorithms
 
+**v3.0.0** (~1 year out)
+- [ ] Pangenome graph alignment - align reads to reference graphs (GFA format)
+- [ ] Support for population-level variation (SNPs, indels, structural variants)
+- [ ] Graph index construction from VCF + reference FASTA
+- [ ] Compatible with minigraph/vg pangenome workflows
+
 ## License
 
 MIT License - see [LICENSE.md](LICENSE.md)

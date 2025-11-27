@@ -16,8 +16,8 @@
 
 use super::insert_size::InsertSizeStats;
 use super::insert_size::erfc_fn as erfc;
-use crate::alignment::finalization::Alignment;
-use crate::alignment::finalization::sam_flags;
+use super::super::finalization::Alignment;
+use super::super::finalization::sam_flags;
 use crate::utils::hash_64;
 
 /// Information about a single alignment for pair scoring.

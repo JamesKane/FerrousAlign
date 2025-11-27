@@ -90,32 +90,50 @@ cargo fmt -- --check
 
 **Library Modules** (`src/lib.rs`):
 ```
-pub mod alignment;        // Core alignment pipeline, including single and paired-end logic
-pub mod compute;          // Heterogeneous compute abstraction (CPU SIMD/GPU/NPU integration points)
-pub mod defaults;         // Default values for alignment parameters
-pub mod index;            // Genome index data structures (BWT, FM-Index) and management
-pub mod io;               // Readers for FASTA/FASTQ and writer for SAM output
-pub mod utils;            // General-purpose utilities
+src/
+├── core/                           # Reusable reference-agnostic components
+│   ├── alignment/                  # Alignment kernels (SW, CIGAR, etc.)
+│   ├── compute/                    # SIMD abstraction layer
+│   ├── io/                         # I/O utilities (FASTQ, SAM)
+│   └── utils/                      # General utilities
+├── pipelines/
+│   ├── linear/                     # BWA-MEM linear alignment pipeline
+│   │   ├── index/                  # FM-Index, BWT, etc.
+│   │   ├── paired/                 # Paired-end specific code
+│   │   └── *.rs                    # Pipeline stages
+│   └── graph/                      # Future pangenome pipeline (placeholder)
+└── defaults.rs
 ```
 
-Key sub-modules have been reorganized:
-- **`src/alignment/`**: `mem.rs`, `mem_opt.rs`, `single_end.rs`, and the `paired/` directory containing `paired_end.rs`, `pairing.rs`, `insert_size.rs`, `mate_rescue.rs`.
-- **`src/index/`**: `bntseq.rs`, `bwa_index.rs`, `bwt.rs`, `fm_index.rs`.
-- **`src/io/`**: `fastq_reader.rs`, `fasta_reader.rs` (replacing the old `kseq.rs`), `sam_output.rs`.
-- **`src/compute/simd_abstraction/`**: The `simd_abstraction.rs` file has been expanded into a full module containing the different SIMD engine implementations.
+**Core Modules** (`src/core/`):
+- **`core/alignment/`**: Reusable alignment kernels - `banded_swa*.rs` (SIMD SW), `ksw*.rs` (batched/affine-gap), `cigar.rs`, `edit_distance.rs`, `workspace.rs`
+- **`core/compute/`**: SIMD abstraction layer with SSE/AVX2/AVX-512/NEON backends
+- **`core/io/`**: `fastq_reader.rs`, `fasta_reader.rs`, `sam_output.rs`
+- **`core/utils/`**: General-purpose utilities (timing, hashing, binary I/O)
 
-**Alignment Submodules** (`src/alignment/`):
+**Linear Pipeline** (`src/pipelines/linear/`):
+- **`index/`**: `bntseq.rs`, `bwa_index.rs`, `bwt.rs`, `fm_index.rs`, `index.rs`
+- **`paired/`**: `paired_end.rs`, `pairing.rs`, `insert_size.rs`, `mate_rescue.rs`
+- **Pipeline stages**: `seeding.rs`, `chaining.rs`, `pipeline.rs`, `finalization.rs`, `batch_extension.rs`
+- **Entry points**: `mem.rs`, `mem_opt.rs`, `single_end.rs`
+
+**Graph Pipeline** (`src/pipelines/graph/`):
+- Placeholder for future pangenome graph alignment (see roadmap)
+
+**Core Alignment Kernels** (`src/core/alignment/`):
 ```
 pub mod banded_swa;       // SIMD Smith-Waterman (128-bit baseline)
 pub mod banded_swa_avx2;  // AVX2 256-bit Smith-Waterman (x86_64 only)
 pub mod banded_swa_avx512;// AVX-512 512-bit Smith-Waterman (feature-gated)
-pub mod chaining;         // Seed chaining with O(n²) DP
-pub mod extension;        // Banded alignment extension jobs
-pub mod finalization;     // Alignment selection, MAPQ, secondary marking
+pub mod cigar;            // CIGAR string manipulation
+pub mod edit_distance;    // NM/MD tag computation
 pub mod ksw_affine_gap;   // Affine-gap Smith-Waterman fallback
-pub mod pipeline;         // Main alignment pipeline (generate_seeds -> align_read)
-pub mod seeding;          // SMEM generation from FM-Index
+pub mod kswv_batch;       // Batched SW kernel interface
+pub mod kswv_sse_neon;    // 128-bit batched SW
+pub mod kswv_avx2;        // 256-bit batched SW (x86_64 only)
+pub mod kswv_avx512;      // 512-bit batched SW (feature-gated)
 pub mod utils;            // Base encoding, scoring matrices
+pub mod workspace;        // Thread-local workspace for SMEM buffers
 ```
 
 **External Dependencies**:
@@ -169,7 +187,7 @@ The pipeline implements a multi-kernel design matching the C++ version. Entry po
 
 **Design Philosophy**: Write-once, run-anywhere SIMD code
 
-**Platform Detection** (`src/compute/simd_abstraction/mod.rs`):
+**Platform Detection** (`src/core/compute/simd_abstraction/mod.rs`):
 ```rust
 #[cfg(target_arch = "x86_64")]
 // Native x86 intrinsics via <immintrin.h>
@@ -190,7 +208,7 @@ The pipeline implements a multi-kernel design matching the C++ version. Entry po
 - **Shifts**: `_mm_slli_epi16`, `_mm_srli_si128` (element vs byte shifts)
 - **Load/Store**: `_mm_load_si128`, `_mm_storeu_si128`
 
-**Performance Hotspot** (`popcount64()` in `src/index/fm_index.rs`):
+**Performance Hotspot** (`popcount64()` in `src/pipelines/linear/index/fm_index.rs`):
 - x86_64: Uses `_popcnt64` hardware instruction
 - ARM: Uses NEON `vcnt` + pairwise additions (`vpaddl`)
 - Called millions of times during FM-Index backward search
@@ -209,11 +227,12 @@ The pipeline implements a multi-kernel design matching the C++ version. Entry po
 
 The codebase provides clean integration points for adding GPU (Metal/CUDA/ROCm) and NPU (ANE/ONNX) acceleration. Currently, GPU and NPU backends are **NO-OPs** that fall back to CPU SIMD.
 
-**Module Structure** (`src/compute/`):
+**Module Structure** (`src/core/compute/`):
 ```
-src/compute/
-├── mod.rs          # ComputeBackend enum, detection, ComputeContext
-└── encoding.rs     # EncodingStrategy (Classic 2-bit vs ONE-HOT for NPU)
+src/core/compute/
+├── mod.rs              # ComputeBackend enum, detection, ComputeContext
+├── encoding.rs         # EncodingStrategy (Classic 2-bit vs ONE-HOT for NPU)
+└── simd_abstraction/   # SIMD engine implementations (SSE/AVX2/AVX-512/NEON)
 ```
 
 **ComputeBackend Enum** (`compute/mod.rs`):
@@ -237,29 +256,29 @@ pub enum EncodingStrategy {
 
 | Location | File | Function | Purpose |
 |----------|------|----------|---------|
-| Entry | `src/alignment/mem.rs:10-33` | `main_mem()` | Backend detection |
-| Dispatch | `src/alignment/mem.rs:230-241` | `main_mem()` | Pass context to processing |
-| Single-end | `src/alignment/single_end.rs:35-50` | `process_single_end()` | Accept compute context |
-| Paired-end | `src/alignment/paired/paired_end.rs:161-176` | `process_paired_end()` | Accept compute context |
-| Pipeline | `src/alignment/pipeline.rs:95-114` | `align_read()` | Main alignment entry |
-| Extension | `src/alignment/pipeline.rs:494-517` | `extend_chains_to_alignments()` | Stage 3 dispatch |
-| Backend Switch | `src/alignment/pipeline.rs:641-682` | `extend_chains_to_alignments()` | Route to backend |
-| Extension Docs | `src/alignment/extension.rs:1-44` | Module header | GPU/NPU implementation guide |
+| Entry | `src/pipelines/linear/mem.rs` | `main_mem()` | Backend detection |
+| Dispatch | `src/pipelines/linear/mem.rs` | `main_mem()` | Pass context to processing |
+| Single-end | `src/pipelines/linear/single_end.rs` | `process_single_end()` | Accept compute context |
+| Paired-end | `src/pipelines/linear/paired/paired_end.rs` | `process_paired_end()` | Accept compute context |
+| Pipeline | `src/pipelines/linear/pipeline.rs` | `align_read()` | Main alignment entry |
+| Extension | `src/pipelines/linear/pipeline.rs` | `extend_chains_to_alignments()` | Stage 3 dispatch |
+| Backend Switch | `src/pipelines/linear/pipeline.rs` | `extend_chains_to_alignments()` | Route to backend |
+| Extension Docs | `src/pipelines/linear/batch_extension.rs` | Module header | GPU/NPU implementation guide |
 
 **Adding a New Backend** (e.g., Metal GPU):
 
-1. **Update `compute/mod.rs`**:
+1. **Update `core/compute/mod.rs`**:
    - Remove NO-OP fallback in `effective_backend()` for your variant
    - Add detection logic in `detect_optimal_backend()`
 
-2. **Update `alignment/pipeline.rs`** (line ~659):
+2. **Update `pipelines/linear/pipeline.rs`**:
    ```rust
    ComputeBackend::Gpu => {
        execute_gpu_alignments(&gpu_context, &sw_params, &alignment_jobs)
    }
    ```
 
-3. **Implement backend kernel** (new file, e.g., `compute/gpu.rs`):
+3. **Implement backend kernel** (new file, e.g., `core/compute/gpu.rs`):
    ```rust
    pub fn execute_gpu_alignments(
        ctx: &GpuContext,
@@ -269,7 +288,7 @@ pub enum EncodingStrategy {
    ```
 
 4. **For NPU seed pre-filtering**:
-   - Use `EncodingStrategy::OneHot` in `find_seeds()` (pipeline.rs:127)
+   - Use `EncodingStrategy::OneHot` in `find_seeds()` (pipelines/linear/pipeline.rs)
    - Implement seed classifier model
    - Filter seeds before building alignment jobs
 
@@ -280,9 +299,9 @@ pub enum EncodingStrategy {
 
 ### Key Data Structures
 
-**FM-Index Tier** (`src/index/fm_index.rs`, `src/index/bwt.rs`):
+**FM-Index Tier** (`src/pipelines/linear/index/fm_index.rs`, `src/pipelines/linear/index/bwt.rs`):
 ```rust
-pub struct SMEM {                        // alignment/seeding.rs
+pub struct SMEM {                        // pipelines/linear/seeding.rs
     pub query_start: i32,                // Start position in query (0-based, inclusive)
     pub query_end: i32,                  // End position in query (0-based, exclusive)
     pub bwt_interval_start: u64,         // Start of BWT interval in suffix array
@@ -291,12 +310,12 @@ pub struct SMEM {                        // alignment/seeding.rs
     pub is_reverse_complement: bool,     // Forward or reverse strand
 }
 
-pub struct CpOcc {                       // src/index/fm_index.rs
+pub struct CpOcc {                       // src/pipelines/linear/index/fm_index.rs
     cp_count: [i64; 4],                  // Cumulative base counts at checkpoint
     one_hot_bwt_str: [u64; 4],           // One-hot encoded BWT for popcount
 }
 
-pub struct Bwt {                         // src/index/bwt.rs
+pub struct Bwt {                         // src/pipelines/linear/index/bwt.rs
     pub bwt_str: Vec<u8>,                // 2-bit packed BWT (4 bases per byte)
     pub sa_samples: Vec<u64>,            // Sampled suffix array
     pub cp_occ: Vec<CpOcc>,              // Checkpoints every 64 bases
@@ -304,9 +323,9 @@ pub struct Bwt {                         // src/index/bwt.rs
 }
 ```
 
-**Alignment Tier** (`alignment/seeding.rs`, `alignment/chaining.rs`, `alignment/finalization.rs`):
+**Alignment Tier** (`pipelines/linear/seeding.rs`, `pipelines/linear/chaining.rs`, `pipelines/linear/finalization.rs`):
 ```rust
-pub struct Seed {                        // alignment/seeding.rs
+pub struct Seed {                        // pipelines/linear/seeding.rs
     pub query_pos: i32,                  // Position in query sequence
     pub ref_pos: u64,                    // Position in reference genome
     pub len: i32,                        // Seed length
@@ -315,7 +334,7 @@ pub struct Seed {                        // alignment/seeding.rs
     pub rid: i32,                        // Reference sequence ID (-1 if spans boundaries)
 }
 
-pub struct Chain {                       // alignment/chaining.rs
+pub struct Chain {                       // pipelines/linear/chaining.rs
     pub seeds: Vec<usize>,               // Indices into sorted seeds array
     pub score: i32,                      // Chain score
     pub weight: i32,                     // Sum of seed lengths
@@ -323,7 +342,7 @@ pub struct Chain {                       // alignment/chaining.rs
     pub frac_rep: f32,                   // Fraction of repetitive seeds
 }
 
-pub struct Alignment {                   // alignment/finalization.rs
+pub struct Alignment {                   // pipelines/linear/finalization.rs
     pub query_name: String,
     pub flag: u16,                       // SAM flag bits
     pub ref_name: String,
@@ -342,7 +361,7 @@ pub struct Alignment {                   // alignment/finalization.rs
 }
 ```
 
-**Reference Tier** (`src/index/bntseq.rs`):
+**Reference Tier** (`src/pipelines/linear/index/bntseq.rs`):
 ```rust
 pub struct BntSeq {
     l_pac: u64,              // Total packed sequence length
@@ -424,11 +443,11 @@ pub struct BntAnn1 {
 - More memory efficient (single shared index vs per-thread copies)
 
 **Implementation Files**:
-- `src/alignment/single_end.rs`: Single-end batched processing with Rayon
-- `src/alignment/paired/paired_end.rs`: Paired-end batched processing with Rayon
-- `src/alignment/mem.rs`: Entry point (`main_mem()`), dispatches to single/paired-end
+- `src/pipelines/linear/single_end.rs`: Single-end batched processing with Rayon
+- `src/pipelines/linear/paired/paired_end.rs`: Paired-end batched processing with Rayon
+- `src/pipelines/linear/mem.rs`: Entry point (`main_mem()`), dispatches to single/paired-end
 - `src/main.rs`: CLI parsing, logger initialization, thread validation
-- `src/io/fastq_reader.rs`: FASTQ I/O wrapper using bio::io::fastq with gzip support
+- `src/core/io/fastq_reader.rs`: FASTQ I/O wrapper using bio::io::fastq with gzip support
 
 ### Logging and Statistics (Session 26)
 
@@ -476,8 +495,8 @@ env_logger::Builder::from_default_env()
 
 **Implementation Files**:
 - `src/main.rs`: Logger initialization, verbosity mapping
-- `src/alignment/single_end.rs`: Single-end with statistics tracking
-- `src/alignment/paired/paired_end.rs`: Paired-end with statistics tracking
+- `src/pipelines/linear/single_end.rs`: Single-end with statistics tracking
+- `src/pipelines/linear/paired/paired_end.rs`: Paired-end with statistics tracking
 
 **Usage Examples**:
 ```bash
@@ -551,13 +570,13 @@ let cigar = result.cigar_string;
 
 ## Testing Architecture
 
-**Unit Tests** (98+ tests in source files):
-- `src/index/bwt_test.rs`: FM-Index backward search, checkpoint calculation, popcount64
-- `src/io/fastq_reader_test.rs`: FASTQ parsing with bio::io::fastq, gzip support
-- `src/index/bntseq.rs` (inline tests): Reference loading and ambiguous base handling
-- `src/alignment/banded_swa.rs` (inline tests): Smith-Waterman tests including SIMD batched variants
-- `src/alignment/pipeline.rs` (inline tests): Pipeline stage tests
-- `src/alignment/mem_opt.rs` (inline tests): Command-line parameter parsing tests
+**Unit Tests** (296+ tests in source files):
+- `src/pipelines/linear/index/bwt_test.rs`: FM-Index backward search, checkpoint calculation, popcount64
+- `src/core/io/fastq_reader_test.rs`: FASTQ parsing with bio::io::fastq, gzip support
+- `src/pipelines/linear/index/bntseq.rs` (inline tests): Reference loading and ambiguous base handling
+- `src/core/alignment/banded_swa.rs` (inline tests): Smith-Waterman tests including SIMD batched variants
+- `src/pipelines/linear/pipeline.rs` (inline tests): Pipeline stage tests
+- `src/pipelines/linear/mem_opt.rs` (inline tests): Command-line parameter parsing tests
 
 **Integration Tests** (`tests/`):
 - `integration_test.rs`: End-to-end index build + single-end alignment
@@ -666,8 +685,9 @@ let cigar = result.cigar_string;
 **Future Enhancements**:
 - Apple Acceleration framework integration (vDSP for matrix ops)
 - Memory-mapped index loading (reduce startup time)
-- GPU acceleration via Metal (Apple Silicon) or CUDA - **Integration points ready in `src/compute/`**
-- NPU seed pre-filtering via ANE/ONNX - **Integration points ready, ONE-HOT encoding in `src/compute/encoding.rs`**
+- GPU acceleration via Metal (Apple Silicon) or CUDA - **Integration points ready in `src/core/compute/`**
+- NPU seed pre-filtering via ANE/ONNX - **Integration points ready, ONE-HOT encoding in `src/core/compute/encoding.rs`**
+- Pangenome graph alignment (`src/pipelines/graph/`) - **Placeholder created for future implementation**
 
 ## Development Workflow
 
@@ -691,10 +711,10 @@ let cigar = result.cigar_string;
 - Check SIMD codegen: `cargo rustc --release -- --emit asm`
 
 **Common Development Tasks**:
-- Add new SIMD intrinsic: Update `src/compute/simd_abstraction/mod.rs` with both x86_64 and aarch64 implementations
-- Modify alignment scoring: Edit constants in `src/alignment/banded_swa.rs`
-- Change index format: Update serialization in `src/index/bwa_index.rs` and `src/index/bwt.rs`
-- Add SAM tags: Modify output formatting in `src/alignment/finalization.rs`
+- Add new SIMD intrinsic: Update `src/core/compute/simd_abstraction/mod.rs` with both x86_64 and aarch64 implementations
+- Modify alignment scoring: Edit constants in `src/core/alignment/banded_swa.rs`
+- Change index format: Update serialization in `src/pipelines/linear/index/bwa_index.rs` and `src/pipelines/linear/index/bwt.rs`
+- Add SAM tags: Modify output formatting in `src/pipelines/linear/finalization.rs`
 
 ## References
 

@@ -24,7 +24,7 @@
 //! For reverse strand alignments, we must use `re - 1` (alignment end) as input
 //! to `bns_depos` instead of `rb` (alignment start) to get the correct leftmost position.
 
-use crate::index::index::BwaIndex;
+use super::index::index::BwaIndex;
 
 /// Result of coordinate conversion from FM-index to chromosome space
 #[derive(Debug, Clone)]
