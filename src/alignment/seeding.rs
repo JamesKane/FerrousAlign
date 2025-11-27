@@ -36,7 +36,10 @@ pub struct SMEM {
 }
 
 /// Generate SMEMs for a single strand (forward or reverse complement)
-pub fn generate_smems_for_strand(
+///
+/// The `prev_array_buf` and `curr_array_buf` parameters are working buffers
+/// that should be pre-allocated and reused across calls to avoid allocation overhead.
+pub fn generate_smems_for_strand<'a>(
     bwa_idx: &BwaIndex,
     query_name: &str,
     query_len: usize,
@@ -46,10 +49,12 @@ pub fn generate_smems_for_strand(
     min_intv: u64,
     all_smems: &mut Vec<SMEM>,
     max_smem_count: &mut usize,
+    prev_array_buf: &'a mut Vec<SMEM>,
+    curr_array_buf: &'a mut Vec<SMEM>,
 ) {
-    // OPTIMIZATION: Pre-allocate buffers to avoid repeated allocations
-    let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
-    let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    // Clear buffers for reuse (retains capacity)
+    prev_array_buf.clear();
+    curr_array_buf.clear();
 
     let mut x = 0;
     while x < query_len {
@@ -342,7 +347,7 @@ pub fn generate_smems_for_strand(
                 p += 1;
             }
 
-            std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
+            std::mem::swap(prev_array_buf, curr_array_buf);
             *max_smem_count = (*max_smem_count).max(prev_array_buf.len());
 
             if !is_reverse_complement {
@@ -411,7 +416,10 @@ pub fn generate_smems_for_strand(
 
 /// Generate SMEMs from a single starting position with custom min_intv
 /// This is used for re-seeding long unique MEMs to find split alignments
-pub fn generate_smems_from_position(
+///
+/// The `prev_array_buf` and `curr_array_buf` parameters are working buffers
+/// that should be pre-allocated and reused across calls to avoid allocation overhead.
+pub fn generate_smems_from_position<'a>(
     bwa_idx: &BwaIndex,
     _query_name: &str,
     query_len: usize,
@@ -421,7 +429,13 @@ pub fn generate_smems_from_position(
     min_intv: u64,
     start_pos: usize,
     all_smems: &mut Vec<SMEM>,
+    prev_array_buf: &'a mut Vec<SMEM>,
+    curr_array_buf: &'a mut Vec<SMEM>,
 ) {
+    // Clear buffers for reuse (retains capacity)
+    prev_array_buf.clear();
+    curr_array_buf.clear();
+
     if start_pos >= query_len {
         return;
     }
@@ -443,8 +457,7 @@ pub fn generate_smems_from_position(
         is_reverse_complement,
     };
 
-    // Phase 1: Forward extension
-    let mut prev_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    // Phase 1: Forward extension (uses prev_array_buf)
 
     for j in (start_pos + 1)..query_len {
         let a = encoded_query[j];
@@ -475,7 +488,7 @@ pub fn generate_smems_from_position(
     // BWA-MEM2 reverses prev array in-place before backward iteration
     prev_array_buf.reverse();
 
-    let mut curr_array_buf: Vec<SMEM> = Vec::with_capacity(query_len);
+    // curr_array_buf is already cleared at function start
 
     for j in (0..start_pos).rev() {
         let a = encoded_query[j];
@@ -525,7 +538,7 @@ pub fn generate_smems_from_position(
             p += 1;
         }
 
-        std::mem::swap(&mut prev_array_buf, &mut curr_array_buf);
+        std::mem::swap(prev_array_buf, curr_array_buf);
 
         if prev_array_buf.is_empty() {
             break;
@@ -550,31 +563,30 @@ pub fn generate_smems_from_position(
 // used during FM-Index search and seed extension
 // ============================================================================
 
-// Function to get BWT base from cp_occ format (for loaded indices)
-// Returns 0-3 for bases A/C/G/T, or 4 for sentinel
+/// Get BWT base from cp_occ format (for loaded indices)
+/// Returns 0-3 for bases A/C/G/T, or 4 for sentinel
 pub fn get_bwt_base_from_cp_occ(cp_occ: &[CpOcc], pos: u64) -> u8 {
     let cp_block = (pos >> CP_SHIFT) as usize;
-
-    // Safety: check bounds
     if cp_block >= cp_occ.len() {
         log::warn!(
-            "get_bwt_base_from_cp_occ: cp_block {} >= cp_occ.len() {}",
+            "get_bwt_base_from_cp_occ: cp_block {} out of bounds (cp_occ.len()={})",
             cp_block,
             cp_occ.len()
         );
-        return 4; // Return sentinel for out-of-bounds
+        return 4; // Return sentinel for out of bounds
     }
 
     let offset_in_block = pos & ((1 << CP_SHIFT) - 1);
     let bit_position = 63 - offset_in_block;
 
-    // Check which of the 4 one-hot encoded arrays has a 1 at this position
+    // Check each one-hot encoded bit to find which base is set
     for base in 0..4 {
         if (cp_occ[cp_block].bwt_encoding_bits[base] >> bit_position) & 1 == 1 {
             return base as u8;
         }
     }
-    4 // Return 4 for sentinel (no bit set means sentinel position)
+
+    4 // Sentinel
 }
 
 // Function to get the next BWT position from a BWT coordinate

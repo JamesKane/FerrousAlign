@@ -17,6 +17,7 @@ pub mod region;
 pub mod seeding;
 pub mod single_end;
 pub mod utils;
+pub mod workspace; // Thread-local buffer pools for allocation reuse
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

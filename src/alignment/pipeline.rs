@@ -12,6 +12,7 @@ use crate::alignment::seeding::generate_smems_for_strand;
 use crate::alignment::seeding::generate_smems_from_position;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
+use crate::alignment::workspace::with_workspace;
 use crate::compute::ComputeBackend;
 use crate::index::index::BwaIndex;
 
@@ -59,7 +60,9 @@ pub fn find_seeds(
     }
     encoded_query_rc.reverse();
 
-    let mut all_smems: Vec<SMEM> = Vec::new();
+    // Pre-allocate for typical SMEM counts to avoid reallocations
+    // 512 accounts for initial + re-seeding + 3rd round SMEMs
+    let mut all_smems: Vec<SMEM> = Vec::with_capacity(512);
     let min_seed_len = opt.min_seed_len;
     let min_intv = 1u64;
 
@@ -92,17 +95,23 @@ pub fn find_seeds(
     // Searching with the reverse complement query would find DIFFERENT positions
     // (where the revcomp pattern matches), not the same alignment on the other strand.
     // The strand is determined later based on whether the FM-index position >= l_pac.
-    generate_smems_for_strand(
-        bwa_idx,
-        query_name,
-        query_len,
-        &encoded_query,
-        false, // is_reverse_complement = false for all SMEMs (strand determined by position)
-        min_seed_len,
-        min_intv,
-        &mut all_smems,
-        &mut max_smem_count,
-    );
+    //
+    // Use thread-local workspace buffers to avoid per-read allocations
+    with_workspace(|ws| {
+        generate_smems_for_strand(
+            bwa_idx,
+            query_name,
+            query_len,
+            &encoded_query,
+            false, // is_reverse_complement = false for all SMEMs (strand determined by position)
+            min_seed_len,
+            min_intv,
+            &mut all_smems,
+            &mut max_smem_count,
+            &mut ws.smem_prev_buf,
+            &mut ws.smem_curr_buf,
+        );
+    });
 
     // PHASE 1 VALIDATION: Log initial SMEMs
     let pass1_count = all_smems.len();
@@ -142,7 +151,7 @@ pub fn find_seeds(
 
     // Collect re-seeding candidates from initial SMEMs
     // NOTE: Re-seeding always uses original query since all SMEMs come from original query search
-    let mut reseed_candidates: Vec<(usize, u64)> = Vec::new(); // (middle_pos, min_intv)
+    let mut reseed_candidates: Vec<(usize, u64)> = Vec::with_capacity(32); // (middle_pos, min_intv)
 
     for smem in all_smems.iter() {
         let smem_len = smem.query_end - smem.query_start + 1;
@@ -168,20 +177,25 @@ pub fn find_seeds(
     }
 
     // Execute re-seeding for each candidate (always use original query)
+    // Use thread-local workspace buffers to avoid per-call allocations
     let initial_smem_count = all_smems.len();
-    for (middle_pos, new_min_intv) in reseed_candidates {
-        generate_smems_from_position(
-            bwa_idx,
-            query_name,
-            query_len,
-            &encoded_query,
-            false, // is_reverse_complement = false (strand determined by position)
-            min_seed_len,
-            new_min_intv,
-            middle_pos,
-            &mut all_smems,
-        );
-    }
+    with_workspace(|ws| {
+        for (middle_pos, new_min_intv) in &reseed_candidates {
+            generate_smems_from_position(
+                bwa_idx,
+                query_name,
+                query_len,
+                &encoded_query,
+                false, // is_reverse_complement = false (strand determined by position)
+                min_seed_len,
+                *new_min_intv,
+                *middle_pos,
+                &mut all_smems,
+                &mut ws.smem_prev_buf,
+                &mut ws.smem_curr_buf,
+            );
+        }
+    });
 
     // PHASE 1 VALIDATION: Log Pass 2 (re-seeding) results
     let pass2_added = all_smems.len() - initial_smem_count;
