@@ -37,7 +37,7 @@ For production workloads, please use the stable [bwa-mem2](https://github.com/bw
 
 - ⚠️ **Index Compatibility**: Can build indices but **NOT YET VALIDATED** for production use
 - ⚠️ **Algorithm Refinements**: Some advanced features partially implemented (re-seeding, chain dropping)
-- ⚠️ **Performance**: 1.3x slower than C++ bwa-mem2 (improving)
+- ⚠️ **Performance**: ~1.25x slower than C++ bwa-mem2 (79% speed, improving)
 - ⚠️ **Validation**: Output validated on HG002 4M read pairs but needs broader testing
 
 ## Installation
@@ -188,7 +188,7 @@ samtools index alignments.sorted.bam
 - Small genomes (< 10 Mb): Near-instant indexing, ~1-10K reads/sec alignment
 - Bacterial genomes (~5 Mb): ~1 minute indexing, ~5-20K reads/sec alignment
 - Human genome (~3 Gb): ~45 minutes indexing, ~1-5K reads/sec alignment
-- Currently 85-95% of C++ bwa-mem2 speed
+- Currently ~79% of C++ bwa-mem2 speed on 4M read pairs (improving)
 
 ## Compatibility
 
@@ -274,7 +274,13 @@ For developers interested in contributing or understanding the internals:
 
 ## Project Status
 
-### Recent Progress (November 25, 2025)
+### Recent Progress (November 27, 2025)
+
+**Performance Profiling Update:**
+- Measured 79% of BWA-MEM2 speed on 4M HG002 read pairs (2:55.61 vs 2:18.91)
+- Top hotspots: SIMD banded SW (36%), scalar CIGAR gen (13%), seeding (18%)
+- Memory usage: 32 GB (vs BWA-MEM2's ~17 GB)
+- SIMD remediation completed - SimdEngine abstraction compliance verified
 
 **v0.6.0 - GATK Parity Achieved!**
 - ✅ **GATK ValidateSamFile Parity** - 100% compatibility with BWA-MEM2
@@ -306,8 +312,8 @@ For developers interested in contributing or understanding the internals:
 - [✅] **Comprehensive bounds checking** - no off-reference CIGARs
 
 **v0.7.0** (Next Release)
-- [ ] Performance optimization (currently 1.3x slower than BWA-MEM2)
-- [ ] Memory optimization (~44 GB vs 24 GB target)
+- [~] Performance optimization (currently ~1.25x slower / 79% of BWA-MEM2 on 4M HG002)
+- [ ] Memory optimization (~32 GB vs 24 GB target)
 - [ ] Threading optimization for better core utilization
 
 **v0.8.0 - v0.9.0**
