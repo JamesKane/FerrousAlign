@@ -223,7 +223,7 @@ impl AlignmentRegion {
 
 /// Tracks which extension jobs belong to which seed
 #[derive(Debug, Clone)]
-pub(crate) struct SeedExtensionMapping {
+pub struct SeedExtensionMapping {
     pub seed_idx: usize,
     pub left_job_idx: Option<usize>,
     pub right_job_idx: Option<usize>,
@@ -231,7 +231,7 @@ pub(crate) struct SeedExtensionMapping {
 
 /// Tracks all seed mappings for a chain
 #[derive(Debug, Clone)]
-pub(crate) struct ChainExtensionMapping {
+pub struct ChainExtensionMapping {
     pub seed_mappings: Vec<SeedExtensionMapping>,
 }
 
@@ -618,6 +618,64 @@ pub fn extend_chains_to_regions(
         encoded_query,
         encoded_query_rc,
     }
+}
+
+// ============================================================================
+// CROSS-READ BATCHING SUPPORT
+// ============================================================================
+//
+// These functions support BWA-MEM2's cross-read batching strategy where extension
+// jobs from ALL reads are collected and scored together for better SIMD utilization.
+//
+// ============================================================================
+
+/// Merge extension scores into alignment regions for cross-read batching
+///
+/// This is a public wrapper around the internal `merge_scores_to_regions()` function,
+/// allowing external code (batch_extension.rs) to perform the score merging after
+/// cross-read SIMD scoring.
+///
+/// # Arguments
+/// * `bwa_idx` - Reference genome index
+/// * `opt` - Alignment options
+/// * `chains` - Chains for this read
+/// * `seeds` - Seeds for this read
+/// * `chain_mappings` - Mapping from seeds to job indices
+/// * `chain_ref_segments` - Reference segments for each chain: (rmax_0, rmax_1, rseq)
+/// * `left_scores` - Left extension scores (from cross-read SIMD batch)
+/// * `right_scores` - Right extension scores (from cross-read SIMD batch)
+/// * `query_len` - Length of the query sequence
+///
+/// # Returns
+/// Vector of AlignmentRegions with computed boundaries and scores
+pub fn merge_extension_scores_to_regions(
+    bwa_idx: &BwaIndex,
+    opt: &MemOpt,
+    chains: &[Chain],
+    seeds: &[Seed],
+    chain_mappings: &[ChainExtensionMapping],
+    chain_ref_segments: &[Option<(u64, u64, Vec<u8>)>],
+    left_scores: &[OutScore],
+    right_scores: &[OutScore],
+    query_len: i32,
+) -> Vec<AlignmentRegion> {
+    // Create dummy jobs (not used in merging, but required by current signature)
+    let left_jobs: Vec<ExtensionJob> = Vec::new();
+    let right_jobs: Vec<ExtensionJob> = Vec::new();
+
+    merge_scores_to_regions(
+        bwa_idx,
+        opt,
+        chains,
+        seeds,
+        chain_mappings,
+        chain_ref_segments,
+        left_scores,
+        right_scores,
+        &left_jobs,
+        &right_jobs,
+        query_len,
+    )
 }
 
 /// Execute SIMD batch scoring (score-only, no CIGAR)
