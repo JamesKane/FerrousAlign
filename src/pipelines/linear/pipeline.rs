@@ -4,6 +4,7 @@ use super::chaining::filter_chains;
 use super::finalization::Alignment;
 use super::finalization::mark_secondary_alignments;
 use super::finalization::sam_flags;
+use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::SMEM;
 use super::seeding::Seed;
@@ -14,7 +15,6 @@ use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::alignment::workspace::with_workspace;
 use crate::compute::ComputeBackend;
-use super::index::index::BwaIndex;
 
 // ============================================================================
 // SEED GENERATION (SMEM EXTRACTION)
@@ -941,9 +941,9 @@ fn create_unmapped_alignment(query_name: &str) -> Alignment {
 
 #[cfg(test)]
 mod tests {
-    use super::super::mem_opt::MemOpt;
     use super::super::finalization::sam_flags;
     use super::super::index::index::BwaIndex;
+    use super::super::mem_opt::MemOpt;
 
     // ========================================================================
     // CIGAR REFERENCE LENGTH CALCULATION TESTS

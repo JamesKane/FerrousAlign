@@ -1360,8 +1360,9 @@ impl BandedPairWiseSW {
 
                     // Vectorized match/mismatch score computation (BWA-MEM2 compare-and-blend pattern)
                     // Load query bases as 16-bit vector
-                    let q_vec =
-                        _mm_loadu_si128(query_soa_16.as_ptr().add(j * SIMD_WIDTH) as *const __m128i);
+                    let q_vec = _mm_loadu_si128(
+                        query_soa_16.as_ptr().add(j * SIMD_WIDTH) as *const __m128i
+                    );
 
                     // Compare query and target bases for equality
                     // cmpeq returns 0xFFFF for equal, 0x0000 otherwise

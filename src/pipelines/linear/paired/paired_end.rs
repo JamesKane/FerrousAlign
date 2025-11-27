@@ -11,21 +11,21 @@
 // - Pairing: mem_pair() scores paired alignments
 // - Output: sam_output functions handle flag setting and formatting
 
+use super::super::finalization::Alignment;
+use super::super::finalization::mark_secondary_alignments;
+use super::super::finalization::sam_flags;
+use super::super::index::index::BwaIndex;
+use super::super::mem_opt::MemOpt;
+use super::super::pipeline::align_read_deferred;
 use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
 use super::mate_rescue::{
     MateRescueJob, execute_mate_rescue_batch_with_engine, prepare_mate_rescue_jobs_for_anchor,
     result_to_alignment,
 };
 use super::pairing::mem_pair;
-use super::super::finalization::Alignment;
-use super::super::finalization::mark_secondary_alignments;
-use super::super::finalization::sam_flags;
-use super::super::mem_opt::MemOpt;
-use super::super::pipeline::align_read_deferred;
 use crate::alignment::utils::encode_sequence;
 use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use super::super::index::index::BwaIndex;
 use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
     prepare_paired_alignment_read2, write_sam_record,
@@ -435,7 +435,11 @@ pub fn process_paired_end(
         // Take a sample from the current batch to update statistics
         // Use an iterator to take the first BOOTSTRAP_BATCH_SIZE elements
         let sample_size = BOOTSTRAP_BATCH_SIZE.min(batch_alignments.len());
-        let sampled_alignments = batch_alignments.iter().take(sample_size).cloned().collect::<Vec<_>>();
+        let sampled_alignments = batch_alignments
+            .iter()
+            .take(sample_size)
+            .cloned()
+            .collect::<Vec<_>>();
 
         if !sampled_alignments.is_empty() {
             current_stats = bootstrap_insert_size_stats(
@@ -509,9 +513,15 @@ pub fn process_paired_end(
         // Phase timing breakdown (only at INFO level for visibility)
         log::info!(
             "  Phases: align={:.1}s/{:.1}s ({:.0}%), rescue={:.1}s/{:.1}s ({:.0}%), output={:.1}s/{:.1}s ({:.0}%)",
-            align_cpu, align_wall.as_secs_f64(), 100.0 * align_cpu / batch_cpu_elapsed.max(0.001),
-            rescue_cpu, rescue_wall.as_secs_f64(), 100.0 * rescue_cpu / batch_cpu_elapsed.max(0.001),
-            output_cpu, output_wall.as_secs_f64(), 100.0 * output_cpu / batch_cpu_elapsed.max(0.001),
+            align_cpu,
+            align_wall.as_secs_f64(),
+            100.0 * align_cpu / batch_cpu_elapsed.max(0.001),
+            rescue_cpu,
+            rescue_wall.as_secs_f64(),
+            100.0 * rescue_cpu / batch_cpu_elapsed.max(0.001),
+            output_cpu,
+            output_wall.as_secs_f64(),
+            100.0 * output_cpu / batch_cpu_elapsed.max(0.001),
         );
         log::info!(
             "Processed {} reads in {:.3} CPU sec, {:.3} real sec",
@@ -1003,7 +1013,8 @@ fn format_batch_paired_parallel(
 
             // Stage 5: Format SAM strings for read1
             let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
-            let mut records: Vec<String> = Vec::with_capacity(output_indices1.len() + output_indices2.len());
+            let mut records: Vec<String> =
+                Vec::with_capacity(output_indices1.len() + output_indices2.len());
 
             for idx in output_indices1 {
                 let is_primary = idx == best_idx1;

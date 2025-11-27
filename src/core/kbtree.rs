@@ -24,7 +24,7 @@
 //! }
 //! ```
 
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::ptr;
@@ -283,16 +283,8 @@ where
                 x = *self.children(x).offset(next_idx as isize);
             }
 
-            let lower_ref = if lower.is_null() {
-                None
-            } else {
-                Some(&*lower)
-            };
-            let upper_ref = if upper.is_null() {
-                None
-            } else {
-                Some(&*upper)
-            };
+            let lower_ref = if lower.is_null() { None } else { Some(&*lower) };
+            let upper_ref = if upper.is_null() { None } else { Some(&*upper) };
 
             (lower_ref, upper_ref)
         }

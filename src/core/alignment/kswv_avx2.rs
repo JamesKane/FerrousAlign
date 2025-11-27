@@ -460,7 +460,12 @@ pub unsafe fn batch_ksw_align_avx2(
         if l == 0 && final_score > 0 {
             log::trace!(
                 "AVX2 kswv seq0: score={}, te={}, qe={}, nrow={}, ncol={}, shift={}",
-                final_score, te_val, qe_arr.0[l], nrow, ncol, shift
+                final_score,
+                te_val,
+                qe_arr.0[l],
+                nrow,
+                ncol,
+                shift
             );
         }
 

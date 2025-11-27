@@ -17,15 +17,15 @@
 // 2. Execution phase: Run all SW alignments in parallel (execute_mate_rescue_batch)
 // 3. Distribution phase: Create alignments and add to pairs (distribute_rescue_results)
 
-use super::insert_size::InsertSizeStats;
-use crate::alignment::edit_distance;
 use super::super::finalization::Alignment;
 use super::super::finalization::sam_flags;
+use super::super::index::index::BwaIndex;
+use super::insert_size::InsertSizeStats;
+use crate::alignment::edit_distance;
 use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
 use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
 use crate::compute::simd_abstraction::SimdEngine128;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use super::super::index::index::BwaIndex;
 use rayon::prelude::*;
 
 /// A mate rescue SW job prepared for batch execution
@@ -552,7 +552,10 @@ pub fn execute_mate_rescue_batch_with_engine(
         .unwrap_or(false);
 
     if force_scalar {
-        log::info!("FERROUS_ALIGN_FORCE_SCALAR=1: Using scalar path for mate rescue ({} jobs)", jobs.len());
+        log::info!(
+            "FERROUS_ALIGN_FORCE_SCALAR=1: Using scalar path for mate rescue ({} jobs)",
+            jobs.len()
+        );
         return execute_mate_rescue_batch_scalar(jobs);
     }
 

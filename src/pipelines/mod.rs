@@ -4,5 +4,5 @@
 //! - `linear`: BWA-MEM style alignment to linear reference genomes
 //! - `graph`: (Future) Pangenome graph alignment
 
-pub mod linear;
 pub mod graph;
+pub mod linear;

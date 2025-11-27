@@ -9,8 +9,8 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use clap::{Parser, Subcommand};
 use ferrous_align::pipelines::linear;
-use ferrous_align::pipelines::linear::mem_opt::MemCliOptions;
 use ferrous_align::pipelines::linear::index::bwa_index;
+use ferrous_align::pipelines::linear::mem_opt::MemCliOptions;
 use std::path::PathBuf;
 
 #[derive(Parser)]

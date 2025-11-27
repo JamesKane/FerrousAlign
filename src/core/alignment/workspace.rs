@@ -57,7 +57,6 @@ pub struct AlignmentWorkspace {
     // SW Kernel Buffers (simd_banded_swa_batch16_int16)
     // ========================================================================
     // These eliminate ~65KB of allocations per batch call
-
     /// Query sequences in SoA layout (16-bit, 16 lanes)
     pub sw_query_soa_16: Vec<i16>,
     /// Target sequences in SoA layout (16-bit, 16 lanes)
@@ -71,7 +70,6 @@ pub struct AlignmentWorkspace {
     // SW Kernel Buffers for AVX-512 (simd_banded_swa_batch32_int16)
     // ========================================================================
     // These eliminate ~130KB of allocations per batch call (32 lanes vs 16)
-
     /// Query sequences in SoA layout (16-bit, 32 lanes for AVX-512)
     pub sw_query_soa_32: Vec<i16>,
     /// Target sequences in SoA layout (16-bit, 32 lanes for AVX-512)
@@ -85,7 +83,6 @@ pub struct AlignmentWorkspace {
     // KSW Kernel Buffers (batch_ksw_align_avx2)
     // ========================================================================
     // These eliminate ~32KB of allocations per batch call
-
     /// H0 buffer for horizontal SIMD (8-bit, 32 lanes)
     pub ksw_h0_buf: Vec<u8>,
     /// H1 buffer for horizontal SIMD (8-bit, 32 lanes)

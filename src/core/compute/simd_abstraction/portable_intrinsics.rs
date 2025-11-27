@@ -197,7 +197,11 @@ pub unsafe fn prefetch_read_t0(addr: *const i8) {
     {
         // _PREFETCH_READ: Preload for read.
         // _PREFETCH_LOCALITY3: Highest level of locality (equivalent to T0).
-        simd_arch::_prefetch(addr, simd_arch::_PREFETCH_READ, simd_arch::_PREFETCH_LOCALITY3);
+        simd_arch::_prefetch(
+            addr,
+            simd_arch::_PREFETCH_READ,
+            simd_arch::_PREFETCH_LOCALITY3,
+        );
     }
     // Other architectures: No-op
 }
@@ -667,10 +671,7 @@ macro_rules! mm_slli_epi16 {
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
-            __m128i::from_s16(simd_arch::vshlq_n_s16(
-                $a.as_s16(),
-                $imm8,
-            ))
+            __m128i::from_s16(simd_arch::vshlq_n_s16($a.as_s16(), $imm8))
         }
     }};
 }

@@ -21,13 +21,13 @@
 //
 // ============================================================================
 
-use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use super::chaining::{Chain, cal_max_gap};
-use crate::alignment::edit_distance;
+use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
+use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
+use crate::alignment::edit_distance;
 use crate::compute::ComputeBackend;
-use super::index::index::BwaIndex;
 
 /// Alignment region with boundaries but NO CIGAR
 ///
@@ -769,9 +769,8 @@ fn execute_simd_scoring(
                 // 8-bit path can overflow if scores exceed 127
                 // Conservative threshold: 100bp sequences, low initial scores
                 const MAX_SEQ_LEN_8BIT: i32 = 100;
-                let can_use_8bit = max_qlen < MAX_SEQ_LEN_8BIT
-                    && max_tlen < MAX_SEQ_LEN_8BIT
-                    && max_h0 < 50;
+                let can_use_8bit =
+                    max_qlen < MAX_SEQ_LEN_8BIT && max_tlen < MAX_SEQ_LEN_8BIT && max_h0 < 50;
 
                 if can_use_8bit {
                     // AVX2 8-bit path: 32 lanes (2x parallelism)
@@ -944,9 +943,7 @@ fn merge_scores_to_regions(
             }
 
             // Convert FM-index position to chromosome coordinates using centralized function
-            let coords = super::coordinates::fm_to_chromosome_coords(
-                bwa_idx, region.rb, region.re,
-            );
+            let coords = super::coordinates::fm_to_chromosome_coords(bwa_idx, region.rb, region.re);
             region.rid = coords.ref_id;
             region.ref_name = coords.ref_name;
             region.chr_pos = coords.chr_pos;

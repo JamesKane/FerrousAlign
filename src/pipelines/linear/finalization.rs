@@ -1,5 +1,5 @@
-use crate::alignment::edit_distance;
 use super::mem_opt::MemOpt;
+use crate::alignment::edit_distance;
 
 /// SAM flag bit masks (SAM specification v1.6)
 /// Used for setting and querying alignment flags in SAM/BAM format

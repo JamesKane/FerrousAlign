@@ -1,8 +1,8 @@
+use super::index::fm_index::CP_SHIFT;
+use super::index::fm_index::CpOcc;
 use super::index::fm_index::backward_ext;
 use super::index::fm_index::forward_ext;
 use super::index::fm_index::get_occ;
-use super::index::fm_index::CpOcc;
-use super::index::fm_index::CP_SHIFT;
 use super::index::index::BwaIndex;
 use crate::core::compute::simd_abstraction::portable_intrinsics;
 
@@ -302,15 +302,26 @@ pub fn generate_smems_for_strand<'a>(
                     curr_s = new_smem.interval_size as i64;
                     // OPTIMIZATION: Manually prefetch data for the next likely BWT access
                     unsafe {
-                        let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                        let prefetch_addr = bwa_idx
+                            .cp_occ
+                            .as_ptr()
+                            .add((new_smem.bwt_interval_start >> CP_SHIFT) as usize)
+                            as *const i8;
                         #[cfg(target_arch = "x86_64")]
                         {
-                            core::arch::x86_64::_mm_prefetch(prefetch_addr, core::arch::x86_64::_MM_HINT_T0);
+                            core::arch::x86_64::_mm_prefetch(
+                                prefetch_addr,
+                                core::arch::x86_64::_MM_HINT_T0,
+                            );
                         }
                         #[cfg(target_arch = "aarch64")]
                         {
                             // Use PREFETCH_READ (prft op=0) and LOCALITY3 (level 3 cache, 'T0' equivalent)
-                            core::arch::aarch64::_prefetch(prefetch_addr, core::arch::aarch64::_PREFETCH_READ, core::arch::aarch64::_PREFETCH_LOCALITY3);
+                            core::arch::aarch64::_prefetch(
+                                prefetch_addr,
+                                core::arch::aarch64::_PREFETCH_READ,
+                                core::arch::aarch64::_PREFETCH_LOCALITY3,
+                            );
                         }
                     }
                     curr_array_buf.push(new_smem);
@@ -372,7 +383,11 @@ pub fn generate_smems_for_strand<'a>(
                     // OPTIMIZATION: Manually prefetch data for the next likely BWT access
                     // The prefetch_read_t0 function handles architecture-specific intrinsics
                     unsafe {
-                        let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                        let prefetch_addr = bwa_idx
+                            .cp_occ
+                            .as_ptr()
+                            .add((new_smem.bwt_interval_start >> CP_SHIFT) as usize)
+                            as *const i8;
                         portable_intrinsics::prefetch_read_t0(prefetch_addr);
                     }
                     curr_array_buf.push(new_smem);
@@ -562,7 +577,11 @@ pub fn generate_smems_from_position<'a>(
                 curr_s = new_smem.interval_size as i64;
                 // OPTIMIZATION: Manually prefetch data for the next likely BWT access
                 unsafe {
-                    let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                    let prefetch_addr = bwa_idx
+                        .cp_occ
+                        .as_ptr()
+                        .add((new_smem.bwt_interval_start >> CP_SHIFT) as usize)
+                        as *const i8;
                     portable_intrinsics::prefetch_read_t0(prefetch_addr);
                 }
                 curr_array_buf.push(new_smem);
@@ -583,7 +602,11 @@ pub fn generate_smems_from_position<'a>(
                 curr_s = new_smem.interval_size as i64;
                 // OPTIMIZATION: Manually prefetch data for the next likely BWT access
                 unsafe {
-                    let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                    let prefetch_addr = bwa_idx
+                        .cp_occ
+                        .as_ptr()
+                        .add((new_smem.bwt_interval_start >> CP_SHIFT) as usize)
+                        as *const i8;
                     portable_intrinsics::prefetch_read_t0(prefetch_addr);
                 }
                 curr_array_buf.push(new_smem);

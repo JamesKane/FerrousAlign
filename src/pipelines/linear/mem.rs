@@ -1,11 +1,11 @@
+use super::index::index::BwaIndex;
 use super::mem_opt::{MemCliOptions, MemOpt};
 use super::paired::paired_end::process_paired_end;
 use super::single_end::process_single_end;
-use super::index::index::BwaIndex;
+use crate::io::async_writer::AsyncChannelWriter;
 use anyhow::Result;
 use std::fs::File;
 use std::io::{self, Write};
-use crate::io::async_writer::AsyncChannelWriter;
 // Added import for BwaIndex
 
 pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
@@ -74,9 +74,8 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
 
     // Output options
     opt.t = opts.min_score;
-    let (max_xa_hits, max_xa_hits_alt) =
-        super::mem_opt::parse_xa_hits(&opts.max_xa_hits) // Corrected path
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (max_xa_hits, max_xa_hits_alt) = super::mem_opt::parse_xa_hits(&opts.max_xa_hits) // Corrected path
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     opt.max_xa_hits = max_xa_hits;
     opt.max_xa_hits_alt = max_xa_hits_alt;
 
@@ -190,8 +189,12 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
 
     // Write @SQ lines for reference sequences
     for ann in &bwa_idx.bns.annotations {
-        writeln!(base_writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length)
-            .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
+        writeln!(
+            base_writer,
+            "@SQ\tSN:{}\tLN:{}",
+            ann.name, ann.sequence_length
+        )
+        .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
     }
 
     // Write @PG (program) line

@@ -26,13 +26,18 @@ pub fn detect_optimal_simd_engine() -> SimdEngineType {
     #[cfg(target_arch = "x86_64")]
     {
         // Check for environment variable overrides (useful for testing)
-        if std::env::var("FERROUS_ALIGN_FORCE_SSE").map(|v| v == "1").unwrap_or(false) {
+        if std::env::var("FERROUS_ALIGN_FORCE_SSE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
             log::info!("FERROUS_ALIGN_FORCE_SSE=1: Using SSE (128-bit) engine");
             return SimdEngineType::Engine128;
         }
 
         #[cfg(feature = "avx512")]
-        let force_avx2 = std::env::var("FERROUS_ALIGN_FORCE_AVX2").map(|v| v == "1").unwrap_or(false);
+        let force_avx2 = std::env::var("FERROUS_ALIGN_FORCE_AVX2")
+            .map(|v| v == "1")
+            .unwrap_or(false);
 
         // Check for AVX-512 support (only if feature is enabled)
         // AVX-512BW (Byte/Word) is required for 8-bit/16-bit operations

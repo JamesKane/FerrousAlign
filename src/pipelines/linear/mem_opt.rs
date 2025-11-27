@@ -53,8 +53,8 @@ pub struct MemOpt {
     pub max_matesw: i32, // Perform maximally max_matesw rounds of mate-SW for each end
 
     // Processing parameters
-    pub n_threads: i32,  // Number of threads
-    pub chunk_size: i64, // Process chunk_size-bp sequences in a batch
+    pub n_threads: i32,    // Number of threads
+    pub chunk_size: i64,   // Process chunk_size-bp sequences in a batch
     pub batch_size: usize, // Number of read pairs to process in a batch
 
     // Mapping quality parameters

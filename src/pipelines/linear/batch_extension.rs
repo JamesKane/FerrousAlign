@@ -10,15 +10,15 @@
 //!
 //! Reference: BWA-MEM2 `mem_chain2aln_across_reads_V2()` in bwamem.cpp
 
-use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
-use super::chaining::{cal_max_gap, Chain};
+use super::chaining::{Chain, cal_max_gap};
+use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::region::{ChainExtensionMapping, SeedExtensionMapping};
 use super::seeding::Seed;
+use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use super::index::index::BwaIndex;
-use std::sync::Arc;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 thread_local! {
     static REVERSE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
@@ -465,9 +465,9 @@ pub fn collect_extension_jobs_for_read(
 
     for (chain_idx, chain) in ctx.chains.iter().enumerate() {
         if chain.seeds.is_empty() {
-            mappings
-                .chain_mappings
-                .push(ChainExtensionMapping { seed_mappings: Vec::new() });
+            mappings.chain_mappings.push(ChainExtensionMapping {
+                seed_mappings: Vec::new(),
+            });
             ctx.chain_ref_segments.push(None);
             continue;
         }
@@ -499,15 +499,16 @@ pub fn collect_extension_jobs_for_read(
         let rseq = match bwa_idx.bns.get_reference_segment(rmax_0, rmax_1 - rmax_0) {
             Ok(seq) => seq,
             Err(_) => {
-                mappings
-                    .chain_mappings
-                    .push(ChainExtensionMapping { seed_mappings: Vec::new() });
+                mappings.chain_mappings.push(ChainExtensionMapping {
+                    seed_mappings: Vec::new(),
+                });
                 ctx.chain_ref_segments.push(None);
                 continue;
             }
         };
 
-        ctx.chain_ref_segments.push(Some((rmax_0, rmax_1, rseq.clone())));
+        ctx.chain_ref_segments
+            .push(Some((rmax_0, rmax_1, rseq.clone())));
 
         // Build seed mappings and extension jobs
         let mut seed_mappings = Vec::new();
@@ -603,7 +604,11 @@ pub fn collect_extension_jobs_batch(
     bwa_idx: &BwaIndex,
     opt: &MemOpt,
     read_contexts: &mut [ReadExtensionContext],
-) -> (ExtensionJobBatch, ExtensionJobBatch, Vec<ReadExtensionMappings>) {
+) -> (
+    ExtensionJobBatch,
+    ExtensionJobBatch,
+    Vec<ReadExtensionMappings>,
+) {
     // Estimate capacity based on typical chains per read
     let estimated_jobs = read_contexts.len() * 8; // ~4 chains, 2 directions each
     let estimated_seq_bytes = estimated_jobs * 200; // ~100bp per extension
@@ -681,7 +686,7 @@ pub fn convert_batch_results_to_outscores(
 //
 // ============================================================================
 
-use super::finalization::{mark_secondary_alignments, Alignment};
+use super::finalization::{Alignment, mark_secondary_alignments};
 use super::pipeline::{build_and_filter_chains, find_seeds};
 use super::region::{generate_cigar_from_region, merge_extension_scores_to_regions};
 use rayon::prelude::*;
@@ -832,16 +837,10 @@ pub fn process_batch_cross_read(
     // ========================================================================
     let phase4_start = Instant::now();
 
-    let per_read_left_scores = convert_batch_results_to_outscores(
-        &left_results,
-        &left_batch,
-        read_contexts.len(),
-    );
-    let per_read_right_scores = convert_batch_results_to_outscores(
-        &right_results,
-        &right_batch,
-        read_contexts.len(),
-    );
+    let per_read_left_scores =
+        convert_batch_results_to_outscores(&left_results, &left_batch, read_contexts.len());
+    let per_read_right_scores =
+        convert_batch_results_to_outscores(&right_results, &right_batch, read_contexts.len());
 
     let phase4_time = phase4_start.elapsed();
     log::debug!(
@@ -878,17 +877,21 @@ pub fn process_batch_cross_read(
             );
 
             if regions.is_empty() {
-                return (read_idx, vec![create_unmapped_alignment_internal(&ctx.query_name)]);
+                return (
+                    read_idx,
+                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
+                );
             }
 
             // Filter regions by score
-            let mut filtered_regions: Vec<_> = regions
-                .into_iter()
-                .filter(|r| r.score >= opt.t)
-                .collect();
+            let mut filtered_regions: Vec<_> =
+                regions.into_iter().filter(|r| r.score >= opt.t).collect();
 
             if filtered_regions.is_empty() {
-                return (read_idx, vec![create_unmapped_alignment_internal(&ctx.query_name)]);
+                return (
+                    read_idx,
+                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
+                );
             }
 
             // Sort by score descending
@@ -941,7 +944,10 @@ pub fn process_batch_cross_read(
             }
 
             if alignments.is_empty() {
-                return (read_idx, vec![create_unmapped_alignment_internal(&ctx.query_name)]);
+                return (
+                    read_idx,
+                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
+                );
             }
 
             // Mark secondary/supplementary
@@ -1192,16 +1198,10 @@ fn process_sub_batch_internal(
     let right_results = execute_batch_simd_scoring(&sw_params, &right_batch, engine);
 
     // Phase 4: Distribute results
-    let per_read_left_scores = convert_batch_results_to_outscores(
-        &left_results,
-        &left_batch,
-        read_contexts.len(),
-    );
-    let per_read_right_scores = convert_batch_results_to_outscores(
-        &right_results,
-        &right_batch,
-        read_contexts.len(),
-    );
+    let per_read_left_scores =
+        convert_batch_results_to_outscores(&left_results, &left_batch, read_contexts.len());
+    let per_read_right_scores =
+        convert_batch_results_to_outscores(&right_results, &right_batch, read_contexts.len());
 
     // Phase 5: Finalization (parallel within sub-batch)
     let valid_alignments: Vec<(usize, Vec<Alignment>)> = read_contexts
@@ -1227,16 +1227,20 @@ fn process_sub_batch_internal(
             );
 
             if regions.is_empty() {
-                return (read_idx, vec![create_unmapped_alignment_internal(&ctx.query_name)]);
+                return (
+                    read_idx,
+                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
+                );
             }
 
-            let mut filtered_regions: Vec<_> = regions
-                .into_iter()
-                .filter(|r| r.score >= opt.t)
-                .collect();
+            let mut filtered_regions: Vec<_> =
+                regions.into_iter().filter(|r| r.score >= opt.t).collect();
 
             if filtered_regions.is_empty() {
-                return (read_idx, vec![create_unmapped_alignment_internal(&ctx.query_name)]);
+                return (
+                    read_idx,
+                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
+                );
             }
 
             filtered_regions.sort_by(|a, b| b.score.cmp(&a.score));
@@ -1287,7 +1291,10 @@ fn process_sub_batch_internal(
             }
 
             if alignments.is_empty() {
-                return (read_idx, vec![create_unmapped_alignment_internal(&ctx.query_name)]);
+                return (
+                    read_idx,
+                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
+                );
             }
 
             mark_secondary_alignments(&mut alignments, opt);
@@ -1333,9 +1340,36 @@ mod tests {
         let mut batch = ExtensionJobBatch::new();
 
         // Add multiple jobs
-        batch.add_job(0, 0, 0, ExtensionDirection::Left, &[0, 1, 2], &[0, 1], 5, 50);
-        batch.add_job(0, 1, 0, ExtensionDirection::Right, &[3, 2, 1], &[3, 2, 1, 0], 0, 50);
-        batch.add_job(1, 0, 0, ExtensionDirection::Left, &[0, 0, 1, 1], &[2, 2], 8, 50);
+        batch.add_job(
+            0,
+            0,
+            0,
+            ExtensionDirection::Left,
+            &[0, 1, 2],
+            &[0, 1],
+            5,
+            50,
+        );
+        batch.add_job(
+            0,
+            1,
+            0,
+            ExtensionDirection::Right,
+            &[3, 2, 1],
+            &[3, 2, 1, 0],
+            0,
+            50,
+        );
+        batch.add_job(
+            1,
+            0,
+            0,
+            ExtensionDirection::Left,
+            &[0, 0, 1, 1],
+            &[2, 2],
+            8,
+            50,
+        );
 
         assert_eq!(batch.len(), 3);
 

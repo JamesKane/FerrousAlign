@@ -12,12 +12,12 @@
 
 use super::batch_extension::{process_batch_cross_read, process_batch_parallel_subbatch};
 use super::finalization::Alignment;
+use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::pipeline::align_read_deferred;
-use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::compute::ComputeBackend;
 use crate::compute::ComputeContext;
-use super::index::index::BwaIndex;
+use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::io::fastq_reader::FastqReader;
 use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,

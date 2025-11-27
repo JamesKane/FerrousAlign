@@ -10,8 +10,8 @@
 // - Inlined forward_ext (avoids function call and struct copy)
 // - Removed debug logging checks from hot path
 
-use super::index::BwaIndex;
 use super::super::seeding::SMEM;
+use super::index::BwaIndex;
 
 // Constants from FMI_search.h
 const CP_MASK: u64 = 63;
@@ -160,8 +160,9 @@ pub fn backward_ext(bwa_idx: &BwaIndex, mut smem: SMEM, a: u8) -> SMEM {
 
     // Sentinel handling (matching C++ lines 1041-1042)
     let sentinel_idx = bwa_idx.sentinel_index as u64;
-    let sentinel_offset =
-        ((smem.bwt_interval_start <= sentinel_idx) & ((smem.bwt_interval_start + smem.interval_size) > sentinel_idx)) as i64;
+    let sentinel_offset = ((smem.bwt_interval_start <= sentinel_idx)
+        & ((smem.bwt_interval_start + smem.interval_size) > sentinel_idx))
+        as i64;
 
     // CRITICAL: Cumulative sum computation for l[] (matching C++ lines 1043-1046)
     let l3 = smem.bwt_interval_end as i64 + sentinel_offset;

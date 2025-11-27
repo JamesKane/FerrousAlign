@@ -19,24 +19,34 @@ use crate::alignment::kswv_batch::{KswResult, SeqPair};
 
 // Raw AVX-512 intrinsics - faithful to C++
 use std::arch::x86_64::{
-    __m512i, __mmask32, __mmask64,
-    // Vector creation
-    _mm512_setzero_si512, _mm512_set1_epi8, _mm512_set1_epi16,
-    // Vector loads/stores (unaligned for safety)
-    _mm512_loadu_si512, _mm512_storeu_si512,
+    __m512i,
+    __mmask32,
+    __mmask64,
     // Vector arithmetic
     _mm512_add_epi8,
-    _mm512_adds_epu8, _mm512_subs_epu8,
-    _mm512_max_epu8,
-    // Vector logic
-    _mm512_xor_si512, _mm512_or_si512,
-    _mm512_shuffle_epi8,
+    _mm512_adds_epu8,
     // Mask comparisons (return __mmask64 or __mmask32)
-    _mm512_cmpeq_epu8_mask, _mm512_cmpgt_epu8_mask, _mm512_cmpge_epu8_mask,
+    _mm512_cmpeq_epu8_mask,
+    _mm512_cmpge_epu8_mask,
     _mm512_cmpgt_epi16_mask,
-    _mm512_movepi8_mask,
+    _mm512_cmpgt_epu8_mask,
+    // Vector loads/stores (unaligned for safety)
+    _mm512_loadu_si512,
     // Mask blends
-    _mm512_mask_blend_epi8, _mm512_mask_blend_epi16,
+    _mm512_mask_blend_epi8,
+    _mm512_mask_blend_epi16,
+    _mm512_max_epu8,
+    _mm512_movepi8_mask,
+    _mm512_or_si512,
+    _mm512_set1_epi8,
+    _mm512_set1_epi16,
+    // Vector creation
+    _mm512_setzero_si512,
+    _mm512_shuffle_epi8,
+    _mm512_storeu_si512,
+    _mm512_subs_epu8,
+    // Vector logic
+    _mm512_xor_si512,
 };
 
 /// SIMD width for AVX-512: 64 sequences with 8-bit scores
@@ -98,13 +108,13 @@ pub unsafe fn batch_ksw_align_avx512(
     struct AlignedTemp([i8; SIMD_WIDTH8]);
     let mut temp = AlignedTemp([0i8; SIMD_WIDTH8]);
 
-    temp.0[0] = w_match;                              // Match (XOR = 0)
-    temp.0[1] = w_mismatch;                           // Mismatch
+    temp.0[0] = w_match; // Match (XOR = 0)
+    temp.0[1] = w_mismatch; // Mismatch
     temp.0[2] = w_mismatch;
     temp.0[3] = w_mismatch;
-    temp.0[4..8].fill(w_ambig);                       // Beyond boundary
-    temp.0[8..12].fill(w_ambig);                      // SSE2 region
-    temp.0[12] = w_ambig;                             // Ambiguous
+    temp.0[4..8].fill(w_ambig); // Beyond boundary
+    temp.0[8..12].fill(w_ambig); // SSE2 region
+    temp.0[12] = w_ambig; // Ambiguous
 
     // Add shift to first 16 elements
     for i in 0..16 {
@@ -125,7 +135,7 @@ pub unsafe fn batch_ksw_align_avx512(
     #[repr(align(64))]
     struct AlignedU8([u8; SIMD_WIDTH8]);
     let mut minsc = AlignedU8([0u8; SIMD_WIDTH8]);
-    let mut endsc = AlignedU8([0u8; SIMD_WIDTH8]);  // C++ initializes to 0!
+    let mut endsc = AlignedU8([0u8; SIMD_WIDTH8]); // C++ initializes to 0!
     let mut minsc_msk_a: __mmask64 = 0;
     let mut endsc_msk_a: __mmask64 = 0;
 
@@ -166,12 +176,12 @@ pub unsafe fn batch_ksw_align_avx512(
 
     // Global maximum tracking
     let mut gmax512: __m512i = zero512;
-    let mut te512: __m512i = _mm512_set1_epi16(-1);   // Sequences 0-31 (16-bit)
-    let mut te512_: __m512i = _mm512_set1_epi16(-1);  // Sequences 32-63 (16-bit)
+    let mut te512: __m512i = _mm512_set1_epi16(-1); // Sequences 0-31 (16-bit)
+    let mut te512_: __m512i = _mm512_set1_epi16(-1); // Sequences 32-63 (16-bit)
     let mut qe512: __m512i = _mm512_set1_epi8(0);
 
     // K-masks (NOT vectors!)
-    let mut exit0: __mmask64 = 0xFFFFFFFFFFFFFFFF;  // All lanes active
+    let mut exit0: __mmask64 = 0xFFFFFFFFFFFFFFFF; // All lanes active
     let mut mask512: __mmask64 = 0;
     let mut minsc_msk: __mmask64 = 0;
 
@@ -216,7 +226,8 @@ pub unsafe fn batch_ksw_align_avx512(
             // Load DP values and query base
             let h00: __m512i = _mm512_loadu_si512(h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _);
             let s2: __m512i = _mm512_loadu_si512(seq2_soa.add(j * SIMD_WIDTH8) as *const _);
-            let f11: __m512i = _mm512_loadu_si512(f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _);
+            let f11: __m512i =
+                _mm512_loadu_si512(f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _);
 
             // ================================================================
             // MAIN_SAM_CODE8_OPT (C++ lines 63-86)
@@ -236,7 +247,7 @@ pub unsafe fn batch_ksw_align_avx512(
 
             // Match score: H[i-1,j-1] + score
             let mut m11: __m512i = _mm512_adds_epu8(h00, sbt11);
-            m11 = _mm512_mask_blend_epi8(cmp, m11, zero512);  // Zero where invalid
+            m11 = _mm512_mask_blend_epi8(cmp, m11, zero512); // Zero where invalid
             m11 = _mm512_subs_epu8(m11, sft512);
 
             // h11 = max(match, E, F)
@@ -378,12 +389,17 @@ pub unsafe fn batch_ksw_align_avx512(
         if l == 0 && final_score > 0 {
             log::trace!(
                 "AVX512 kswv seq0: score={}, te={}, qe={}, nrow={}, ncol={}, shift={}",
-                final_score, te_arr.0[l], qe_arr.0[l], nrow, ncol, shift
+                final_score,
+                te_arr.0[l],
+                qe_arr.0[l],
+                nrow,
+                ncol,
+                shift
             );
         }
 
         if final_score != 255 {
-            qe_arr.0[l] = 1;  // Mark as live for second-best computation
+            qe_arr.0[l] = 1; // Mark as live for second-best computation
             live += 1;
         } else {
             qe_arr.0[l] = 0;
@@ -434,9 +450,8 @@ pub unsafe fn batch_ksw_align_avx512(
     for row in 0..maxl {
         let i512: __m512i = _mm512_set1_epi16(row as i16);
 
-        let rmax512: __m512i = _mm512_loadu_si512(
-            row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _
-        );
+        let rmax512: __m512i =
+            _mm512_loadu_si512(row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _);
 
         // mask1: i < low[seq] (16-bit comparison, combined to 64-bit)
         let mask11: __mmask64 = _mm512_cmpgt_epi16_mask(low512, i512) as __mmask64;
@@ -450,16 +465,16 @@ pub unsafe fn batch_ksw_align_avx512(
 
         max512 = _mm512_mask_blend_epi8(combined, max512, rmax512);
         te512_2nd = _mm512_mask_blend_epi16(combined as __mmask32, te512_2nd, i512);
-        te512_2nd_ = _mm512_mask_blend_epi16((combined >> SIMD_WIDTH16) as __mmask32, te512_2nd_, i512);
+        te512_2nd_ =
+            _mm512_mask_blend_epi16((combined >> SIMD_WIDTH16) as __mmask32, te512_2nd_, i512);
     }
 
     // Backward scan: rows [minh+1, limit) - above exclusion zone
     for row in (minh + 1).max(0)..limit {
         let i512: __m512i = _mm512_set1_epi16(row as i16);
 
-        let rmax512: __m512i = _mm512_loadu_si512(
-            row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _
-        );
+        let rmax512: __m512i =
+            _mm512_loadu_si512(row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _);
 
         // mask1: i > high[seq]
         let mask11: __mmask64 = _mm512_cmpgt_epi16_mask(i512, high512) as __mmask64;
@@ -478,7 +493,8 @@ pub unsafe fn batch_ksw_align_avx512(
 
         max512 = _mm512_mask_blend_epi8(combined, max512, rmax512);
         te512_2nd = _mm512_mask_blend_epi16(combined as __mmask32, te512_2nd, i512);
-        te512_2nd_ = _mm512_mask_blend_epi16((combined >> SIMD_WIDTH16) as __mmask32, te512_2nd_, i512);
+        te512_2nd_ =
+            _mm512_mask_blend_epi16((combined >> SIMD_WIDTH16) as __mmask32, te512_2nd_, i512);
     }
 
     // Extract second-best scores
@@ -633,15 +649,21 @@ mod tests {
         let avx512_score = results_512[0].score;
         let avx2_score = results_256[0].score;
 
-        eprintln!("AVX-512 seq0: score={}, te={}, qe={}",
-                  results_512[0].score, results_512[0].te, results_512[0].qe);
-        eprintln!("AVX2 seq0:    score={}, te={}, qe={}",
-                  results_256[0].score, results_256[0].te, results_256[0].qe);
+        eprintln!(
+            "AVX-512 seq0: score={}, te={}, qe={}",
+            results_512[0].score, results_512[0].te, results_512[0].qe
+        );
+        eprintln!(
+            "AVX2 seq0:    score={}, te={}, qe={}",
+            results_256[0].score, results_256[0].te, results_256[0].qe
+        );
 
         // Scores should match for identical input
-        assert_eq!(avx512_score, avx2_score,
+        assert_eq!(
+            avx512_score, avx2_score,
             "AVX-512 ({}) and AVX2 ({}) scores differ for identical input!",
-            avx512_score, avx2_score);
+            avx512_score, avx2_score
+        );
     }
 
     /// Test with longer sequences and mismatches
@@ -741,22 +763,31 @@ mod tests {
         }
 
         eprintln!("Long seq with mismatches:");
-        eprintln!("  AVX-512: score={}, te={}, qe={}",
-                  results_512[0].score, results_512[0].te, results_512[0].qe);
-        eprintln!("  AVX2:    score={}, te={}, qe={}",
-                  results_256[0].score, results_256[0].te, results_256[0].qe);
+        eprintln!(
+            "  AVX-512: score={}, te={}, qe={}",
+            results_512[0].score, results_512[0].te, results_512[0].qe
+        );
+        eprintln!(
+            "  AVX2:    score={}, te={}, qe={}",
+            results_256[0].score, results_256[0].te, results_256[0].qe
+        );
 
         // Expected: 145 matches + 5 mismatches = 145 * 1 + 5 * (-4) = 145 - 20 = 125
         let expected_approx = 145 - 20; // 125
 
-        assert_eq!(results_512[0].score, results_256[0].score,
+        assert_eq!(
+            results_512[0].score, results_256[0].score,
             "AVX-512 ({}) and AVX2 ({}) scores differ!",
-            results_512[0].score, results_256[0].score);
+            results_512[0].score, results_256[0].score
+        );
 
         // Sanity check: score should be close to expected
-        assert!((results_512[0].score - expected_approx).abs() < 10,
+        assert!(
+            (results_512[0].score - expected_approx).abs() < 10,
             "Score {} too far from expected ~{}",
-            results_512[0].score, expected_approx);
+            results_512[0].score,
+            expected_approx
+        );
     }
 
     /// Test AVX-512 slots 32-63 (uses te512_ for 16-bit target end tracking)
@@ -770,9 +801,23 @@ mod tests {
 
         // Real-world sequences from failing read HISEQ1:18:H8VC6ADXX:1:1101:10009:11965
         // Reference from chr5:49956951-49957098 (148bp)
-        let ref_seq: Vec<u8> = vec![3, 2, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 2, 0, 3, 0, 2, 0, 2, 1, 0, 2, 3, 3, 3, 3, 2, 0, 0, 0, 1, 0, 1, 3, 1, 3, 2, 3, 0, 2, 0, 0, 3, 1, 3, 2, 0, 0, 0, 2, 3, 2, 2, 0, 3, 0, 3, 3, 3, 2, 2, 0, 2, 1, 3, 1, 3, 3, 1, 2, 0, 2, 2, 2, 1, 3, 0, 3, 2, 2, 1, 2, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 3, 0, 3, 3, 1, 0, 1, 0, 3, 3, 0, 0, 0, 1, 3, 0, 2, 0, 1, 0, 2, 1, 0, 2, 1, 0, 3, 3, 1, 3, 1, 0, 2, 0, 0, 0, 1, 3, 3, 1, 3, 3, 3, 0, 2, 2, 0, 3, 2, 3, 3, 3];
+        let ref_seq: Vec<u8> = vec![
+            3, 2, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 2, 0, 3, 0, 2, 0, 2, 1, 0, 2, 3, 3, 3, 3, 2,
+            0, 0, 0, 1, 0, 1, 3, 1, 3, 2, 3, 0, 2, 0, 0, 3, 1, 3, 2, 0, 0, 0, 2, 3, 2, 2, 0, 3, 0,
+            3, 3, 3, 2, 2, 0, 2, 1, 3, 1, 3, 3, 1, 2, 0, 2, 2, 2, 1, 3, 0, 3, 2, 2, 1, 2, 2, 0, 0,
+            0, 0, 2, 0, 0, 0, 0, 3, 0, 3, 0, 3, 3, 1, 0, 1, 0, 3, 3, 0, 0, 0, 1, 3, 0, 2, 0, 1, 0,
+            2, 1, 0, 2, 1, 0, 3, 3, 1, 3, 1, 0, 2, 0, 0, 0, 1, 3, 3, 1, 3, 3, 3, 0, 2, 2, 0, 3, 2,
+            3, 3, 3,
+        ];
         // Read reverse complement (148bp) - 1 mismatch at position 130
-        let query_seq: Vec<u8> = vec![3, 2, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 2, 0, 3, 0, 2, 0, 2, 1, 0, 2, 3, 3, 3, 3, 2, 0, 0, 0, 1, 0, 1, 3, 1, 3, 2, 3, 0, 2, 0, 0, 3, 1, 3, 2, 0, 0, 0, 2, 3, 2, 2, 0, 3, 0, 3, 3, 3, 2, 2, 0, 2, 1, 3, 1, 3, 3, 1, 2, 0, 2, 2, 2, 1, 3, 0, 3, 2, 2, 1, 2, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 3, 0, 3, 3, 1, 0, 1, 0, 3, 3, 0, 0, 0, 1, 3, 0, 2, 0, 1, 0, 2, 1, 0, 2, 1, 0, 3, 3, 1, 3, 1, 0, 2, 0, 2, 0, 1, 3, 3, 1, 3, 3, 3, 0, 2, 2, 0, 3, 2, 3, 3, 3];
+        let query_seq: Vec<u8> = vec![
+            3, 2, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 2, 0, 3, 0, 2, 0, 2, 1, 0, 2, 3, 3, 3, 3, 2,
+            0, 0, 0, 1, 0, 1, 3, 1, 3, 2, 3, 0, 2, 0, 0, 3, 1, 3, 2, 0, 0, 0, 2, 3, 2, 2, 0, 3, 0,
+            3, 3, 3, 2, 2, 0, 2, 1, 3, 1, 3, 3, 1, 2, 0, 2, 2, 2, 1, 3, 0, 3, 2, 2, 1, 2, 2, 0, 0,
+            0, 0, 2, 0, 0, 0, 0, 3, 0, 3, 0, 3, 3, 1, 0, 1, 0, 3, 3, 0, 0, 0, 1, 3, 0, 2, 0, 1, 0,
+            2, 1, 0, 2, 1, 0, 3, 3, 1, 3, 1, 0, 2, 0, 2, 0, 1, 3, 3, 1, 3, 3, 3, 0, 2, 2, 0, 3, 2,
+            3, 3, 3,
+        ];
 
         let nrow = ref_seq.len() as i16;
         let ncol = query_seq.len() as i16;
@@ -832,22 +877,28 @@ mod tests {
 
         eprintln!("Testing slots 0, 32, 63 with real-world 148bp sequence (1 mismatch):");
         for &slot in &test_slots {
-            eprintln!("  Slot {}: score={}, te={}, qe={}",
-                      slot, results_512[slot].score, results_512[slot].te, results_512[slot].qe);
+            eprintln!(
+                "  Slot {}: score={}, te={}, qe={}",
+                slot, results_512[slot].score, results_512[slot].te, results_512[slot].qe
+            );
         }
 
         // All slots should produce identical scores
         let score_0 = results_512[0].score;
         for &slot in &test_slots {
-            assert_eq!(results_512[slot].score, score_0,
+            assert_eq!(
+                results_512[slot].score, score_0,
                 "Slot {} score ({}) differs from slot 0 score ({})!",
-                slot, results_512[slot].score, score_0);
+                slot, results_512[slot].score, score_0
+            );
         }
 
         // Score should match expected
-        assert_eq!(score_0, expected,
+        assert_eq!(
+            score_0, expected,
             "Score {} doesn't match expected {} for 148bp with 1 mismatch",
-            score_0, expected);
+            score_0, expected
+        );
     }
 
     /// Test AVX-512 vs AVX2 with DIFFERENT sequences per slot
@@ -946,22 +997,26 @@ mod tests {
         }
 
         // Create pairs metadata
-        let mut pairs_512: Vec<SeqPair> = (0..64).map(|i| {
-            let case_idx = i % 32;
-            SeqPair {
-                ref_len: test_cases[case_idx].0.len() as i32,
-                query_len: test_cases[case_idx].1.len() as i32,
+        let mut pairs_512: Vec<SeqPair> = (0..64)
+            .map(|i| {
+                let case_idx = i % 32;
+                SeqPair {
+                    ref_len: test_cases[case_idx].0.len() as i32,
+                    query_len: test_cases[case_idx].1.len() as i32,
+                    h0: 0,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let pairs_256: Vec<SeqPair> = (0..32)
+            .map(|i| SeqPair {
+                ref_len: test_cases[i].0.len() as i32,
+                query_len: test_cases[i].1.len() as i32,
                 h0: 0,
                 ..Default::default()
-            }
-        }).collect();
-
-        let pairs_256: Vec<SeqPair> = (0..32).map(|i| SeqPair {
-            ref_len: test_cases[i].0.len() as i32,
-            query_len: test_cases[i].1.len() as i32,
-            h0: 0,
-            ..Default::default()
-        }).collect();
+            })
+            .collect();
 
         // Set nrow/ncol to max for the kernel
         pairs_512[0].ref_len = max_ref_len as i32;
@@ -1028,8 +1083,12 @@ mod tests {
                 eprintln!(
                     "MISMATCH slot {}: AVX-512(score={}, te={}, qe={}) vs AVX2(score={}, te={}, qe={}) - {}",
                     slot,
-                    avx512.score, avx512.te, avx512.qe,
-                    avx2.score, avx2.te, avx2.qe,
+                    avx512.score,
+                    avx512.te,
+                    avx512.qe,
+                    avx2.score,
+                    avx2.te,
+                    avx2.qe,
                     test_cases[slot].2
                 );
             }
@@ -1045,17 +1104,34 @@ mod tests {
                 upper_mismatches += 1;
                 eprintln!(
                     "UPPER MISMATCH: slot {} (score={}, te={}, qe={}) vs slot {} (score={}, te={}, qe={})",
-                    slot, lower.score, lower.te, lower.qe,
-                    slot + 32, upper.score, upper.te, upper.qe
+                    slot,
+                    lower.score,
+                    lower.te,
+                    lower.qe,
+                    slot + 32,
+                    upper.score,
+                    upper.te,
+                    upper.qe
                 );
             }
         }
 
         eprintln!("\n=== Diverse Batch Test Summary ===");
         eprintln!("AVX-512 vs AVX2 mismatches (slots 0-31): {}/32", mismatches);
-        eprintln!("AVX-512 lower vs upper half mismatches: {}/32", upper_mismatches);
+        eprintln!(
+            "AVX-512 lower vs upper half mismatches: {}/32",
+            upper_mismatches
+        );
 
-        assert_eq!(mismatches, 0, "AVX-512 vs AVX2 produced {} mismatches!", mismatches);
-        assert_eq!(upper_mismatches, 0, "AVX-512 upper half (32-63) produced {} mismatches vs lower half!", upper_mismatches);
+        assert_eq!(
+            mismatches, 0,
+            "AVX-512 vs AVX2 produced {} mismatches!",
+            mismatches
+        );
+        assert_eq!(
+            upper_mismatches, 0,
+            "AVX-512 upper half (32-63) produced {} mismatches vs lower half!",
+            upper_mismatches
+        );
     }
 }

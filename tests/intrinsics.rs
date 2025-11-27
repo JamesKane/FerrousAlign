@@ -1,15 +1,14 @@
-
 // tests/intrinsics.rs
 
 #[cfg(all(test, target_arch = "aarch64"))]
 mod aarch64_tests {
+    use ferrous_align::compute::simd_abstraction::SimdEngine;
     use ferrous_align::compute::simd_abstraction::engine128::SimdEngine128;
     use ferrous_align::compute::simd_abstraction::portable_intrinsics::{
         _mm_add_epi16, _mm_blendv_epi8, _mm_cmpgt_epi16, _mm_max_epi16, _mm_set1_epi16,
         _mm_setzero_si128, _mm_slli_si128_var, _mm_srli_si128_var, _mm_sub_epi16,
     };
     use ferrous_align::compute::simd_abstraction::types::{__m128i, simd_arch};
-    use ferrous_align::compute::simd_abstraction::SimdEngine;
     use ferrous_align::{mm_alignr_epi8, mm_srli_si128};
     use std::arch::aarch64;
 
@@ -17,7 +16,9 @@ mod aarch64_tests {
     fn test_mm_alignr_epi8_lt16() {
         unsafe {
             let a_data: [i8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            let b_data: [i8; 16] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31];
+            let b_data: [i8; 16] = [
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr() as *const u8));
             let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr() as *const u8));
 
@@ -142,10 +143,10 @@ mod aarch64_tests {
     fn test_mm_blendv_epi8() {
         unsafe {
             let a_data: [i8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            let b_data: [i8; 16] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31];
-            let mask_data: [i8; 16] = [
-                -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0,
+            let b_data: [i8; 16] = [
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
             ];
+            let mask_data: [i8; 16] = [-1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr() as *const u8));
             let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr() as *const u8));
             let mask = __m128i(aarch64::vld1q_u8(mask_data.as_ptr() as *const u8));
@@ -163,9 +164,7 @@ mod aarch64_tests {
     #[test]
     fn test_movemask_epi8() {
         unsafe {
-            let a_data: [i8; 16] = [
-                -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0,
-            ];
+            let a_data: [i8; 16] = [-1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr() as *const u8));
 
             let result = SimdEngine128::movemask_epi8(a);
@@ -197,9 +196,7 @@ mod aarch64_tests {
     fn test_shuffle_epi8_zeroing() {
         unsafe {
             let a_data: [i8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            let b_data: [i8; 16] = [
-                -1, 14, -1, 12, -1, 10, -1, 8, -1, 6, -1, 4, -1, 2, -1, 0,
-            ];
+            let b_data: [i8; 16] = [-1, 14, -1, 12, -1, 10, -1, 8, -1, 6, -1, 4, -1, 2, -1, 0];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr() as *const u8));
             let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr() as *const u8));
 
@@ -230,7 +227,9 @@ mod aarch64_tests {
             // Expected: 0xFF where a > b (unsigned), 0x00 otherwise
             // 200>100=T, 50>100=F, 255>254=T, 0>1=F, 128>127=T, 127>128=F, 100>99=T, 100>101=F
             // 0>0=F, 1>0=T, 2>0=T, 3>0=T, 4>0=T, 5>0=T, 6>0=T, 7>0=T
-            let expected: [u8; 16] = [0xFF, 0, 0xFF, 0, 0xFF, 0, 0xFF, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+            let expected: [u8; 16] = [
+                0xFF, 0, 0xFF, 0, 0xFF, 0, 0xFF, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            ];
             assert_eq!(actual, expected, "test_cmpgt_epu8");
         }
     }
@@ -252,7 +251,10 @@ mod aarch64_tests {
             // Expected: 0xFF where a >= b (unsigned), 0x00 otherwise
             // 200>=100=T, 100>=100=T, 255>=254=T, 1>=1=T, 128>=127=T, 128>=128=T, 100>=99=T, 100>=101=F
             // 0>=0=T, 1>=0=T, 2>=0=T, 3>=0=T, 4>=0=T, 5>=0=T, 6>=0=T, 7>=0=T
-            let expected: [u8; 16] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+            let expected: [u8; 16] = [
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF,
+            ];
             assert_eq!(actual, expected, "test_cmpge_epu8");
         }
     }
@@ -283,8 +285,12 @@ mod aarch64_tests {
     fn test_subs_epu8() {
         unsafe {
             // Test saturating unsigned subtract
-            let a_data: [u8; 16] = [200, 100, 255, 0, 128, 127, 100, 50, 10, 10, 10, 10, 10, 10, 10, 10];
-            let b_data: [u8; 16] = [100, 150, 10, 5, 127, 128, 99, 100, 0, 5, 10, 15, 20, 25, 30, 35];
+            let a_data: [u8; 16] = [
+                200, 100, 255, 0, 128, 127, 100, 50, 10, 10, 10, 10, 10, 10, 10, 10,
+            ];
+            let b_data: [u8; 16] = [
+                100, 150, 10, 5, 127, 128, 99, 100, 0, 5, 10, 15, 20, 25, 30, 35,
+            ];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr()));
             let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr()));
 
@@ -323,7 +329,9 @@ mod aarch64_tests {
     fn test_unpacklo_epi8() {
         unsafe {
             let a_data: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            let b_data: [u8; 16] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31];
+            let b_data: [u8; 16] = [
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr()));
             let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr()));
 
@@ -343,7 +351,9 @@ mod aarch64_tests {
     fn test_unpackhi_epi8() {
         unsafe {
             let a_data: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            let b_data: [u8; 16] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31];
+            let b_data: [u8; 16] = [
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ];
             let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr()));
             let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr()));
 

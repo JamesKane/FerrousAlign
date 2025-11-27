@@ -73,18 +73,12 @@ fn bench_chaining_data_structures(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("BTreeMap", n_seeds),
             &positions,
-            |b, pos| {
-                b.iter(|| black_box(bench_btreemap_interval(pos)))
-            },
+            |b, pos| b.iter(|| black_box(bench_btreemap_interval(pos))),
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("KBTree", n_seeds),
-            &positions,
-            |b, pos| {
-                b.iter(|| black_box(bench_kbtree_interval(pos)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("KBTree", n_seeds), &positions, |b, pos| {
+            b.iter(|| black_box(bench_kbtree_interval(pos)))
+        });
     }
 
     group.finish();

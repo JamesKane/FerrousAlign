@@ -1,5 +1,5 @@
 use std::io::{Result as IoResult, Write};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 
 // Messages sent to the background writer thread
