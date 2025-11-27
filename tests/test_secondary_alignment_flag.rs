@@ -1,4 +1,4 @@
-use ferrous_align::alignment::finalization::sam_flags;
+use ferrous_align::pipelines::linear::finalization::sam_flags;
 
 /// Critical regression test for secondary alignment flag bug (Session 36)
 ///

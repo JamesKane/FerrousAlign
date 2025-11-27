@@ -1,9 +1,10 @@
-use super::index::fm_index::CP_SHIFT;
-use super::index::fm_index::CpOcc;
 use super::index::fm_index::backward_ext;
 use super::index::fm_index::forward_ext;
 use super::index::fm_index::get_occ;
+use super::index::fm_index::CP_SHIFT;
+use super::index::fm_index::CpOcc;
 use super::index::index::BwaIndex;
+use crate::core::compute::simd_abstraction::portable_intrinsics;
 
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]
@@ -285,6 +286,19 @@ pub fn generate_smems_for_strand<'a>(
                 // Keep condition: interval still above threshold AND unique interval size
                 if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                     curr_s = new_smem.interval_size as i64;
+                    // OPTIMIZATION: Manually prefetch data for the next likely BWT access
+                    unsafe {
+                        let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                        #[cfg(target_arch = "x86_64")]
+                        {
+                            core::arch::x86_64::_mm_prefetch(prefetch_addr, core::arch::x86_64::_MM_HINT_T0);
+                        }
+                        #[cfg(target_arch = "aarch64")]
+                        {
+                            // Use PREFETCH_READ (prft op=0) and LOCALITY3 (level 3 cache, 'T0' equivalent)
+                            core::arch::aarch64::_prefetch(prefetch_addr, core::arch::aarch64::_PREFETCH_READ, core::arch::aarch64::_PREFETCH_LOCALITY3);
+                        }
+                    }
                     curr_array_buf.push(new_smem);
                     if !is_reverse_complement {
                         log::debug!(
@@ -341,6 +355,12 @@ pub fn generate_smems_for_strand<'a>(
                 // Keep if above threshold and unique interval size
                 if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                     curr_s = new_smem.interval_size as i64;
+                    // OPTIMIZATION: Manually prefetch data for the next likely BWT access
+                    // The prefetch_read_t0 function handles architecture-specific intrinsics
+                    unsafe {
+                        let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                        crate::core::compute::simd_abstraction::portable_intrinsics::prefetch_read_t0(prefetch_addr);
+                    }
                     curr_array_buf.push(new_smem);
                 }
 
@@ -516,6 +536,11 @@ pub fn generate_smems_from_position<'a>(
 
             if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                 curr_s = new_smem.interval_size as i64;
+                // OPTIMIZATION: Manually prefetch data for the next likely BWT access
+                unsafe {
+                    let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                    crate::core::compute::simd_abstraction::portable_intrinsics::prefetch_read_t0(prefetch_addr);
+                }
                 curr_array_buf.push(new_smem);
                 break;
             }
@@ -532,6 +557,11 @@ pub fn generate_smems_from_position<'a>(
 
             if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                 curr_s = new_smem.interval_size as i64;
+                // OPTIMIZATION: Manually prefetch data for the next likely BWT access
+                unsafe {
+                    let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
+                    crate::core::compute::simd_abstraction::portable_intrinsics::prefetch_read_t0(prefetch_addr);
+                }
                 curr_array_buf.push(new_smem);
             }
 
@@ -565,28 +595,53 @@ pub fn generate_smems_from_position<'a>(
 
 /// Get BWT base from cp_occ format (for loaded indices)
 /// Returns 0-3 for bases A/C/G/T, or 4 for sentinel
+///
+/// This is an ultra-hot path called millions of times during seeding.
+/// Optimized to match C++ BWA-MEM2 FMI_search.cpp lines 1131-1140:
+/// - No bounds checking (caller must ensure valid pos)
+/// - If-else chain instead of loop (better branch prediction)
+/// - Inline hint for compiler
+#[inline(always)]
 pub fn get_bwt_base_from_cp_occ(cp_occ: &[CpOcc], pos: u64) -> u8 {
     let cp_block = (pos >> CP_SHIFT) as usize;
-    if cp_block >= cp_occ.len() {
-        log::warn!(
-            "get_bwt_base_from_cp_occ: cp_block {} out of bounds (cp_occ.len()={})",
-            cp_block,
-            cp_occ.len()
-        );
-        return 4; // Return sentinel for out of bounds
+
+    // SAFETY: Caller must ensure pos is within valid BWT range.
+    // In release builds we use unchecked access for performance.
+    // In debug builds we still have bounds checking via normal indexing.
+    #[cfg(debug_assertions)]
+    {
+        if cp_block >= cp_occ.len() {
+            log::warn!(
+                "get_bwt_base_from_cp_occ: cp_block {} out of bounds (cp_occ.len()={})",
+                cp_block,
+                cp_occ.len()
+            );
+            return 4;
+        }
     }
 
     let offset_in_block = pos & ((1 << CP_SHIFT) - 1);
     let bit_position = 63 - offset_in_block;
 
-    // Check each one-hot encoded bit to find which base is set
-    for base in 0..4 {
-        if (cp_occ[cp_block].bwt_encoding_bits[base] >> bit_position) & 1 == 1 {
-            return base as u8;
-        }
-    }
+    // Use unchecked access in release builds - this eliminates bounds checks
+    // that add ~5% overhead in this hot path
+    #[cfg(not(debug_assertions))]
+    let one_hot = unsafe { cp_occ.get_unchecked(cp_block) };
+    #[cfg(debug_assertions)]
+    let one_hot = &cp_occ[cp_block];
 
-    4 // Sentinel
+    // If-else chain matching C++ BWA-MEM2 pattern (better branch prediction than loop)
+    if (one_hot.bwt_encoding_bits[0] >> bit_position) & 1 == 1 {
+        0
+    } else if (one_hot.bwt_encoding_bits[1] >> bit_position) & 1 == 1 {
+        1
+    } else if (one_hot.bwt_encoding_bits[2] >> bit_position) & 1 == 1 {
+        2
+    } else if (one_hot.bwt_encoding_bits[3] >> bit_position) & 1 == 1 {
+        3
+    } else {
+        4 // Sentinel
+    }
 }
 
 // Function to get the next BWT position from a BWT coordinate

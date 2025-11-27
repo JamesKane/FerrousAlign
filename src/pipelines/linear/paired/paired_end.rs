@@ -218,7 +218,7 @@ pub fn process_paired_end(
     pairs_processed += num_pairs as u64;
 
     // Bootstrap insert size stats from first batch
-    let stats = if let Some(ref is_override) = opt.insert_size_override {
+    let mut current_stats = if let Some(ref is_override) = opt.insert_size_override {
         // Use manual insert size specification (-I option)
         log::info!(
             "[Paired-end] Using manual insert size: mean={:.1}, std={:.1}, max={}, min={}",
@@ -277,7 +277,7 @@ pub fn process_paired_end(
         &first_batch_seqs1,
         &first_batch_seqs2,
         &pac,
-        &stats,
+        &current_stats,
         &bwa_idx,
         opt.max_matesw as usize,
         simd_engine,
@@ -306,7 +306,7 @@ pub fn process_paired_end(
         first_batch_alignments,
         &first_batch_seqs1_owned,
         &first_batch_seqs2_owned,
-        &stats,
+        &current_stats,
         writer,
         &opt,
         0,
@@ -431,6 +431,19 @@ pub fn process_paired_end(
         // Update global pair counter
         pairs_processed += num_pairs as u64;
 
+        // PHASE 1.5: Re-bootstrap insert size statistics from current batch
+        // Take a sample from the current batch to update statistics
+        // Use an iterator to take the first BOOTSTRAP_BATCH_SIZE elements
+        let sample_size = BOOTSTRAP_BATCH_SIZE.min(batch_alignments.len());
+        let sampled_alignments = batch_alignments.iter().take(sample_size).cloned().collect::<Vec<_>>();
+
+        if !sampled_alignments.is_empty() {
+            current_stats = bootstrap_insert_size_stats(
+                &sampled_alignments,
+                bwa_idx.bns.packed_sequence_length as i64,
+            );
+        }
+
         // Prepare sequences for mate rescue
         let batch_seqs1 = batch1.as_tuple_refs();
         let batch_seqs2 = batch2.as_tuple_refs();
@@ -443,7 +456,7 @@ pub fn process_paired_end(
             &batch_seqs1,
             &batch_seqs2,
             &pac,
-            &stats,
+            &current_stats,
             &bwa_idx,
             opt.max_matesw as usize,
             simd_engine,
@@ -475,7 +488,7 @@ pub fn process_paired_end(
             batch_alignments,
             &batch_seqs1_owned,
             &batch_seqs2_owned,
-            &stats,
+            &current_stats,
             writer,
             &opt,
             batch_num * PROCESSING_BATCH_SIZE as u64,

@@ -182,6 +182,26 @@ pub unsafe fn _mm_store_si128_16(p: *mut __m128i, a: __m128i) {
     _mm_store_si128(p, a)
 }
 
+/// Portable prefetch for read with T0 locality hint (all cache levels)
+///
+/// Wraps architecture-specific intrinsics.
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn prefetch_read_t0(addr: *const i8) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // _MM_HINT_T0: Prefetch data into all levels of the cache hierarchy.
+        simd_arch::_mm_prefetch(addr, simd_arch::_MM_HINT_T0);
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // _PREFETCH_READ: Preload for read.
+        // _PREFETCH_LOCALITY3: Highest level of locality (equivalent to T0).
+        simd_arch::_prefetch(addr, simd_arch::_PREFETCH_READ, simd_arch::_PREFETCH_LOCALITY3);
+    }
+    // Other architectures: No-op
+}
+
 // ===== Additional intrinsics for Smith-Waterman =====
 
 /// Load 128-bit value from unaligned memory for 16-bit vectors

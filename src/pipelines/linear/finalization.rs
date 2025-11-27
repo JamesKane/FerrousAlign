@@ -18,7 +18,7 @@ pub mod sam_flags {
     pub const SUPPLEMENTARY: u16 = 0x800; // Supplementary alignment
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Alignment {
     pub query_name: String,
     pub flag: u16, // SAM flag
