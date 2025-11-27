@@ -430,6 +430,10 @@ pub struct ReadExtensionMappings {
 ///
 /// This extracts the job collection logic from `extend_chains_to_regions()`,
 /// storing jobs in the cross-read batches instead of executing immediately.
+///
+/// **Important**: The job indices stored in SeedExtensionMapping are LOCAL
+/// (per-read) indices, not global batch indices. This allows
+/// merge_scores_to_regions() to work correctly with per-read score vectors.
 pub fn collect_extension_jobs_for_read(
     bwa_idx: &BwaIndex,
     opt: &MemOpt,
@@ -444,6 +448,11 @@ pub fn collect_extension_jobs_for_read(
     let mut mappings = ReadExtensionMappings {
         chain_mappings: Vec::with_capacity(ctx.chains.len()),
     };
+
+    // Track local (per-read) job indices for use by merge_scores_to_regions()
+    // These are indices into the per-read score vectors, NOT global batch indices
+    let mut left_local_idx = 0usize;
+    let mut right_local_idx = 0usize;
 
     // Pre-allocate chain_ref_segments
     ctx.chain_ref_segments = Vec::with_capacity(ctx.chains.len());
@@ -514,7 +523,9 @@ pub fn collect_extension_jobs_for_read(
                         .collect();
                     let target_seg: Vec<u8> = rseq[0..tmp].iter().rev().copied().collect();
 
-                    left_job_idx = Some(left_batch.len());
+                    // Use local (per-read) index, NOT global batch index
+                    left_job_idx = Some(left_local_idx);
+                    left_local_idx += 1;
                     left_batch.add_job(
                         read_idx,
                         chain_idx,
@@ -536,7 +547,9 @@ pub fn collect_extension_jobs_for_read(
                     let query_seg: Vec<u8> = ctx.encoded_query[seed_query_end as usize..].to_vec();
                     let target_seg: Vec<u8> = rseq[re..].to_vec();
 
-                    right_job_idx = Some(right_batch.len());
+                    // Use local (per-read) index, NOT global batch index
+                    right_job_idx = Some(right_local_idx);
+                    right_local_idx += 1;
                     right_batch.add_job(
                         read_idx,
                         chain_idx,

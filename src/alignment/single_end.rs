@@ -10,9 +10,12 @@
 // - Selection: sam_output::select_single_end_alignments() filters output
 // - Output: sam_output::write_sam_record() writes to stream
 
+use crate::alignment::batch_extension::process_batch_cross_read;
 use crate::alignment::finalization::Alignment;
 use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::pipeline::align_read_deferred;
+use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::compute::ComputeBackend;
 use crate::compute::ComputeContext;
 use crate::index::index::BwaIndex;
 use crate::io::fastq_reader::FastqReader;
@@ -139,36 +142,61 @@ pub fn process_single_end(
             let batch_start_cpu = cputime();
             let batch_start_wall = Instant::now();
 
-            // Stage 1: Process batch in parallel (matching C++ kt_pipeline step 1)
+            // Stage 1: Process batch (matching C++ kt_pipeline step 1)
             let bwa_idx_clone = Arc::clone(&bwa_idx);
             let pac_data_clone = Arc::clone(&pac_data);
             let opt_clone = Arc::clone(&opt);
             let batch_start_id = reads_processed; // Capture for closure
             let compute_backend = compute_ctx.backend.clone();
 
-            let alignments: Vec<Vec<Alignment>> = batch
-                .names
-                .par_iter()
-                .zip(batch.seqs.par_iter())
-                .zip(batch.quals.par_iter())
-                .enumerate()
-                .map(|(i, ((name, seq), qual))| {
-                    // Global read ID for deterministic hash tie-breaking (matches C++ bwamem.cpp:1325)
-                    let read_id = batch_start_id + i as u64;
+            // Check if cross-read batching is enabled via environment variable
+            // Set FERROUS_CROSS_READ_BATCH=1 to enable the new batching mode
+            let use_cross_read_batching =
+                std::env::var("FERROUS_CROSS_READ_BATCH").map_or(false, |v| v == "1");
 
-                    align_read_deferred(
-                        &bwa_idx_clone,
-                        &pac_data_clone,
-                        name,
-                        seq,
-                        qual,
-                        &opt_clone,
-                        compute_backend.clone(),
-                        read_id,
-                        false, // don't skip secondary marking
-                    )
-                })
-                .collect();
+            let alignments: Vec<Vec<Alignment>> = if use_cross_read_batching {
+                // NEW: Cross-read batched processing for better SIMD utilization
+                let engine = match &compute_backend {
+                    ComputeBackend::CpuSimd(e) => *e,
+                    _ => SimdEngineType::Engine128, // Fallback for GPU/NPU
+                };
+
+                process_batch_cross_read(
+                    &bwa_idx_clone,
+                    &pac_data_clone,
+                    &opt_clone,
+                    &batch.names,
+                    &batch.seqs,
+                    &batch.quals, // Already Vec<String>, no conversion needed
+                    batch_start_id,
+                    engine,
+                )
+            } else {
+                // ORIGINAL: Per-read processing (reference implementation)
+                batch
+                    .names
+                    .par_iter()
+                    .zip(batch.seqs.par_iter())
+                    .zip(batch.quals.par_iter())
+                    .enumerate()
+                    .map(|(i, ((name, seq), qual))| {
+                        // Global read ID for deterministic hash tie-breaking (matches C++ bwamem.cpp:1325)
+                        let read_id = batch_start_id + i as u64;
+
+                        align_read_deferred(
+                            &bwa_idx_clone,
+                            &pac_data_clone,
+                            name,
+                            seq,
+                            qual,
+                            &opt_clone,
+                            compute_backend.clone(),
+                            read_id,
+                            false, // don't skip secondary marking
+                        )
+                    })
+                    .collect()
+            };
 
             // Update global read counter for next batch
             reads_processed += batch_size as u64;
