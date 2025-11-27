@@ -45,9 +45,10 @@ const AVG_READ_LEN: usize = 101;
 const BOOTSTRAP_BATCH_SIZE: usize = 512;
 
 // Main processing uses large batches for better parallelization
-// Formula: CHUNK_SIZE_BASES / AVG_READ_LEN gives ~100K pairs per batch
-// This ensures enough work for all threads (100K / 16 = 6.25K pairs per thread)
-const PROCESSING_BATCH_SIZE: usize = 50_000;
+// BWA-MEM2 uses 10M bases * n_threads per batch
+// With 16 threads and 150bp reads: 160M bases / 150 / 2 = ~533K pairs
+// We use 500K pairs to match BWA-MEM2's scale for maximum parallelism
+const PROCESSING_BATCH_SIZE: usize = 500_000;
 
 // Paired-end alignment constants
 #[allow(dead_code)] // Reserved for future use in alignment scoring
@@ -325,7 +326,7 @@ pub fn process_paired_end(
         batch_wall_elapsed.as_secs_f64()
     );
 
-    // === PHASE 2: Stream remaining batches with LARGE batch size ===
+    // === PHASE 2: Stream remaining batches ===
     log::info!(
         "Phase 2: Streaming remaining batches (batch_size={})",
         PROCESSING_BATCH_SIZE
@@ -336,7 +337,7 @@ pub fn process_paired_end(
     let mut total_records = first_batch_records;
 
     loop {
-        // Read batch directly with large batch size for better parallelization
+        // Read batch
         let batch1 = match reader1.read_batch(PROCESSING_BATCH_SIZE) {
             Ok(b) => b,
             Err(e) => {
@@ -379,11 +380,13 @@ pub fn process_paired_end(
             batch_size * 2
         );
 
-        // Track per-batch timing
+        // Track per-batch timing with phase breakdown
         let batch_start_cpu = cputime();
         let batch_start_wall = Instant::now();
 
-        // Process batch in parallel
+        // PHASE 1: Alignment (parallel)
+        let align_start = Instant::now();
+        let align_start_cpu = cputime();
         let num_pairs = batch1.names.len();
         let bwa_idx_clone = Arc::clone(&bwa_idx);
         let pac_clone = &pac; // Borrow pac for this scope
@@ -422,6 +425,8 @@ pub fn process_paired_end(
                 (a1, a2)
             })
             .collect();
+        let align_cpu = cputime() - align_start_cpu;
+        let align_wall = align_start.elapsed();
 
         // Update global pair counter
         pairs_processed += num_pairs as u64;
@@ -430,8 +435,9 @@ pub fn process_paired_end(
         let batch_seqs1 = batch1.as_tuple_refs();
         let batch_seqs2 = batch2.as_tuple_refs();
 
-        // Mate rescue on this batch (BWA-MEM2: run unconditionally on top alignments)
-        // Use horizontal SIMD for batched mate rescue when available
+        // PHASE 2: Mate rescue (parallel)
+        let rescue_start = Instant::now();
+        let rescue_start_cpu = cputime();
         let rescued = mate_rescue_batch(
             &mut batch_alignments,
             &batch_seqs1,
@@ -442,6 +448,8 @@ pub fn process_paired_end(
             opt.max_matesw as usize,
             simd_engine,
         );
+        let rescue_cpu = cputime() - rescue_start_cpu;
+        let rescue_wall = rescue_start.elapsed();
         total_rescued += rescued;
 
         // Prepare sequences for output (need owned versions)
@@ -460,7 +468,9 @@ pub fn process_paired_end(
             .map(|((n, s), q)| (n, s, q))
             .collect();
 
-        // Output batch immediately
+        // PHASE 3: Output (parallel format + sequential write)
+        let output_start = Instant::now();
+        let output_start_cpu = cputime();
         let records = output_batch_paired(
             batch_alignments,
             &batch_seqs1_owned,
@@ -475,11 +485,21 @@ pub fn process_paired_end(
             log::error!("Error writing batch: {}", e);
             0
         });
+        let output_cpu = cputime() - output_start_cpu;
+        let output_wall = output_start.elapsed();
         total_records += records;
 
-        // Log per-batch timing (matches BWA-MEM2 format)
+        // Log per-batch timing with phase breakdown
         let batch_cpu_elapsed = cputime() - batch_start_cpu;
         let batch_wall_elapsed = batch_start_wall.elapsed();
+
+        // Phase timing breakdown (only at INFO level for visibility)
+        log::info!(
+            "  Phases: align={:.1}s/{:.1}s ({:.0}%), rescue={:.1}s/{:.1}s ({:.0}%), output={:.1}s/{:.1}s ({:.0}%)",
+            align_cpu, align_wall.as_secs_f64(), 100.0 * align_cpu / batch_cpu_elapsed.max(0.001),
+            rescue_cpu, rescue_wall.as_secs_f64(), 100.0 * rescue_cpu / batch_cpu_elapsed.max(0.001),
+            output_cpu, output_wall.as_secs_f64(), 100.0 * output_cpu / batch_cpu_elapsed.max(0.001),
+        );
         log::info!(
             "Processed {} reads in {:.3} CPU sec, {:.3} real sec",
             batch_size * 2,
@@ -541,6 +561,8 @@ fn mate_rescue_batch(
     max_matesw: usize,
     simd_engine: Option<SimdEngineType>,
 ) -> usize {
+    use std::time::Instant;
+
     if pac.is_empty() {
         return 0;
     }
@@ -551,6 +573,7 @@ fn mate_rescue_batch(
     // We collect jobs in parallel from each pair, then flatten into one big list.
     // Each job stores (pair_index, which_read) so we know where to put results.
 
+    let phase1_start = Instant::now();
     let all_jobs: Vec<MateRescueJob> = batch_pairs
         .par_iter()
         .enumerate()
@@ -592,6 +615,8 @@ fn mate_rescue_batch(
         })
         .collect();
 
+    let phase1_elapsed = phase1_start.elapsed();
+
     if all_jobs.is_empty() {
         return 0;
     }
@@ -606,35 +631,78 @@ fn mate_rescue_batch(
     // PHASE 2: Execute all SW in parallel
     // ========================================================================
     // Use horizontal SIMD batching when a SIMD engine is specified
+    let phase2_start = Instant::now();
     let mut jobs_for_execution = all_jobs;
     let results = execute_mate_rescue_batch_with_engine(&mut jobs_for_execution, simd_engine);
+    let phase2_elapsed = phase2_start.elapsed();
 
     // ========================================================================
-    // PHASE 3: Distribute results back to pairs
+    // PHASE 3: Distribute results back to pairs (PARALLEL)
     // ========================================================================
-    // Track which pairs had at least one successful rescue
+    // OPTIMIZATION (Session 53): Parallelize result distribution
+    // The expensive part is result_to_alignment() which computes CIGAR, MD tags, etc.
+    // We use parallel fold to:
+    // 1. Process results in parallel (compute alignments)
+    // 2. Group into thread-local HashMaps by (pair_idx, is_read1)
+    // 3. Merge results at the end
+    use std::collections::HashMap;
+
+    let phase3_start = Instant::now();
+
+    // Type: HashMap<(pair_idx, is_read1), Vec<Alignment>>
+    type ResultMap = HashMap<(usize, bool), Vec<Alignment>>;
+
+    // Parallel fold: each thread builds its own HashMap
+    let merged_results: ResultMap = results
+        .par_iter()
+        .fold(
+            || ResultMap::new(),
+            |mut acc, result| {
+                let job = &jobs_for_execution[result.job_index];
+
+                // Convert SW result to Alignment (expensive - CIGAR, MD, NM)
+                if let Some(alignment) = result_to_alignment(job, &result.aln, bwa_idx, pac) {
+                    let key = (job.pair_index, job.rescuing_read1);
+                    acc.entry(key).or_default().push(alignment);
+                }
+                acc
+            },
+        )
+        .reduce(
+            || ResultMap::new(),
+            |mut a, b| {
+                // Merge maps: combine vectors for same keys
+                for (key, mut alignments) in b {
+                    a.entry(key).or_default().append(&mut alignments);
+                }
+                a
+            },
+        );
+
+    // Apply merged results to batch_pairs
     let mut pairs_rescued = vec![false; batch_pairs.len()];
-
-    for result in results.iter() {
-        let job = &jobs_for_execution[result.job_index];
-
-        // Try to convert the SW result to an Alignment
-        if let Some(alignment) = result_to_alignment(job, &result.aln, bwa_idx, pac) {
-            let pair_idx = job.pair_index;
-
-            // Add to the appropriate alignment list
-            if job.rescuing_read1 {
-                batch_pairs[pair_idx].0.push(alignment);
-            } else {
-                batch_pairs[pair_idx].1.push(alignment);
-            }
-
-            pairs_rescued[pair_idx] = true;
+    for ((pair_idx, is_read1), alignments) in merged_results {
+        if is_read1 {
+            batch_pairs[pair_idx].0.extend(alignments);
+        } else {
+            batch_pairs[pair_idx].1.extend(alignments);
         }
+        pairs_rescued[pair_idx] = true;
     }
+
+    let phase3_elapsed = phase3_start.elapsed();
 
     // Count how many pairs had at least one rescue
     let rescued_count = pairs_rescued.iter().filter(|&&x| x).count();
+
+    // Log phase timing breakdown
+    log::info!(
+        "  Rescue phases: collect={:.2}s, SW={:.2}s, distribute={:.2}s ({} jobs)",
+        phase1_elapsed.as_secs_f64(),
+        phase2_elapsed.as_secs_f64(),
+        phase3_elapsed.as_secs_f64(),
+        results.len()
+    );
 
     log::debug!(
         "Mate rescue: {} SW jobs produced {} rescued alignments in {} pairs",
@@ -832,6 +900,127 @@ fn reorder_for_best_pair(alignments: &mut Vec<Alignment>, best_idx: usize) {
     }
 }
 
+// Format a batch of paired-end alignments in PARALLEL
+// Returns Vec of formatted SAM record strings
+//
+// This is the key optimization: all CPU-intensive work (pairing, flag setting,
+// secondary marking, SAM string formatting) happens in parallel using rayon.
+// The caller just needs to write the pre-formatted strings sequentially.
+fn format_batch_paired_parallel(
+    batch_pairs: Vec<(Vec<Alignment>, Vec<Alignment>)>,
+    batch_seqs1: &[(String, Vec<u8>, String)],
+    batch_seqs2: &[(String, Vec<u8>, String)],
+    stats: &[InsertSizeStats; 4],
+    opt: &MemOpt,
+    starting_pair_id: u64,
+    l_pac: i64,
+) -> Vec<String> {
+    let rg_id = opt
+        .read_group
+        .as_ref()
+        .and_then(|rg| crate::alignment::mem_opt::MemOpt::extract_rg_id(rg));
+
+    // Process all pairs in parallel - this is where the CPU work happens
+    batch_pairs
+        .into_par_iter()
+        .enumerate()
+        .flat_map(|(pair_idx, (mut alignments1, mut alignments2))| {
+            let (name1, seq1, qual1) = &batch_seqs1[pair_idx];
+            let (name2, seq2, qual2) = &batch_seqs2[pair_idx];
+            let pair_id = starting_pair_id + pair_idx as u64;
+
+            // Stage 1: Filter by score threshold
+            let pe_threshold = opt.t;
+            filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, pe_threshold);
+            filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, pe_threshold);
+
+            // Stage 2: Select best pair
+            let (best_idx1, best_idx2, is_properly_paired) =
+                select_best_pair(&alignments1, &alignments2, stats, pair_id, l_pac);
+
+            // Stage 2b: Reorder so best pair is at index 0
+            reorder_for_best_pair(&mut alignments1, best_idx1);
+            reorder_for_best_pair(&mut alignments2, best_idx2);
+
+            // Stage 2c: Mark secondary/supplementary
+            mark_secondary_alignments(&mut alignments1, opt);
+            mark_secondary_alignments(&mut alignments2, opt);
+
+            let best_idx1 = 0;
+            let best_idx2 = 0;
+
+            // Stage 3: Build mate contexts
+            let (mate2_ref, mate2_pos, mate2_flag, mate2_ref_len) =
+                get_mate_info(&alignments2, best_idx2);
+            let (mate1_ref, mate1_pos, mate1_flag, mate1_ref_len) =
+                get_mate_info(&alignments1, best_idx1);
+
+            let mate2_cigar = alignments2
+                .get(best_idx2)
+                .map(|a| a.cigar_string())
+                .unwrap_or_else(|| "*".to_string());
+            let mate1_cigar = alignments1
+                .get(best_idx1)
+                .map(|a| a.cigar_string())
+                .unwrap_or_else(|| "*".to_string());
+
+            let ctx_for_read1 = PairedFlagContext {
+                mate_ref: mate2_ref,
+                mate_pos: mate2_pos,
+                mate_flag: mate2_flag,
+                mate_cigar: mate2_cigar,
+                mate_ref_len: mate2_ref_len,
+                is_properly_paired,
+            };
+
+            let ctx_for_read2 = PairedFlagContext {
+                mate_ref: mate1_ref,
+                mate_pos: mate1_pos,
+                mate_flag: mate1_flag,
+                mate_cigar: mate1_cigar,
+                mate_ref_len: mate1_ref_len,
+                is_properly_paired,
+            };
+
+            // Stage 4: Select output indices
+            let output_indices1 =
+                select_output_indices(&alignments1, best_idx1, opt.output_all_alignments, opt.t);
+            let output_indices2 =
+                select_output_indices(&alignments2, best_idx2, opt.output_all_alignments, opt.t);
+
+            // Stage 5: Format SAM strings for read1
+            let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
+            let mut records: Vec<String> = Vec::with_capacity(output_indices1.len() + output_indices2.len());
+
+            for idx in output_indices1 {
+                let is_primary = idx == best_idx1;
+                prepare_paired_alignment_read1(
+                    &mut alignments1[idx],
+                    is_primary,
+                    &ctx_for_read1,
+                    rg_id.as_deref(),
+                );
+                records.push(alignments1[idx].to_sam_string_with_seq(seq1_str, qual1));
+            }
+
+            // Stage 6: Format SAM strings for read2
+            let seq2_str = std::str::from_utf8(seq2).unwrap_or("");
+            for idx in output_indices2 {
+                let is_primary = idx == best_idx2;
+                prepare_paired_alignment_read2(
+                    &mut alignments2[idx],
+                    is_primary,
+                    &ctx_for_read2,
+                    rg_id.as_deref(),
+                );
+                records.push(alignments2[idx].to_sam_string_with_seq(seq2_str, qual2));
+            }
+
+            records
+        })
+        .collect()
+}
+
 // Output a batch of paired-end alignments with proper flags and flushing
 // Returns number of records written
 //
@@ -854,122 +1043,25 @@ fn output_batch_paired(
     starting_pair_id: u64,
     l_pac: i64,
 ) -> std::io::Result<usize> {
-    let mut records_written = 0;
+    // PARALLEL FORMATTING: All CPU-intensive work happens here in parallel
+    let formatted_records = format_batch_paired_parallel(
+        batch_pairs,
+        batch_seqs1,
+        batch_seqs2,
+        stats,
+        opt,
+        starting_pair_id,
+        l_pac,
+    );
 
-    // Extract RG ID once
-    let rg_id = opt
-        .read_group
-        .as_ref()
-        .and_then(|rg| crate::alignment::mem_opt::MemOpt::extract_rg_id(rg));
+    let records_written = formatted_records.len();
 
-    for (pair_idx, (mut alignments1, mut alignments2)) in batch_pairs.into_iter().enumerate() {
-        let (name1, seq1, qual1) = &batch_seqs1[pair_idx];
-        let (name2, seq2, qual2) = &batch_seqs2[pair_idx];
-        let pair_id = starting_pair_id + pair_idx as u64;
-
-        log::debug!(
-            "Processing pair {}: {} ({} alns), {} ({} alns)",
-            pair_id,
-            name1,
-            alignments1.len(),
-            name2,
-            alignments2.len()
-        );
-
-        // Stage 1: Filter by score threshold
-        // Use opt.t (30) to match BWA-MEM2's opt->T threshold in mem_reg2sam
-        // N-rich reads should be addressed through specialized seeding, not lower thresholds
-        let pe_threshold = opt.t;
-        filter_alignments_by_threshold(&mut alignments1, name1, seq1, true, pe_threshold);
-        filter_alignments_by_threshold(&mut alignments2, name2, seq2, false, pe_threshold);
-
-        // Stage 2: Select best pair (using alignments without secondary marking)
-        let (best_idx1, best_idx2, is_properly_paired) =
-            select_best_pair(&alignments1, &alignments2, stats, pair_id, l_pac);
-
-        // Stage 2b: Reorder alignments so best pair is at index 0
-        // This ensures pair selection influences which alignment becomes primary
-        reorder_for_best_pair(&mut alignments1, best_idx1);
-        reorder_for_best_pair(&mut alignments2, best_idx2);
-
-        // Stage 2c: Now apply secondary/supplementary marking with correct order
-        // The best pair alignment is now at index 0, so it becomes primary
-        mark_secondary_alignments(&mut alignments1, opt);
-        mark_secondary_alignments(&mut alignments2, opt);
-
-        // After reordering, best indices are now 0
-        let best_idx1 = 0;
-        let best_idx2 = 0;
-
-        // Stage 3: Build mate contexts for flag setting
-        let (mate2_ref, mate2_pos, mate2_flag, mate2_ref_len) =
-            get_mate_info(&alignments2, best_idx2);
-        let (mate1_ref, mate1_pos, mate1_flag, mate1_ref_len) =
-            get_mate_info(&alignments1, best_idx1);
-
-        let mate2_cigar = alignments2
-            .get(best_idx2)
-            .map(|a| a.cigar_string())
-            .unwrap_or_else(|| "*".to_string());
-        let mate1_cigar = alignments1
-            .get(best_idx1)
-            .map(|a| a.cigar_string())
-            .unwrap_or_else(|| "*".to_string());
-
-        let ctx_for_read1 = PairedFlagContext {
-            mate_ref: mate2_ref,
-            mate_pos: mate2_pos,
-            mate_flag: mate2_flag,
-            mate_cigar: mate2_cigar,
-            mate_ref_len: mate2_ref_len,
-            is_properly_paired,
-        };
-
-        let ctx_for_read2 = PairedFlagContext {
-            mate_ref: mate1_ref,
-            mate_pos: mate1_pos,
-            mate_flag: mate1_flag,
-            mate_cigar: mate1_cigar,
-            mate_ref_len: mate1_ref_len,
-            is_properly_paired,
-        };
-
-        // Stage 4: Select which alignments to output
-        let output_indices1 =
-            select_output_indices(&alignments1, best_idx1, opt.output_all_alignments, opt.t);
-        let output_indices2 =
-            select_output_indices(&alignments2, best_idx2, opt.output_all_alignments, opt.t);
-
-        // Stage 5: Write alignments for read1
-        let seq1_str = std::str::from_utf8(seq1).unwrap_or("");
-        for idx in output_indices1 {
-            let is_primary = idx == best_idx1;
-            prepare_paired_alignment_read1(
-                &mut alignments1[idx],
-                is_primary,
-                &ctx_for_read1,
-                rg_id.as_deref(),
-            );
-            write_sam_record(writer, &alignments1[idx], seq1_str, qual1)?;
-            records_written += 1;
-        }
-
-        // Stage 6: Write alignments for read2
-        let seq2_str = std::str::from_utf8(seq2).unwrap_or("");
-        for idx in output_indices2 {
-            let is_primary = idx == best_idx2;
-            prepare_paired_alignment_read2(
-                &mut alignments2[idx],
-                is_primary,
-                &ctx_for_read2,
-                rg_id.as_deref(),
-            );
-            write_sam_record(writer, &alignments2[idx], seq2_str, qual2)?;
-            records_written += 1;
-        }
+    // SEQUENTIAL WRITES: Just write pre-formatted strings (fast)
+    for record in formatted_records {
+        writeln!(writer, "{}", record)?;
     }
 
-    // CRITICAL: Flush after each batch for incremental output
+    // Flush after each batch for incremental output
     writer.flush()?;
 
     Ok(records_written)

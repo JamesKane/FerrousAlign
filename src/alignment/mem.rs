@@ -5,6 +5,7 @@ use crate::index::index::BwaIndex;
 use anyhow::Result;
 use std::fs::File;
 use std::io::{self, Write};
+use crate::io::async_writer::AsyncChannelWriter;
 // Added import for BwaIndex
 
 pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
@@ -174,8 +175,8 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     let bwa_idx = BwaIndex::bwa_idx_load(&opts.index)
         .map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
 
-    // Determine output writer
-    let mut writer: Box<dyn Write> = match opts.output {
+    // Determine base output writer (synchronous) for headers
+    let mut base_writer: Box<dyn Write + Send> = match opts.output {
         Some(ref file_name) => Box::new(File::create(file_name).map_err(|e| {
             anyhow::anyhow!("Error creating output file {}: {}", file_name.display(), e)
         })?),
@@ -183,12 +184,12 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     };
 
     // Write SAM header
-    writeln!(writer, "@HD\tVN:1.0\tSO:unsorted")
+    writeln!(base_writer, "@HD\tVN:1.0\tSO:unsorted")
         .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
 
     // Write @SQ lines for reference sequences
     for ann in &bwa_idx.bns.annotations {
-        writeln!(writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length)
+        writeln!(base_writer, "@SQ\tSN:{}\tLN:{}", ann.name, ann.sequence_length)
             .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
     }
 
@@ -200,7 +201,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     writeln!(
-        writer,
+        base_writer,
         "@PG\tID:{}\tPN:{}\tVN:{}\tCL:{}",
         PKG_NAME,
         PKG_NAME,
@@ -218,15 +219,18 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
             format!("@RG\t{}", rg_line)
         };
 
-        writeln!(writer, "{}", formatted_rg)
+        writeln!(base_writer, "{}", formatted_rg)
             .map_err(|e| anyhow::anyhow!("Error writing read group header: {}", e))?;
     }
 
     // Write custom header lines if provided (-H option)
     for header_line in &opt.header_lines {
-        writeln!(writer, "{}", header_line)
+        writeln!(base_writer, "{}", header_line)
             .map_err(|e| anyhow::anyhow!("Error writing custom header: {}", e))?;
     }
+
+    // Switch to asynchronous writer for records to overlap I/O with computation
+    let mut writer: Box<dyn Write> = Box::new(AsyncChannelWriter::new(base_writer));
 
     // ========================================================================
     // HETEROGENEOUS COMPUTE DISPATCH
@@ -265,5 +269,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
             .collect();
         process_single_end(&bwa_idx, &read_files_str, &mut writer, &opt, &compute_ctx);
     }
+    // Drop writer to ensure background thread flushes and joins before exit
+    drop(writer);
     Ok(())
 }

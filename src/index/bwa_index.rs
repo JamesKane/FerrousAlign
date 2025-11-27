@@ -233,6 +233,8 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
         cp_occ,
         sentinel_index,
         min_seed_len: 19,
+        mmap_bwt: None, // Not needed for building
+        mmap_pac: None,
     };
     bwa_index_to_dump.dump(prefix)?;
 

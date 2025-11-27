@@ -14,6 +14,8 @@ use flate2::read::GzDecoder;
 use noodles_bgzf as bgzf;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread::{self, JoinHandle};
 
 /// Batch of FASTQ reads
 pub struct ReadBatch {
@@ -71,7 +73,7 @@ impl ReadBatch {
 
 /// FASTQ reader with automatic gzip/bgzip detection
 pub struct FastqReader {
-    records: fastq::Records<BufReader<Box<dyn Read>>>,
+    records: fastq::Records<BufReader<Box<dyn Read + Send>>>,
 }
 
 /// Detect if a gzipped file is BGZIP format by checking for BGZIP-specific header
@@ -119,7 +121,7 @@ impl FastqReader {
     pub fn new(path: &str) -> io::Result<Self> {
         const BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4MB buffer
 
-        let reader: Box<dyn Read> = if path.ends_with(".gz") {
+        let reader: Box<dyn Read + Send> = if path.ends_with(".gz") {
             // Check if file is BGZIP format
             if is_bgzip_format(path)? {
                 log::debug!("Detected BGZIP format, using parallel decompression");
@@ -180,5 +182,148 @@ impl FastqReader {
         }
 
         Ok(batch)
+    }
+}
+
+// =============================================================================
+// DOUBLE-BUFFERED PAIRED READER
+// =============================================================================
+//
+// This reader overlaps I/O with computation by reading the next batch in a
+// background thread while the main thread processes the current batch.
+//
+// Architecture:
+// - Background thread: Reads paired batches and sends through bounded channel
+// - Main thread: Receives pre-read batches (should be ready immediately)
+// - Channel capacity of 1 provides double-buffering (one being processed,
+//   one being read)
+//
+// Performance impact:
+// - Eliminates serial I/O wait between batches
+// - I/O happens in parallel with alignment computation
+// - Improves CPU utilization from ~469% to ~800%+ (goal)
+
+/// Result of reading a paired batch
+pub type PairedBatchResult = Result<(ReadBatch, ReadBatch), io::Error>;
+
+/// Double-buffered reader for paired FASTQ files
+///
+/// Reads batches in a background thread to overlap I/O with computation.
+/// This eliminates the serial I/O bottleneck between parallel processing batches.
+pub struct DoubleBufferedPairedReader {
+    receiver: Receiver<PairedBatchResult>,
+    reader_thread: Option<JoinHandle<()>>,
+}
+
+impl DoubleBufferedPairedReader {
+    /// Create a new double-buffered paired reader
+    ///
+    /// Immediately starts reading the first batch in a background thread.
+    ///
+    /// # Arguments
+    /// * `path1` - Path to read 1 FASTQ file
+    /// * `path2` - Path to read 2 FASTQ file
+    /// * `batch_size` - Number of read pairs per batch
+    ///
+    /// # Returns
+    /// * `Ok(DoubleBufferedPairedReader)` on success
+    /// * `Err(io::Error)` if files cannot be opened
+    pub fn new(path1: &str, path2: &str, batch_size: usize) -> io::Result<Self> {
+        // Open readers to validate paths before spawning thread
+        let reader1 = FastqReader::new(path1)?;
+        let reader2 = FastqReader::new(path2)?;
+
+        // Bounded channel with capacity 1 = double buffering
+        // One batch being processed, one batch being read
+        let (sender, receiver): (SyncSender<PairedBatchResult>, Receiver<PairedBatchResult>) =
+            mpsc::sync_channel(1);
+
+        // Spawn background reader thread
+        let reader_thread = thread::spawn(move || {
+            Self::reader_loop(reader1, reader2, batch_size, sender);
+        });
+
+        Ok(Self {
+            receiver,
+            reader_thread: Some(reader_thread),
+        })
+    }
+
+    /// Background reader loop - reads batches and sends through channel
+    fn reader_loop(
+        mut reader1: FastqReader,
+        mut reader2: FastqReader,
+        batch_size: usize,
+        sender: SyncSender<PairedBatchResult>,
+    ) {
+        loop {
+            // Read paired batch
+            let batch1 = match reader1.read_batch(batch_size) {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = sender.send(Err(e));
+                    return;
+                }
+            };
+
+            let batch2 = match reader2.read_batch(batch_size) {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = sender.send(Err(e));
+                    return;
+                }
+            };
+
+            // Check for EOF (empty batch)
+            if batch1.is_empty() {
+                // Send empty batch to signal EOF, then exit
+                let _ = sender.send(Ok((batch1, batch2)));
+                return;
+            }
+
+            // Send batch through channel (blocks if channel full = backpressure)
+            if sender.send(Ok((batch1, batch2))).is_err() {
+                // Receiver dropped, exit thread
+                return;
+            }
+        }
+    }
+
+    /// Receive the next pre-read batch pair
+    ///
+    /// This should return almost immediately if the reader thread has been
+    /// reading while the previous batch was being processed.
+    ///
+    /// # Returns
+    /// * `Ok(Some((batch1, batch2)))` - Next batch pair
+    /// * `Ok(None)` - EOF reached
+    /// * `Err(io::Error)` - Read error occurred
+    pub fn next_batch(&self) -> io::Result<Option<(ReadBatch, ReadBatch)>> {
+        match self.receiver.recv() {
+            Ok(Ok((batch1, batch2))) => {
+                if batch1.is_empty() {
+                    Ok(None) // EOF
+                } else {
+                    Ok(Some((batch1, batch2)))
+                }
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                // Channel disconnected - reader thread exited unexpectedly
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "Reader thread disconnected",
+                ))
+            }
+        }
+    }
+}
+
+impl Drop for DoubleBufferedPairedReader {
+    fn drop(&mut self) {
+        // Wait for reader thread to finish
+        if let Some(handle) = self.reader_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
