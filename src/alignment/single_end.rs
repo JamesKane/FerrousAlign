@@ -10,7 +10,7 @@
 // - Selection: sam_output::select_single_end_alignments() filters output
 // - Output: sam_output::write_sam_record() writes to stream
 
-use crate::alignment::batch_extension::process_batch_cross_read;
+use crate::alignment::batch_extension::{process_batch_cross_read, process_batch_parallel_subbatch};
 use crate::alignment::finalization::Alignment;
 use crate::alignment::mem_opt::MemOpt;
 use crate::alignment::pipeline::align_read_deferred;
@@ -149,25 +149,48 @@ pub fn process_single_end(
             let batch_start_id = reads_processed; // Capture for closure
             let compute_backend = compute_ctx.backend.clone();
 
-            // Check if cross-read batching is enabled via environment variable
-            // Set FERROUS_CROSS_READ_BATCH=1 to enable the new batching mode
+            // Check batching mode via environment variables:
+            // - FERROUS_CROSS_READ_BATCH=1: Global cross-read batching (experimental, slow)
+            // - FERROUS_PARALLEL_SUBBATCH=1: Parallel sub-batch processing (optimized)
+            // - Default: Per-read processing with rayon
             let use_cross_read_batching =
                 std::env::var("FERROUS_CROSS_READ_BATCH").map_or(false, |v| v == "1");
+            let use_parallel_subbatch =
+                std::env::var("FERROUS_PARALLEL_SUBBATCH").map_or(false, |v| v == "1");
 
-            let alignments: Vec<Vec<Alignment>> = if use_cross_read_batching {
-                // NEW: Cross-read batched processing for better SIMD utilization
+            let alignments: Vec<Vec<Alignment>> = if use_parallel_subbatch {
+                // OPTIMIZED: Parallel sub-batch processing (BWA-MEM2 style)
+                // Processes ~512-read sub-batches in parallel, with cross-read batching
+                // within each sub-batch for better SIMD utilization
                 let engine = match &compute_backend {
                     ComputeBackend::CpuSimd(e) => *e,
-                    _ => SimdEngineType::Engine128, // Fallback for GPU/NPU
+                    _ => SimdEngineType::Engine128,
+                };
+
+                process_batch_parallel_subbatch(
+                    *bwa_idx_clone, // Deref Arc<&BwaIndex> -> &BwaIndex
+                    &pac_data_clone,
+                    *opt_clone, // Deref Arc<&MemOpt> -> &MemOpt
+                    &batch.names,
+                    &batch.seqs,
+                    &batch.quals,
+                    batch_start_id,
+                    engine,
+                )
+            } else if use_cross_read_batching {
+                // EXPERIMENTAL: Global cross-read batching (slow due to sequential phases)
+                let engine = match &compute_backend {
+                    ComputeBackend::CpuSimd(e) => *e,
+                    _ => SimdEngineType::Engine128,
                 };
 
                 process_batch_cross_read(
-                    &bwa_idx_clone,
+                    *bwa_idx_clone, // Deref Arc<&BwaIndex> -> &BwaIndex
                     &pac_data_clone,
-                    &opt_clone,
+                    *opt_clone, // Deref Arc<&MemOpt> -> &MemOpt
                     &batch.names,
                     &batch.seqs,
-                    &batch.quals, // Already Vec<String>, no conversion needed
+                    &batch.quals,
                     batch_start_id,
                     engine,
                 )
