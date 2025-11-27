@@ -730,8 +730,8 @@ pub unsafe fn simd_banded_swa_batch16_int16(
         // Initialize first row: h0 for position 0, h0 - oe_ins - j*e_ins for others
         for lane in 0..SIMD_WIDTH {
             let h0_val = h0[lane];
-            h_matrix[0 * SIMD_WIDTH + lane] = h0_val;
-            e_matrix[0 * SIMD_WIDTH + lane] = 0;
+            h_matrix[lane] = h0_val;
+            e_matrix[lane] = 0;
 
             // Fill first row with gap penalties
             let mut prev_h = h0_val;

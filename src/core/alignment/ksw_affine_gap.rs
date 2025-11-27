@@ -75,7 +75,7 @@ pub struct Kswr {
 /// # Returns
 /// A newly allocated `Kswq` structure. The caller is responsible for deallocating
 /// the memory using `ksw_qfree`.
-pub fn ksw_qinit(size: i32, qlen: i32, query: &[u8], m: i32, mat: &[i8]) -> *mut Kswq {
+pub unsafe fn ksw_qinit(size: i32, qlen: i32, query: &[u8], m: i32, mat: &[i8]) -> *mut Kswq {
     let ptr = unsafe { ksw_qalloc(qlen, m, size) };
 
     if ptr.is_null() {
@@ -211,7 +211,7 @@ pub fn ksw_qfree(q_ptr: *mut Kswq) {
         return;
     }
 
-    let q = unsafe { &*q_ptr };
+    let q = unsafe { &mut *q_ptr };
 
     let size = q.size as i32;
     let qlen = q.qlen;
@@ -824,7 +824,7 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
             ksw_qfree(q_ptr);
             return r;
         }
-        let q2 = &mut *q2_ptr;
+        let q2 = unsafe { &mut *q2_ptr };
 
         // Run reverse alignment with KSW_XSTOP flag set to the forward score
         let xtra2 = KSW_XSTOP | (r.score as u32);

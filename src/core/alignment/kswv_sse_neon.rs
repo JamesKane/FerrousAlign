@@ -141,9 +141,6 @@ pub unsafe fn batch_ksw_align_sse_neon(
     }
 
     // Replicate pattern for full SSE/NEON width
-    for i in 16..SIMD_WIDTH8 {
-        temp[i] = temp[i - 16];
-    }
 
     let perm_sft256 = SimdEngine128::loadu_si128(temp.as_ptr() as *const _);
     let sft256 = SimdEngine128::set1_epi8(shift as i8);
