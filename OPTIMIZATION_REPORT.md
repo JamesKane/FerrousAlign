@@ -42,7 +42,7 @@ This is the most crucial optimization.
     4.  The writer thread runs in a simple loop: receive a result from the channel and write it to the output stream.
 
 - **Benefits:** This change will allow computation and output I/O to happen in parallel, dramatically increasing CPU utilization and overall throughput.
-
+to 
 ### 3.2. Parallelize SAM String Formatting
 
 - **Strategy:** Move the responsibility of SAM string generation from the writer into the parallel processing stage.

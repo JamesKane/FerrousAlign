@@ -725,6 +725,8 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     let mut beg = [0i16; SIMD_WIDTH];
     let mut end = qlen;
     let mut terminated = [false; SIMD_WIDTH];
+    // SIMD mask for terminated lanes (converted from bool array when needed)
+    let mut terminated_mask: __mmask32 = 0;
 
     // Initialize first row: h0 for position 0, h0 - oe_ins - j*e_ins for others
     for lane in 0..SIMD_WIDTH {
@@ -757,6 +759,9 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     // ==================================================================
 
     let mut max_score_vec = _mm512_loadu_si512(max_scores.as_ptr() as *const __m512i);
+    // SIMD vectors for max position tracking (avoids scalar loops in hot path)
+    let mut max_i_vec = _mm512_set1_epi16(-1);
+    let mut max_j_vec = _mm512_set1_epi16(-1);
 
     for i in 0..max_tlen as usize {
         // Load target bases for this row as 16-bit SIMD vector
@@ -859,24 +864,29 @@ pub unsafe fn simd_banded_swa_batch32_int16(
             f_vec = _mm512_max_epi16(f_from_m, f_from_f);
             f_vec = _mm512_max_epi16(f_vec, zero_vec);
 
-            // Update max score and track position (per-lane)
-            let mut h11_arr = [0i16; SIMD_WIDTH];
-            _mm512_storeu_si512(h11_arr.as_mut_ptr() as *mut __m512i, h11_vec);
+            // VECTORIZED max score tracking (replaces scalar loop - critical for AVX-512 perf)
+            // Load current_beg and current_end as SIMD vectors
+            let beg_vec = _mm512_loadu_si512(current_beg.as_ptr() as *const __m512i);
+            let end_vec = _mm512_loadu_si512(current_end.as_ptr() as *const __m512i);
+            let j_vec = _mm512_set1_epi16(j as i16);
+            let i_vec = _mm512_set1_epi16(i as i16);
 
-            for lane in 0..SIMD_WIDTH {
-                if !terminated[lane]
-                    && j >= current_beg[lane] as usize
-                    && j < current_end[lane] as usize
-                    && h11_arr[lane] > max_scores[lane]
-                {
-                    max_scores[lane] = h11_arr[lane];
-                    max_i[lane] = i as i16;
-                    max_j[lane] = j as i16;
-                }
-            }
+            // Create masks for in-bounds check using AVX-512 comparison intrinsics
+            // j >= current_beg: true where j is at or past band start
+            let in_bounds_low: __mmask32 = _mm512_cmpge_epi16_mask(j_vec, beg_vec);
+            // j < current_end: true where j is before band end
+            let in_bounds_high: __mmask32 = _mm512_cmplt_epi16_mask(j_vec, end_vec);
+            // h11 > max_score: true where this cell beats the current best
+            let better_score: __mmask32 = _mm512_cmpgt_epi16_mask(h11_vec, max_score_vec);
 
-            // Update max_score_vec from per-lane tracking
-            max_score_vec = _mm512_loadu_si512(max_scores.as_ptr() as *const __m512i);
+            // Combine all conditions: in_bounds AND better_score AND !terminated
+            // Note: terminated_mask has bits SET for terminated lanes, so we invert it
+            let update_mask: __mmask32 = in_bounds_low & in_bounds_high & better_score & !terminated_mask;
+
+            // Conditionally update max_score_vec, max_i_vec, max_j_vec using blend
+            max_score_vec = _mm512_mask_blend_epi16(update_mask, max_score_vec, h11_vec);
+            max_i_vec = _mm512_mask_blend_epi16(update_mask, max_i_vec, i_vec);
+            max_j_vec = _mm512_mask_blend_epi16(update_mask, max_j_vec, j_vec);
 
             // h1_vec = H(i, j) for the next column
             h1_vec = h11_vec;
@@ -886,7 +896,7 @@ pub unsafe fn simd_banded_swa_batch32_int16(
         let mut max_score_vals = [0i16; SIMD_WIDTH];
         _mm512_storeu_si512(max_score_vals.as_mut_ptr() as *mut __m512i, max_score_vec);
 
-        // Z-drop early termination
+        // Z-drop early termination (per-row, not per-cell - less critical for perf)
         if zdrop > 0 {
             for lane in 0..SIMD_WIDTH {
                 if !terminated[lane] && i > 0 && i < tlen[lane] as usize {
@@ -901,6 +911,8 @@ pub unsafe fn simd_banded_swa_batch32_int16(
 
                     if max_score_vals[lane] - row_max > zdrop as i16 {
                         terminated[lane] = true;
+                        // Sync terminated_mask: set bit for this lane
+                        terminated_mask |= 1u32 << lane;
                     }
                 }
             }
@@ -914,8 +926,10 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     // Step 5: Result Extraction
     // ==================================================================
 
-    // Extract final max scores from SIMD vector
+    // Extract final values from SIMD vectors to arrays
     _mm512_storeu_si512(max_scores.as_mut_ptr() as *mut __m512i, max_score_vec);
+    _mm512_storeu_si512(max_i.as_mut_ptr() as *mut __m512i, max_i_vec);
+    _mm512_storeu_si512(max_j.as_mut_ptr() as *mut __m512i, max_j_vec);
 
     let mut results = Vec::with_capacity(batch_size);
     for lane in 0..batch_size {
