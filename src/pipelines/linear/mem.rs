@@ -49,6 +49,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     opt.drop_ratio = opts.drop_chain_fraction;
     opt.min_chain_weight = opts.min_chain_weight;
     opt.max_matesw = opts.max_mate_rescues;
+    opt.batch_size = opts.batch_size;
 
     // Scoring options
     opt.update_scoring(opts.match_score, opts.mismatch_penalty);

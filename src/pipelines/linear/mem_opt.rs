@@ -55,6 +55,7 @@ pub struct MemOpt {
     // Processing parameters
     pub n_threads: i32,  // Number of threads
     pub chunk_size: i64, // Process chunk_size-bp sequences in a batch
+    pub batch_size: usize, // Number of read pairs to process in a batch
 
     // Mapping quality parameters
     pub mapq_coef_len: f32, // Coefficient length for mapQ calculation
@@ -246,6 +247,10 @@ pub struct MemCliOptions {
     #[arg(short = 'K', long, value_name = "INT")]
     pub chunk_size: Option<i64>,
 
+    /// Number of read pairs to process in a batch (default: 100_000)
+    #[arg(long, value_name = "INT", default_value_t = 100_000)]
+    pub batch_size: usize,
+
     /// Verbose level: 1=error, 2=warning, 3=message, 4=debug, 5+=trace
     #[arg(short = 'v', long, value_name = "INT", default_value_t = VERBOSITY as u8)]
     pub verbosity: u8,
@@ -368,6 +373,7 @@ impl Default for MemOpt {
             // Processing
             n_threads: 1,
             chunk_size: 10_000_000,
+            batch_size: 100_000,
 
             // Mapping quality
             mapq_coef_len: 50.0,

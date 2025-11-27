@@ -48,7 +48,7 @@ const BOOTSTRAP_BATCH_SIZE: usize = 512;
 // BWA-MEM2 uses 10M bases * n_threads per batch
 // With 16 threads and 150bp reads: 160M bases / 150 / 2 = ~533K pairs
 // We use 500K pairs to match BWA-MEM2's scale for maximum parallelism
-const PROCESSING_BATCH_SIZE: usize = 500_000;
+// const PROCESSING_BATCH_SIZE: usize = 500_000; // Removed, now comes from opt.batch_size
 
 // Paired-end alignment constants
 #[allow(dead_code)] // Reserved for future use in alignment scoring
@@ -104,7 +104,7 @@ pub fn process_paired_end(
     log::debug!(
         "Using batch sizes: bootstrap={}, processing={}",
         BOOTSTRAP_BATCH_SIZE,
-        PROCESSING_BATCH_SIZE
+        opt.batch_size
     );
 
     // PAC data is already loaded into memory in bwa_idx.bns.pac_data
@@ -329,7 +329,7 @@ pub fn process_paired_end(
     // === PHASE 2: Stream remaining batches ===
     log::info!(
         "Phase 2: Streaming remaining batches (batch_size={})",
-        PROCESSING_BATCH_SIZE
+        opt.batch_size
     );
 
     let mut batch_num = 1u64;
@@ -338,14 +338,14 @@ pub fn process_paired_end(
 
     loop {
         // Read batch
-        let batch1 = match reader1.read_batch(PROCESSING_BATCH_SIZE) {
+        let batch1 = match reader1.read_batch(opt.batch_size) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("Error reading batch {} from read1: {}", batch_num, e);
                 break;
             }
         };
-        let batch2 = match reader2.read_batch(PROCESSING_BATCH_SIZE) {
+        let batch2 = match reader2.read_batch(opt.batch_size) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("Error reading batch {} from read2: {}", batch_num, e);
@@ -375,7 +375,7 @@ pub fn process_paired_end(
         );
         log::info!(
             "read_chunk: {}, work_chunk_size: {}, nseq: {}",
-            PROCESSING_BATCH_SIZE,
+            opt.batch_size,
             batch_bp,
             batch_size * 2
         );
@@ -491,7 +491,7 @@ pub fn process_paired_end(
             &current_stats,
             writer,
             &opt,
-            batch_num * PROCESSING_BATCH_SIZE as u64,
+            batch_num * opt.batch_size as u64,
             l_pac,
         )
         .unwrap_or_else(|e| {
