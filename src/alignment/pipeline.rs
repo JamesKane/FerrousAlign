@@ -26,7 +26,10 @@ use crate::index::index::BwaIndex;
 // ============================================================================
 
 /// Stage 1: Seed Finding
-fn find_seeds(
+///
+/// Generates seeds from the FM-Index using SMEM algorithm.
+/// Returns seeds and encoded query sequences.
+pub fn find_seeds(
     bwa_idx: &BwaIndex,
     query_name: &str,
     query_seq: &[u8],
@@ -571,7 +574,10 @@ fn find_seeds(
 }
 
 /// Stage 2: Chaining
-fn build_and_filter_chains(
+///
+/// Chains seeds together using O(n²) DP and filters by score.
+/// Returns filtered chains and sorted seeds.
+pub fn build_and_filter_chains(
     seeds: Vec<Seed>,
     opt: &MemOpt,
     query_len: usize,
