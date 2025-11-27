@@ -313,11 +313,15 @@ impl BandedPairWiseSW {
                     m_score = 0;
                 } // Local alignment: clamp to 0
 
-                // Determine max of M, E, F
-                let mut h_scores = [(m_score, TB_MATCH), (e, TB_DEL), (f, TB_INS)];
-                h_scores.sort_by_key(|k| k.0); // Sort by score to find max
-
-                let (h, tb_code) = h_scores[2]; // Get the max score and its traceback code
+                // Determine max of M, E, F using simple comparisons
+                // (Replaces expensive sort_by_key call that was O(n log n) per cell)
+                let (h, tb_code) = if m_score >= e && m_score >= f {
+                    (m_score, TB_MATCH)
+                } else if e >= f {
+                    (e, TB_DEL)
+                } else {
+                    (f, TB_INS)
+                };
                 _h1 = h;
                 _current_tb = tb_code;
 
