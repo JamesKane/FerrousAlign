@@ -193,6 +193,8 @@ pub unsafe fn batch_ksw_align_avx2(
     let mut te256_hi = SimdEngine256::set1_epi16(-1); // sequences 16-31
 
     // Allocate DP matrices (H, F, rowMax)
+    // TODO: Consider using workspace pre-allocation for sequences <= 256bp
+    // to avoid ~32KB allocation per call (similar to batch16 kernel optimization)
     let max_query_len = ncol as usize + 1;
     let max_ref_len = nrow as usize + 1;
 

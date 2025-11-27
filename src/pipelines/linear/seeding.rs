@@ -97,6 +97,8 @@ pub fn generate_smems_for_strand<'a>(
 
         // Phase 1: Forward extension
         prev_array_buf.clear();
+        // Pre-reserve capacity for branchless append (max possible SMEMs is remaining positions)
+        prev_array_buf.reserve(query_len.saturating_sub(x));
         let mut next_x = x + 1;
 
         for j in (x + 1)..query_len {
@@ -132,24 +134,32 @@ pub fn generate_smems_for_strand<'a>(
                 );
             }
 
-            if new_smem.interval_size != smem.interval_size {
-                if x < 3 && !is_reverse_complement {
-                    let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
-                        smem.bwt_interval_end - smem.bwt_interval_start
-                    } else {
-                        0
-                    };
-                    log::debug!(
-                        "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
-                        query_name,
-                        x,
-                        j,
-                        smem.interval_size,
-                        s_from_lk,
-                        smem.interval_size == s_from_lk
-                    );
-                }
-                prev_array_buf.push(smem);
+            // Debug logging (only for first few positions on forward strand)
+            if x < 3 && !is_reverse_complement && new_smem.interval_size != smem.interval_size {
+                let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
+                    smem.bwt_interval_end - smem.bwt_interval_start
+                } else {
+                    0
+                };
+                log::debug!(
+                    "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
+                    query_name,
+                    x,
+                    j,
+                    smem.interval_size,
+                    s_from_lk,
+                    smem.interval_size == s_from_lk
+                );
+            }
+            // Branchless append - matches C++ FMI_search.cpp:556-559
+            // int32_t s_neq_mask = newSmem.s != smem.s;
+            // prevArray[numPrev] = smem;
+            // numPrev += s_neq_mask;
+            // SAFETY: capacity was pre-reserved for query_len elements
+            let mask = (new_smem.interval_size != smem.interval_size) as usize;
+            unsafe {
+                std::ptr::write(prev_array_buf.as_mut_ptr().add(prev_array_buf.len()), smem);
+                prev_array_buf.set_len(prev_array_buf.len() + mask);
             }
 
             if new_smem.interval_size < min_intv {
@@ -173,8 +183,12 @@ pub fn generate_smems_for_strand<'a>(
             smem.query_end = j as i32;
         }
 
-        if smem.interval_size >= min_intv {
-            prev_array_buf.push(smem);
+        // Branchless append for final SMEM after forward loop
+        // SAFETY: capacity was pre-reserved for query_len elements
+        let mask = (smem.interval_size >= min_intv) as usize;
+        unsafe {
+            std::ptr::write(prev_array_buf.as_mut_ptr().add(prev_array_buf.len()), smem);
+            prev_array_buf.set_len(prev_array_buf.len() + mask);
         }
 
         if x < 3 && !is_reverse_complement {
@@ -455,6 +469,8 @@ pub fn generate_smems_from_position<'a>(
     // Clear buffers for reuse (retains capacity)
     prev_array_buf.clear();
     curr_array_buf.clear();
+    // Pre-reserve capacity for branchless append
+    prev_array_buf.reserve(query_len.saturating_sub(start_pos));
 
     if start_pos >= query_len {
         return;
@@ -488,8 +504,12 @@ pub fn generate_smems_from_position<'a>(
 
         let new_smem = forward_ext(bwa_idx, smem, a);
 
-        if new_smem.interval_size != smem.interval_size {
-            prev_array_buf.push(smem);
+        // Branchless append - matches C++ FMI_search.cpp:556-559
+        // SAFETY: capacity was pre-reserved
+        let mask = (new_smem.interval_size != smem.interval_size) as usize;
+        unsafe {
+            std::ptr::write(prev_array_buf.as_mut_ptr().add(prev_array_buf.len()), smem);
+            prev_array_buf.set_len(prev_array_buf.len() + mask);
         }
 
         if new_smem.interval_size < min_intv {
@@ -500,8 +520,12 @@ pub fn generate_smems_from_position<'a>(
         smem.query_end = j as i32;
     }
 
-    if smem.interval_size >= min_intv {
-        prev_array_buf.push(smem);
+    // Branchless append for final SMEM after forward loop
+    // SAFETY: capacity was pre-reserved
+    let mask = (smem.interval_size >= min_intv) as usize;
+    unsafe {
+        std::ptr::write(prev_array_buf.as_mut_ptr().add(prev_array_buf.len()), smem);
+        prev_array_buf.set_len(prev_array_buf.len() + mask);
     }
 
     // Phase 2: Backward search

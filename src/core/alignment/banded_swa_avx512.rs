@@ -9,6 +9,7 @@
 #![cfg(target_arch = "x86_64")]
 
 use crate::alignment::banded_swa::OutScore;
+use crate::alignment::workspace::with_workspace;
 use crate::compute::simd_abstraction::SimdEngine512 as Engine;
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 32 alignments
@@ -652,9 +653,11 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     // Using 16-bit sequence storage enables vectorized compare-and-blend scoring
     // like C++ BWA-MEM2, instead of scalar matrix lookup.
 
-    // Allocate 16-bit SoA buffers for SIMD-friendly access
-    let mut query_soa_16 = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
-    let mut target_soa_16 = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
+    // Use thread-local workspace buffers to avoid per-batch allocations (~130KB saved)
+    with_workspace(|ws| {
+        ws.reset_sw_buffers_avx512();
+        let query_soa_16 = &mut ws.sw_query_soa_32[..];
+        let target_soa_16 = &mut ws.sw_target_soa_32[..];
 
     // Encoding:
     // - Normal bases: 0 (A), 1 (C), 2 (G), 3 (T)
@@ -689,11 +692,11 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     }
 
     // ==================================================================
-    // Step 3: Allocate DP Matrices (16-bit)
+    // Step 3: Use Pre-allocated DP Matrices (16-bit) from Workspace
     // ==================================================================
 
-    let mut h_matrix = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
-    let mut e_matrix = vec![0i16; MAX_SEQ_LEN * SIMD_WIDTH];
+    let h_matrix = &mut ws.sw_h_matrix_32[..];
+    let e_matrix = &mut ws.sw_e_matrix_32[..];
 
     // Initialize scores and tracking arrays
     let mut max_scores = vec![0i16; SIMD_WIDTH];
@@ -944,6 +947,7 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     }
 
     results
+    }) // End with_workspace closure
 }
 
 #[cfg(test)]
