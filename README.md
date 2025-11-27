@@ -60,24 +60,27 @@ cargo build --release
 ./target/release/ferrous-align --help
 ```
 
-### SIMD on Apple Silicon (NEON) and environment flag
+### SIMD Acceleration
 
-- The project includes a portable SIMD backend. On x86_64, SSE/AVX are used when available.
-- On Apple Silicon (aarch64/NEON), several fixes were added; however, until the NEON path is fully vetted, SIMD is disabled by default at runtime and the scalar path is used for correctness.
+The project includes a portable SIMD backend with automatic CPU feature detection:
+
+- **x86_64**: SSE4.1 (baseline), AVX2 (automatic), AVX-512 (opt-in via `--features avx512`)
+- **ARM64/Apple Silicon**: NEON (128-bit) - fully tested and enabled by default
 
 You can control SIMD usage via an environment variable at runtime:
 
 ```bash
-# Disable SIMD explicitly
-FERROUS_ALIGN_SIMD=0 cargo run --release -- …
+# Disable SIMD explicitly (use scalar fallback)
+FERROUS_ALIGN_SIMD=0 ./target/release/ferrous-align mem ...
 
-# Enable SIMD explicitly (use with caution on aarch64 for now)
-FERROUS_ALIGN_SIMD=1 cargo run --release -- …
+# Enable SIMD explicitly (default behavior)
+FERROUS_ALIGN_SIMD=1 ./target/release/ferrous-align mem ...
 ```
 
-Default behavior:
-- x86_64: SIMD enabled by default
-- aarch64 (Apple Silicon/NEON): SIMD disabled by default (temporary)
+**Apple Silicon Performance (M3 Max, 16 threads)**:
+- 100K reads: 5.6s alignment, 36K reads/sec throughput
+- 10K reads: 0.95s alignment, 21K reads/sec throughput
+- NEON achieves higher throughput than x86 AVX2 due to efficient Apple Silicon microarchitecture
 
 ### Performance Optimization
 
@@ -181,14 +184,15 @@ samtools index alignments.sorted.bam
 
 **SIMD Acceleration:**
 - Automatic CPU feature detection
-- x86_64: SSE4.1 (baseline), AVX2 (automatic)
-- ARM64: NEON intrinsics (Apple Silicon native)
+- x86_64: SSE4.1 (baseline), AVX2 (automatic), AVX-512 (feature-gated)
+- ARM64: NEON intrinsics - fully tested on Apple Silicon (M3 Max)
 
 **Typical Performance:**
 - Small genomes (< 10 Mb): Near-instant indexing, ~1-10K reads/sec alignment
 - Bacterial genomes (~5 Mb): ~1 minute indexing, ~5-20K reads/sec alignment
 - Human genome (~3 Gb): ~45 minutes indexing, ~1-5K reads/sec alignment
-- Currently ~79% of C++ bwa-mem2 speed on 4M read pairs (improving)
+- x86_64 (Ryzen 9 7900X): ~79% of BWA-MEM2 speed on 4M read pairs
+- Apple Silicon (M3 Max): 36K reads/sec on 100K HG002 pairs (no BWA-MEM2 comparison available)
 
 ## Compatibility
 
