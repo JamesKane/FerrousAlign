@@ -316,11 +316,13 @@ pub fn generate_smems_for_strand<'a>(
                         }
                         #[cfg(target_arch = "aarch64")]
                         {
-                            // Use PREFETCH_READ (prft op=0) and LOCALITY3 (level 3 cache, 'T0' equivalent)
-                            core::arch::aarch64::_prefetch(
-                                prefetch_addr,
-                                core::arch::aarch64::_PREFETCH_READ,
-                                core::arch::aarch64::_PREFETCH_LOCALITY3,
+                            // ARM prefetch intrinsics are unstable in stable Rust.
+                            // Use inline assembly for prefetch on aarch64, which is stable.
+                            // PRFM PLDL1KEEP is equivalent to prefetch for read with high locality.
+                            core::arch::asm!(
+                                "prfm pldl1keep, [{addr}]",
+                                addr = in(reg) prefetch_addr,
+                                options(nostack, preserves_flags)
                             );
                         }
                     }

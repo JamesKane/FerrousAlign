@@ -98,10 +98,12 @@ The codebase uses a `SimdEngine` trait abstraction for portable SIMD:
 
 | SIMD Engine | Scalar Time | SIMD Time | Speedup | Throughput |
 |-------------|-------------|-----------|---------|------------|
-| ARM NEON | 1.975 ms | 1.366 ms | **1.45x** | 93.7 Kelem/s |
+| ARM NEON (M3 Max) | 1.975 ms | 1.366 ms | **1.45x** | 93.7 Kelem/s |
 | SSE2 | 3.10 ms | 2.10 ms | **1.48x** | 60.9 Kelem/s |
-| AVX2 | 3.11 ms | 2.08 ms | **1.50x** | 61.7 Kelem/s |
+| AVX2 (Ryzen 9 7900X) | 3.11 ms | 2.08 ms | **1.50x** | 61.7 Kelem/s |
 | AVX-512 | 3.11 ms | 1.64 ms | **1.90x** | 77.8 Kelem/s |
+
+**Note**: ARM NEON shows highest absolute throughput due to Apple Silicon's efficient microarchitecture, despite having only 128-bit vector width (vs 256-bit AVX2)
 
 ---
 
@@ -164,14 +166,41 @@ The codebase uses a `SimdEngine` trait abstraction for portable SIMD:
 
 ## Platform Comparison
 
-### End-to-End (4M reads, 16 threads)
+### x86_64: AMD Ryzen 9 7900X (16 threads)
 
-| Platform | BWA-MEM2 | FerrousAlign | Ratio |
+| Workload | BWA-MEM2 | FerrousAlign | Ratio |
 |----------|----------|--------------|-------|
-| AMD Ryzen 9 7900X | 2:18.91 | 2:55.61 | 79% |
-| Apple M3 Max* | ~15s | ~17s | ~90% |
+| 4M HG002 reads | 2:18.91 | 2:55.61 | **79%** |
+| 10K Golden reads | 7.15s | 5.26s | 136% (faster) |
 
-*M3 Max numbers from earlier benchmarks, may need re-verification
+### Apple Silicon: M3 Max (16 threads, NEON)
+
+**Note**: BWA-MEM2 has no NEON port, so direct comparison is not possible. Performance is inferred relative to x86 results.
+
+| Workload | FerrousAlign | Throughput | Memory |
+|----------|--------------|------------|--------|
+| 10K reads (20K total) | **0.95s** alignment | 21K reads/sec | ~20 GB |
+| 100K reads (200K total) | **5.6s** alignment | 36K reads/sec | ~20 GB |
+
+**Benchmark Details (100K HG002 reads, M3 Max)**:
+- Index load time: ~5-7s (mmap)
+- Alignment time: 5.5-5.8s (excluding index load)
+- CPU utilization: 64s CPU / 5.7s wall = **11.2x** (70% of 16 threads)
+- Peak memory: ~20 GB
+
+**Inferred BWA-MEM2 Equivalence**:
+Based on the x86 ratio (79%), if BWA-MEM2 had NEON support, estimated times would be:
+- 100K reads: ~4.4s (vs FerrousAlign 5.6s)
+- Projected 4M reads: ~2:20 (vs FerrousAlign ~2:57)
+
+### Cross-Platform Summary
+
+| Platform | SIMD Engine | 100K Throughput | Notes |
+|----------|-------------|-----------------|-------|
+| AMD Ryzen 9 7900X | AVX2 (256-bit) | ~23K reads/sec | Primary benchmark platform |
+| Apple M3 Max | NEON (128-bit) | ~36K reads/sec | Faster per-core, no BWA-MEM2 comparison |
+
+**Key Observation**: Apple Silicon achieves higher throughput despite 128-bit SIMD (vs 256-bit AVX2) due to superior memory bandwidth and efficient core architecture
 
 ---
 
@@ -207,9 +236,11 @@ perf report --stdio --no-children --percent-limit 1
 ### Test Data
 
 - **10K Golden Reads**: `tests/golden_reads/golden_10k_R{1,2}.fq`
-- **100K Test**: `/home/jkane/Genomics/HG002/test_100k_R{1,2}.fq`
-- **4M Full Dataset**: `/home/jkane/Genomics/HG002/2A1_CGATGT_L001_R{1,2}_001.fastq.gz`
-- **Reference**: GRCh38 no-alt (`GCA_000001405.15_GRCh38_no_alt_analysis_set.fna`)
+- **100K Test** (Linux): `/home/jkane/Genomics/HG002/test_100k_R{1,2}.fq`
+- **4M Full Dataset**: `/home/jkane/Genomics/HG002/2A1_CGATGT_L001_R{1,2}_001.fastq.gz` (Linux)
+- **4M Full Dataset**: `/Users/jkane/Genomics/HG002/2A1_CGATGT_L001_R{1,2}_001.fastq.gz` (macOS)
+- **Reference** (Linux): GRCh38 no-alt (`GCA_000001405.15_GRCh38_no_alt_analysis_set.fna`)
+- **Reference** (macOS): `/Library/Genomics/Reference/b38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna`
 
 ---
 

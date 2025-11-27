@@ -195,12 +195,13 @@ pub unsafe fn prefetch_read_t0(addr: *const i8) {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        // _PREFETCH_READ: Preload for read.
-        // _PREFETCH_LOCALITY3: Highest level of locality (equivalent to T0).
-        simd_arch::_prefetch(
-            addr,
-            simd_arch::_PREFETCH_READ,
-            simd_arch::_PREFETCH_LOCALITY3,
+        // ARM prefetch intrinsics are unstable in stable Rust.
+        // Use inline assembly for prefetch on aarch64, which is stable.
+        // PRFM PLDL1KEEP is equivalent to prefetch for read with high locality.
+        core::arch::asm!(
+            "prfm pldl1keep, [{addr}]",
+            addr = in(reg) addr,
+            options(nostack, preserves_flags)
         );
     }
     // Other architectures: No-op
