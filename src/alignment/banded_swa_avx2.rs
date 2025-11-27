@@ -750,6 +750,9 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     // ==================================================================
 
     let mut max_score_vec = _mm256_loadu_si256(max_scores.as_ptr() as *const __m256i);
+    // SIMD vectors for position tracking (initialized to -1)
+    let mut max_i_vec = _mm256_set1_epi16(-1);
+    let mut max_j_vec = _mm256_set1_epi16(-1);
 
     for i in 0..max_tlen as usize {
         // Load target bases for this row as 16-bit SIMD vector
@@ -853,24 +856,26 @@ pub unsafe fn simd_banded_swa_batch16_int16(
             f_vec = _mm256_max_epi16(f_from_m, f_from_f);
             f_vec = _mm256_max_epi16(f_vec, zero_vec);
 
-            // Update max score and track position (per-lane)
-            let mut h11_arr = [0i16; SIMD_WIDTH];
-            _mm256_storeu_si256(h11_arr.as_mut_ptr() as *mut __m256i, h11_vec);
+            // ==================================================================
+            // VECTORIZED MAX TRACKING (eliminates scalar loop)
+            // ==================================================================
+            // BWA-MEM2 style: Use SIMD comparison and blend to track max position
+            // This replaces the 16-iteration scalar loop with ~5 SIMD instructions
 
-            for lane in 0..SIMD_WIDTH {
-                if !terminated[lane]
-                    && j >= current_beg[lane] as usize
-                    && j < current_end[lane] as usize
-                    && h11_arr[lane] > max_scores[lane]
-                {
-                    max_scores[lane] = h11_arr[lane];
-                    max_i[lane] = i as i16;
-                    max_j[lane] = j as i16;
-                }
-            }
+            // Compare h11 > max_score (0xFFFF where true)
+            let cmp_gt = _mm256_cmpgt_epi16(h11_vec, max_score_vec);
 
-            // Update max_score_vec from per-lane tracking
-            max_score_vec = _mm256_loadu_si256(max_scores.as_ptr() as *const __m256i);
+            // Update max_score_vec where h11 > current max
+            max_score_vec = _mm256_max_epi16(h11_vec, max_score_vec);
+
+            // Broadcast current i and j to SIMD vectors
+            let i_vec = _mm256_set1_epi16(i as i16);
+            let j_vec = _mm256_set1_epi16(j as i16);
+
+            // Update max_i_vec and max_j_vec where comparison was true
+            // _mm256_blendv_epi8 uses byte MSB: cmp_gt=0xFFFF -> both bytes MSB=1 -> select new
+            max_i_vec = _mm256_blendv_epi8(max_i_vec, i_vec, cmp_gt);
+            max_j_vec = _mm256_blendv_epi8(max_j_vec, j_vec, cmp_gt);
 
             // h1_vec = H(i, j) for the next column
             h1_vec = h11_vec;
@@ -908,8 +913,10 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     // Step 5: Result Extraction
     // ==================================================================
 
-    // Extract final max scores from SIMD vector
+    // Extract final values from SIMD vectors
     _mm256_storeu_si256(max_scores.as_mut_ptr() as *mut __m256i, max_score_vec);
+    _mm256_storeu_si256(max_i.as_mut_ptr() as *mut __m256i, max_i_vec);
+    _mm256_storeu_si256(max_j.as_mut_ptr() as *mut __m256i, max_j_vec);
 
     let mut results = Vec::with_capacity(batch_size);
     for lane in 0..batch_size {

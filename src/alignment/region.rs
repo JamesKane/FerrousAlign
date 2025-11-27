@@ -759,18 +759,48 @@ fn execute_simd_scoring(
         use crate::compute::simd_abstraction::simd::SimdEngineType;
         match engine {
             SimdEngineType::Engine256 => {
-                // AVX2: 16-wide batch with vectorized scoring
-                unsafe {
-                    crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
-                        &batch,
-                        sw_params.o_del(),
-                        sw_params.e_del(),
-                        sw_params.o_ins(),
-                        sw_params.e_ins(),
-                        sw_params.zdrop(),
-                        sw_params.scoring_matrix(),
-                        5,
-                    )
+                // BWA-MEM2 style size-based routing:
+                // - 8-bit path (32 lanes): sequences < 100bp, avoids score overflow
+                // - 16-bit path (16 lanes): longer sequences or higher scores
+                let max_qlen = batch.iter().map(|(q, _, _, _, _, _)| *q).max().unwrap_or(0);
+                let max_tlen = batch.iter().map(|(_, _, t, _, _, _)| *t).max().unwrap_or(0);
+                let max_h0 = batch.iter().map(|(_, _, _, _, _, h)| *h).max().unwrap_or(0);
+
+                // 8-bit path can overflow if scores exceed 127
+                // Conservative threshold: 100bp sequences, low initial scores
+                const MAX_SEQ_LEN_8BIT: i32 = 100;
+                let can_use_8bit = max_qlen < MAX_SEQ_LEN_8BIT
+                    && max_tlen < MAX_SEQ_LEN_8BIT
+                    && max_h0 < 50;
+
+                if can_use_8bit {
+                    // AVX2 8-bit path: 32 lanes (2x parallelism)
+                    unsafe {
+                        crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
+                            &batch,
+                            sw_params.o_del(),
+                            sw_params.e_del(),
+                            sw_params.o_ins(),
+                            sw_params.e_ins(),
+                            sw_params.zdrop(),
+                            sw_params.scoring_matrix(),
+                            5,
+                        )
+                    }
+                } else {
+                    // AVX2 16-bit path: 16 lanes
+                    unsafe {
+                        crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
+                            &batch,
+                            sw_params.o_del(),
+                            sw_params.e_del(),
+                            sw_params.o_ins(),
+                            sw_params.e_ins(),
+                            sw_params.zdrop(),
+                            sw_params.scoring_matrix(),
+                            5,
+                        )
+                    }
                 }
             }
             SimdEngineType::Engine128 => {
