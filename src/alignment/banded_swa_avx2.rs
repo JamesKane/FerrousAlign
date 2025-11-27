@@ -800,6 +800,10 @@ pub unsafe fn simd_banded_swa_batch16_int16(
 
         let mut f_vec = zero_vec;
 
+        // SIMD vector to track row maximum for Z-drop check
+        // (accumulated during column loop, eliminates post-hoc nested loop scan)
+        let mut row_max_vec = zero_vec;
+
         for j in global_beg..global_end.min(MAX_SEQ_LEN) {
             // Load H(i-1, j-1) from h_matrix (wavefront storage pattern)
             // and E from e_matrix
@@ -877,28 +881,36 @@ pub unsafe fn simd_banded_swa_batch16_int16(
             max_i_vec = _mm256_blendv_epi8(max_i_vec, i_vec, cmp_gt);
             max_j_vec = _mm256_blendv_epi8(max_j_vec, j_vec, cmp_gt);
 
+            // ==================================================================
+            // VECTORIZED ROW MAX TRACKING (for Z-drop)
+            // ==================================================================
+            // Track maximum H score in current row for all 16 lanes simultaneously.
+            // This replaces the nested loop that would scan h_matrix after the row.
+            row_max_vec = _mm256_max_epi16(row_max_vec, h11_vec);
+
             // h1_vec = H(i, j) for the next column
             h1_vec = h11_vec;
         }
 
-        // Extract max scores for Z-drop check
+        // ==================================================================
+        // VECTORIZED Z-DROP CHECK
+        // ==================================================================
+        // Use pre-computed row_max_vec instead of scanning h_matrix
+        // This eliminates O(16 × band_width) nested loop → O(16) scalar check
+
+        // Extract max scores for Z-drop comparison
         let mut max_score_vals = [0i16; SIMD_WIDTH];
         _mm256_storeu_si256(max_score_vals.as_mut_ptr() as *mut __m256i, max_score_vec);
 
-        // Z-drop early termination
         if zdrop > 0 {
+            // Extract row maxes (computed incrementally during column loop)
+            let mut row_max_vals = [0i16; SIMD_WIDTH];
+            _mm256_storeu_si256(row_max_vals.as_mut_ptr() as *mut __m256i, row_max_vec);
+
+            // Check Z-drop condition for each lane (O(16) not O(16 × band))
             for lane in 0..SIMD_WIDTH {
                 if !terminated[lane] && i > 0 && i < tlen[lane] as usize {
-                    let mut row_max = 0i16;
-                    let row_beg = current_beg[lane] as usize;
-                    let row_end = current_end[lane] as usize;
-
-                    for j in row_beg..row_end {
-                        let h_val = h_matrix[j * SIMD_WIDTH + lane];
-                        row_max = row_max.max(h_val);
-                    }
-
-                    if max_score_vals[lane] - row_max > zdrop as i16 {
+                    if max_score_vals[lane] - row_max_vals[lane] > zdrop as i16 {
                         terminated[lane] = true;
                     }
                 }
