@@ -18,6 +18,11 @@ use super::seeding::Seed;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use super::index::index::BwaIndex;
 use std::sync::Arc;
+use std::cell::RefCell;
+
+thread_local! {
+    static REVERSE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
+}
 
 /// Direction of extension from seed
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -516,27 +521,38 @@ pub fn collect_extension_jobs_for_read(
             if seed.query_pos > 0 {
                 let tmp = (seed.ref_pos - rmax_0) as usize;
                 if tmp > 0 && tmp <= rseq.len() {
-                    // Build reversed sequences for left extension
-                    let query_seg: Vec<u8> = ctx.encoded_query[0..seed.query_pos as usize]
-                        .iter()
-                        .rev()
-                        .copied()
-                        .collect();
-                    let target_seg: Vec<u8> = rseq[0..tmp].iter().rev().copied().collect();
+                    REVERSE_BUF.with(|buf_cell| {
+                        let mut buf = buf_cell.borrow_mut();
+                        buf.clear(); // Clear for reuse
 
-                    // Use local (per-read) index, NOT global batch index
-                    left_job_idx = Some(left_local_idx);
-                    left_local_idx += 1;
-                    left_batch.add_job(
-                        read_idx,
-                        chain_idx,
-                        seed_chain_idx,
-                        ExtensionDirection::Left,
-                        &query_seg,
-                        &target_seg,
-                        seed.len * opt.a, // h0 = seed_len * match_score
-                        opt.w,
-                    );
+                        // Append reversed query segment
+                        let query_slice_to_reverse = &ctx.encoded_query[0..seed.query_pos as usize];
+                        buf.extend(query_slice_to_reverse.iter().rev().copied());
+                        let query_seg_len = buf.len();
+
+                        // Append reversed target segment
+                        let target_slice_to_reverse = &rseq[0..tmp];
+                        buf.extend(target_slice_to_reverse.iter().rev().copied());
+                        // target_seg_len is implicitly buf.len() - query_seg_len here, but not needed
+
+                        // Create slices from the temporary buffer
+                        let current_query_seg = &buf[0..query_seg_len];
+                        let current_target_seg = &buf[query_seg_len..];
+
+                        // Use local (per-read) index, NOT global batch index
+                        left_job_idx = Some(left_local_idx);
+                        left_local_idx += 1;
+                        left_batch.add_job(
+                            read_idx,
+                            chain_idx,
+                            seed_chain_idx,
+                            ExtensionDirection::Left,
+                            current_query_seg,
+                            current_target_seg,
+                            seed.len * opt.a, // h0 = seed_len * match_score
+                            opt.w,
+                        );
+                    });
                 }
             }
 
@@ -545,8 +561,8 @@ pub fn collect_extension_jobs_for_read(
             if seed_query_end < query_len {
                 let re = ((seed.ref_pos + seed.len as u64) - rmax_0) as usize;
                 if re < rseq.len() {
-                    let query_seg: Vec<u8> = ctx.encoded_query[seed_query_end as usize..].to_vec();
-                    let target_seg: Vec<u8> = rseq[re..].to_vec();
+                    let query_seg = &ctx.encoded_query[seed_query_end as usize..];
+                    let target_seg = &rseq[re..];
 
                     // Use local (per-read) index, NOT global batch index
                     right_job_idx = Some(right_local_idx);
@@ -556,8 +572,8 @@ pub fn collect_extension_jobs_for_read(
                         chain_idx,
                         seed_chain_idx,
                         ExtensionDirection::Right,
-                        &query_seg,
-                        &target_seg,
+                        query_seg,
+                        target_seg,
                         0, // h0 = 0 for right extension
                         opt.w,
                     );
