@@ -1,8 +1,8 @@
 use super::index::fm_index::backward_ext;
 use super::index::fm_index::forward_ext;
 use super::index::fm_index::get_occ;
-use super::index::fm_index::CP_SHIFT;
 use super::index::fm_index::CpOcc;
+use super::index::fm_index::CP_SHIFT;
 use super::index::index::BwaIndex;
 use crate::core::compute::simd_abstraction::portable_intrinsics;
 
@@ -359,7 +359,7 @@ pub fn generate_smems_for_strand<'a>(
                     // The prefetch_read_t0 function handles architecture-specific intrinsics
                     unsafe {
                         let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
-                        crate::core::compute::simd_abstraction::portable_intrinsics::prefetch_read_t0(prefetch_addr);
+                        portable_intrinsics::prefetch_read_t0(prefetch_addr);
                     }
                     curr_array_buf.push(new_smem);
                 }
@@ -539,7 +539,7 @@ pub fn generate_smems_from_position<'a>(
                 // OPTIMIZATION: Manually prefetch data for the next likely BWT access
                 unsafe {
                     let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
-                    crate::core::compute::simd_abstraction::portable_intrinsics::prefetch_read_t0(prefetch_addr);
+                    portable_intrinsics::prefetch_read_t0(prefetch_addr);
                 }
                 curr_array_buf.push(new_smem);
                 break;
@@ -560,7 +560,7 @@ pub fn generate_smems_from_position<'a>(
                 // OPTIMIZATION: Manually prefetch data for the next likely BWT access
                 unsafe {
                     let prefetch_addr = bwa_idx.cp_occ.as_ptr().add((new_smem.bwt_interval_start >> CP_SHIFT) as usize) as *const i8;
-                    crate::core::compute::simd_abstraction::portable_intrinsics::prefetch_read_t0(prefetch_addr);
+                    portable_intrinsics::prefetch_read_t0(prefetch_addr);
                 }
                 curr_array_buf.push(new_smem);
             }
@@ -791,7 +791,7 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
         adjusted_sa_val,
         result,
         bwa_idx.bns.packed_sequence_length,
-        (bwa_idx.bns.packed_sequence_length << 1)
+        bwa_idx.bns.packed_sequence_length << 1
     );
     result
 }
@@ -939,7 +939,7 @@ mod tests {
 
         // Test extending with each base
         for base in 0..4 {
-            let extended = super::backward_ext(&bwa_idx, initial_smem, base);
+            let extended = backward_ext(&bwa_idx, initial_smem, base);
 
             // Extended range should be smaller or equal to initial range
             assert!(
@@ -988,7 +988,7 @@ mod tests {
         let mut prev_s = smem.interval_size;
 
         for (i, &base) in bases.iter().enumerate() {
-            smem = super::backward_ext(&bwa_idx, smem, base);
+            smem = backward_ext(&bwa_idx, smem, base);
 
             // Range should generally get smaller (or stay same) with each extension
             // (though it could stay the same if the pattern is very common)
@@ -1033,7 +1033,7 @@ mod tests {
             ..Default::default()
         };
 
-        let extended = super::backward_ext(&bwa_idx, smem, 0);
+        let extended = backward_ext(&bwa_idx, smem, 0);
 
         // Extending a zero range should still give zero range
         assert_eq!(
@@ -1087,7 +1087,7 @@ mod tests {
         };
 
         // Test getting SA entry at position 0 (should return a valid reference position)
-        let sa_entry = super::get_sa_entry(&bwa_idx, 0);
+        let sa_entry = get_sa_entry(&bwa_idx, 0);
 
         // SA entry should be within the reference sequence length
         assert!(
@@ -1118,7 +1118,7 @@ mod tests {
 
         // Test at a sampled position (should directly lookup in SA array)
         let sampled_pos = bwa_idx.bwt.sa_sample_interval as u64;
-        let sa_entry = super::get_sa_entry(&bwa_idx, sampled_pos);
+        let sa_entry = get_sa_entry(&bwa_idx, sampled_pos);
 
         assert!(
             sa_entry < bwa_idx.bwt.seq_len,
@@ -1152,7 +1152,7 @@ mod tests {
                 continue;
             }
 
-            let sa_entry = super::get_sa_entry(&bwa_idx, pos);
+            let sa_entry = get_sa_entry(&bwa_idx, pos);
 
             // All SA entries should be valid (within sequence length)
             assert!(
@@ -1182,8 +1182,8 @@ mod tests {
         };
 
         let pos = 5u64;
-        let sa_entry1 = super::get_sa_entry(&bwa_idx, pos);
-        let sa_entry2 = super::get_sa_entry(&bwa_idx, pos);
+        let sa_entry1 = get_sa_entry(&bwa_idx, pos);
+        let sa_entry2 = get_sa_entry(&bwa_idx, pos);
 
         // Same position should always return same SA entry
         assert_eq!(
@@ -1212,7 +1212,7 @@ mod tests {
 
         // Test getting BWT at various positions
         for pos in 0..10u64 {
-            let bwt_result = super::get_bwt(&bwa_idx, pos);
+            let bwt_result = get_bwt(&bwa_idx, pos);
 
             // Either we get a valid position or None (sentinel)
             if let Some(new_pos) = bwt_result {
