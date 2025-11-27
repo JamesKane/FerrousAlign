@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use ferrous_align::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
+use ferrous_align::core::alignment::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
 
 fn generate_random_sequence(len: usize, seed: u64) -> Vec<u8> {
     // Simple LCG random number generator for reproducible sequences
@@ -30,10 +30,10 @@ fn generate_sequence_with_mutations(seq: &[u8], mutation_rate: f64, seed: u64) -
 
 /// Benchmark scalar vs batched SIMD for varying sequence lengths
 fn bench_scalar_vs_batched(c: &mut Criterion) {
-    use ferrous_align::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
+    use ferrous_align::core::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
 
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("smith_waterman");
 
@@ -56,7 +56,7 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(BenchmarkId::new("scalar", seq_len), seq_len, |b, &_size| {
             b.iter(|| {
-                bsw.iterative_scalar_banded_swa(
+                bsw.scalar_banded_swa(
                     black_box(query.len() as i32),
                     black_box(&query),
                     black_box(target.len() as i32),
@@ -95,7 +95,7 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
 /// Benchmark different batch sizes to find optimal batching
 fn bench_batch_sizes(c: &mut Criterion) {
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("batch_sizes");
 
@@ -116,7 +116,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
     group.bench_function("scalar_128x", |b| {
         b.iter(|| {
             for (query, target) in &alignments {
-                black_box(bsw.iterative_scalar_banded_swa(
+                black_box(bsw.scalar_banded_swa(
                     query.len() as i32,
                     query,
                     target.len() as i32,
@@ -133,7 +133,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
     group.throughput(Throughput::Elements(num_alignments as u64));
     group.bench_function("auto_dispatch_128x", |b| {
         // Determine optimal batch size based on SIMD engine
-        use ferrous_align::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
+        use ferrous_align::core::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
         let engine = detect_optimal_simd_engine();
         let batch_size = match engine {
             #[cfg(target_arch = "x86_64")]
@@ -223,10 +223,10 @@ fn bench_batch_sizes(c: &mut Criterion) {
 
 /// Benchmark different mutation rates (affects DP complexity)
 fn bench_mutation_rates(c: &mut Criterion) {
-    use ferrous_align::simd_abstraction::{SimdEngineType, detect_optimal_simd_engine};
+    use ferrous_align::core::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
 
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("mutation_rates");
     let seq_len = 100;
@@ -251,7 +251,7 @@ fn bench_mutation_rates(c: &mut Criterion) {
             mutation_rate,
             |b, &_rate| {
                 b.iter(|| {
-                    bsw.iterative_scalar_banded_swa(
+                    bsw.scalar_banded_swa(
                         black_box(query.len() as i32),
                         black_box(&query),
                         black_box(target.len() as i32),
@@ -290,7 +290,7 @@ fn bench_mutation_rates(c: &mut Criterion) {
 /// Benchmark hybrid batched approach with CIGAR generation
 fn bench_hybrid_with_cigar(c: &mut Criterion) {
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("hybrid_cigar");
 
@@ -312,11 +312,12 @@ fn bench_hybrid_with_cigar(c: &mut Criterion) {
     for i in 0..16 {
         batch_data.push((
             queries[i].len() as i32,
-            queries[i].as_slice(),
+            queries[i].clone(), // Pass owned Vec<u8>
             targets[i].len() as i32,
-            targets[i].as_slice(),
+            targets[i].clone(), // Pass owned Vec<u8>
             100,
             0,
+            None, // Add Option<ExtensionDirection>
         ));
     }
 

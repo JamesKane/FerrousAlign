@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use ferrous_align::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
+use ferrous_align::core::alignment::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
 
 fn generate_random_sequence(len: usize, seed: u64) -> Vec<u8> {
     let mut rng = seed;
@@ -61,7 +61,7 @@ fn bench_simd_engine_comparison(c: &mut Criterion) {
     detect_simd_features();
 
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("engine_comparison");
 
@@ -138,7 +138,7 @@ fn bench_simd_engine_comparison(c: &mut Criterion) {
 /// Benchmark different sequence lengths with SIMD
 fn bench_sequence_lengths(c: &mut Criterion) {
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("sequence_lengths");
 
@@ -219,7 +219,7 @@ fn bench_sequence_lengths(c: &mut Criterion) {
 /// Benchmark with varying mutation rates (affects alignment complexity)
 fn bench_alignment_complexity(c: &mut Criterion) {
     let mat = bwa_fill_scmat(1, 4, -1);
-    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, mat, 1, 1);
+    let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 100, 5, 5, mat, 1, 1);
 
     let mut group = c.benchmark_group("alignment_complexity");
 
