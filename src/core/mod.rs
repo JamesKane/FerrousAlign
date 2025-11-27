@@ -6,4 +6,5 @@
 pub mod alignment;
 pub mod compute;
 pub mod io;
+pub mod kbtree;
 pub mod utils;

@@ -56,3 +56,7 @@ harness = false
 [[bench]]
 name = "bwa_mem2_comparison"
 harness = false
+
+[[bench]]
+name = "kbtree_benchmarks"
+harness = false

@@ -1,6 +1,6 @@
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
-use std::collections::BTreeMap;
+use crate::core::kbtree::KBTree;
 
 #[derive(Debug, Clone)]
 pub struct Chain {
@@ -162,9 +162,9 @@ pub fn chain_seeds_with_l_pac(
     // resulting in chains with only 1 seed instead of multiple overlapping seeds.
     seeds.sort_by_key(|s| (s.query_pos, s.query_pos + s.len));
 
-    // 2. Initialize B-tree for chain lookup
+    // 2. Initialize KBTree for chain lookup (faster than std BTreeMap)
     // Key: reference position (chain.pos), Value: index into chains vector
-    let mut tree: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut tree: KBTree<u64, usize> = KBTree::new();
     let mut chains: Vec<Chain> = Vec::new();
 
     // 3. Process each seed
@@ -176,8 +176,9 @@ pub fn chain_seeds_with_l_pac(
         let mut merged = false;
 
         // Look for chains with positions close to this seed
-        // Use range query to find candidates
-        if let Some((&chain_pos, &chain_idx)) = tree.range(..=seed_rpos).next_back() {
+        // Use interval query to find the closest chain
+        let (lower, _upper) = tree.interval(&seed_rpos);
+        if let Some(&(chain_pos, chain_idx)) = lower {
             let chain = &mut chains[chain_idx];
 
             // Check strand compatibility (same is_rev flag)
@@ -230,13 +231,9 @@ pub fn chain_seeds_with_l_pac(
 
             chains.push(new_chain);
 
-            // Insert into B-tree
-            // Handle collision by using a unique key (add small offset if needed)
-            let mut key = seed_rpos;
-            while tree.contains_key(&key) {
-                key += 1; // Simple collision handling
-            }
-            tree.insert(key, new_chain_idx);
+            // Insert into KBTree
+            // KBTree handles duplicates internally (unlike BTreeMap)
+            tree.insert(seed_rpos, new_chain_idx);
 
             log::trace!(
                 "  Seed {} created new chain {} (pos={})",
