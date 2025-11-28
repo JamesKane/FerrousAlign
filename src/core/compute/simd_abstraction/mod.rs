@@ -237,6 +237,7 @@ pub mod engine256;
 pub mod engine512;
 pub mod portable_intrinsics;
 pub mod simd;
+pub mod neon_tests;
 pub mod tests;
 pub mod types;
 

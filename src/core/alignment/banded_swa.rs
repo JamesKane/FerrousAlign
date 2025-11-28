@@ -741,7 +741,7 @@ impl BandedPairWiseSW {
         }
 
         // Clamp to MAX_SEQ_LEN
-        let _max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
+        max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
         max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
         // Allocate Structure-of-Arrays (SoA) buffers for SIMD-friendly access

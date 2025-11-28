@@ -135,17 +135,27 @@ impl SimdEngine for SimdEngine128 {
 
         #[cfg(target_arch = "aarch64")]
         {
-            // NEON equivalent for _mm_movemask_epi8
-            // Use portable path: store to array and check sign bits.
-            let mut res = 0;
-            let mut tmp = [0i8; 16];
-            _mm_storeu_si128(tmp.as_mut_ptr() as *mut _, a);
-            for i in 0..16 {
-                if tmp[i as usize] < 0 {
-                    res |= 1 << i;
-                }
-            }
-            res
+            use std::arch::aarch64::*;
+            // Get the high bit of each byte, resulting in bytes of 0 or 1.
+            let high_bits = vshrq_n_u8(a.as_u8(), 7);
+
+            // Create a multiplier to position the bits correctly.
+            let mul: uint8x8_t = unsafe { std::mem::transmute([1u8, 2, 4, 8, 16, 32, 64, 128]) };
+
+            // Multiply the high bits with the multiplier for both halves of the vector.
+            let t0 = vmul_u8(vget_low_u8(high_bits), mul);
+            let t1 = vmul_u8(vget_high_u8(high_bits), mul);
+
+            // Horizontally add the bytes in each half.
+            let t2 = vpaddl_u8(t0);
+            let t3 = vpaddl_u8(t1);
+            let t4 = vpaddl_u16(t2);
+            let t5 = vpaddl_u16(t3);
+            let t6 = vpaddl_u32(t4);
+            let t7 = vpaddl_u32(t5);
+
+            // Combine the results from both halves.
+            (vget_lane_u64(t6, 0) as i32) | ((vget_lane_u64(t7, 0) as i32) << 8)
         }
     }
 
@@ -419,19 +429,26 @@ impl SimdEngine for SimdEngine128 {
         #[cfg(target_arch = "aarch64")]
         unsafe {
             use std::arch::aarch64::*;
-            // Emulate SSSE3 _mm_shuffle_epi8 (pshufb) semantics on NEON.
-            // SSSE3 behavior:
-            //  - For each lane i, if control byte b[i] has high bit set (b[i] & 0x80), output is 0.
-            //  - Else, lower 4 bits select source byte from a (index 0..15).
-            let ctrl = b.as_u8();
-            let idx = vandq_u8(ctrl, vdupq_n_u8(0x0F));
-            let mut out = vqtbl1q_u8(a.as_u8(), idx);
-            // Build a per-lane mask of 0xFF where high bit is set in control
-            let high = vshrq_n_u8(ctrl, 7); // 0x00 or 0x01
-            let lane_mask = vmulq_u8(high, vdupq_n_u8(0xFF)); // 0x00 or 0xFF
-            // Clear lanes where mask is 0xFF
-            out = vbicq_u8(out, lane_mask);
-            __m128i::from_u8(out)
+            let a_u8 = a.as_u8();
+            let b_u8 = b.as_u8();
+
+            // The lower 4 bits of the control byte are the shuffle index
+            let shuffle_indices = vandq_u8(b_u8, vdupq_n_u8(0x0F));
+            
+            // Perform the table lookup
+            let shuffled = vqtbl1q_u8(a_u8, shuffle_indices);
+        
+            // Create a mask from the high bit of the control byte.
+            // If the high bit is set, the lane should be zero.
+            // vcgtq_s8(zero, b_s8) creates a mask of 0xFF where b is negative (high bit set)
+            let zero = vdupq_n_s8(0);
+            let mask = vcgtq_s8(zero, b.as_s8());
+        
+            // Use bitwise AND with the inverted mask to clear the lanes.
+            // (equivalent to blend with zero)
+            let result = vbicq_u8(shuffled, mask);
+        
+            __m128i::from_u8(result)
         }
     }
 
