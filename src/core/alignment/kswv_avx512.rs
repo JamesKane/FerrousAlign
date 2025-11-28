@@ -14,6 +14,7 @@
 // ============================================================================
 
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
+#![feature(stdarch_x86_avx512)]
 
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
 
@@ -30,8 +31,9 @@ use std::arch::x86_64::{
     _mm512_cmpge_epu8_mask,
     _mm512_cmpgt_epi16_mask,
     _mm512_cmpgt_epu8_mask,
-    // Vector loads/stores (unaligned for safety)
-    _mm512_loadu_si512,
+    // Vector loads/stores (64-byte aligned for performance)
+    _mm512_load_si512,
+    _mm512_store_si512,
     // Mask blends
     _mm512_mask_blend_epi8,
     _mm512_mask_blend_epi16,
@@ -43,7 +45,6 @@ use std::arch::x86_64::{
     // Vector creation
     _mm512_setzero_si512,
     _mm512_shuffle_epi8,
-    _mm512_storeu_si512,
     _mm512_subs_epu8,
     // Vector logic
     _mm512_xor_si512,
@@ -128,7 +129,7 @@ pub unsafe fn batch_ksw_align_avx512(
         temp.0[i] = temp.0[i % 16];
     }
 
-    let perm_sft512: __m512i = _mm512_loadu_si512(temp.0.as_ptr() as *const _);
+    let perm_sft512: __m512i = _mm512_load_si512(temp.0.as_ptr() as *const _);
     let sft512: __m512i = _mm512_set1_epi8(shift as i8);
     let cmax512: __m512i = _mm512_set1_epi8(255u8 as i8);
     let five512: __m512i = _mm512_set1_epi8(DUMMY5);
@@ -167,8 +168,8 @@ pub unsafe fn batch_ksw_align_avx512(
         }
     }
 
-    let minsc512: __m512i = _mm512_loadu_si512(minsc.0.as_ptr() as *const _);
-    let endsc512: __m512i = _mm512_loadu_si512(endsc.0.as_ptr() as *const _);
+    let minsc512: __m512i = _mm512_load_si512(minsc.0.as_ptr() as *const _);
+    let endsc512: __m512i = _mm512_load_si512(endsc.0.as_ptr() as *const _);
 
     // Scoring parameters
     let e_del512: __m512i = _mm512_set1_epi8(e_del as i8);
@@ -250,10 +251,13 @@ pub unsafe fn batch_ksw_align_avx512(
         };
 
     // Initialize H0, F to zero
+    // Use pointer arithmetic to preserve 64-byte alignment (allows LLVM to optimize to aligned ops)
+    let h0_ptr = h0_buf.as_mut_ptr();
+    let f_ptr = f_buf.as_mut_ptr();
     for i in 0..=ncol as usize {
         let offset = i * SIMD_WIDTH8;
-        _mm512_storeu_si512(h0_buf[offset..].as_mut_ptr() as *mut _, zero512);
-        _mm512_storeu_si512(f_buf[offset..].as_mut_ptr() as *mut _, zero512);
+        _mm512_store_si512(h0_ptr.add(offset) as *mut _, zero512);
+        _mm512_store_si512(f_ptr.add(offset) as *mut _, zero512);
     }
 
     let mut pimax512: __m512i = zero512;
@@ -274,15 +278,17 @@ pub unsafe fn batch_ksw_align_avx512(
         let mut l512: __m512i = zero512;
 
         // Load reference base for this row
-        let s1: __m512i = _mm512_loadu_si512(seq1_soa.add(i as usize * SIMD_WIDTH8) as *const _);
+        let s1: __m512i = _mm512_load_si512(seq1_soa.add(i as usize * SIMD_WIDTH8) as *const _);
 
         // Inner loop over query positions
+        // Use pointer arithmetic to preserve alignment (allows LLVM to optimize to aligned ops)
+        let h0_ptr = h0_buf.as_ptr();
+        let f_ptr = f_buf.as_ptr();
         for j in 0..ncol as usize {
             // Load DP values and query base
-            let h00: __m512i = _mm512_loadu_si512(h0_buf[j * SIMD_WIDTH8..].as_ptr() as *const _);
-            let s2: __m512i = _mm512_loadu_si512(seq2_soa.add(j * SIMD_WIDTH8) as *const _);
-            let f11: __m512i =
-                _mm512_loadu_si512(f_buf[(j + 1) * SIMD_WIDTH8..].as_ptr() as *const _);
+            let h00: __m512i = _mm512_load_si512(h0_ptr.add(j * SIMD_WIDTH8) as *const _);
+            let s2: __m512i = _mm512_load_si512(seq2_soa.add(j * SIMD_WIDTH8) as *const _);
+            let f11: __m512i = _mm512_load_si512(f_ptr.add((j + 1) * SIMD_WIDTH8) as *const _);
 
             // ================================================================
             // MAIN_SAM_CODE8_OPT (C++ lines 63-86)
@@ -324,9 +330,11 @@ pub unsafe fn batch_ksw_align_avx512(
             let mut f21: __m512i = _mm512_subs_epu8(f11, e_del512);
             f21 = _mm512_max_epu8(gap_d512, f21);
 
-            // Store updated DP values
-            _mm512_storeu_si512(h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, h11);
-            _mm512_storeu_si512(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
+            // Store updated DP values using pointer arithmetic (allows LLVM to optimize to aligned ops)
+            let h1_ptr = h1_buf.as_mut_ptr();
+            _mm512_store_si512(h1_ptr.add((j + 1) * SIMD_WIDTH8) as *mut _, h11);
+            let f_mut_ptr = f_buf.as_mut_ptr();
+            _mm512_store_si512(f_mut_ptr.add((j + 1) * SIMD_WIDTH8) as *mut _, f21);
 
             // Increment query position
             l512 = _mm512_add_epi8(l512, one512);
@@ -346,8 +354,10 @@ pub unsafe fn batch_ksw_align_avx512(
             // pimax512 = where(!exit0, zero512, pimax512)
             pimax512_tmp = _mm512_mask_blend_epi8(exit0, zero512, pimax512_tmp);
 
-            _mm512_storeu_si512(
-                row_max_buf[(i as usize - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
+            // Store row max using pointer arithmetic (allows LLVM to optimize to aligned ops)
+            let row_max_ptr = row_max_buf.as_mut_ptr();
+            _mm512_store_si512(
+                row_max_ptr.add((i as usize - 1) * SIMD_WIDTH8) as *mut _,
                 pimax512_tmp,
             );
 
@@ -401,8 +411,10 @@ pub unsafe fn batch_ksw_align_avx512(
     };
 
     if limit > 0 {
-        _mm512_storeu_si512(
-            row_max_buf[(limit as usize - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
+        // Store final row max using pointer arithmetic (allows LLVM to optimize to aligned ops)
+        let row_max_ptr = row_max_buf.as_mut_ptr();
+        _mm512_store_si512(
+            row_max_ptr.add((limit as usize - 1) * SIMD_WIDTH8) as *mut _,
             pimax512_final,
         );
     }
@@ -422,10 +434,11 @@ pub unsafe fn batch_ksw_align_avx512(
     let mut te_arr = AlignedTe([0; SIMD_WIDTH8]);
     let mut qe_arr = AlignedQe([0; SIMD_WIDTH8]);
 
-    _mm512_storeu_si512(score_arr.0.as_mut_ptr() as *mut _, gmax512);
-    _mm512_storeu_si512(te_arr.0.as_mut_ptr() as *mut _, te512);
-    _mm512_storeu_si512(te_arr.0[SIMD_WIDTH16..].as_mut_ptr() as *mut _, te512_);
-    _mm512_storeu_si512(qe_arr.0.as_mut_ptr() as *mut _, qe512);
+    // Score extraction: arrays are #[repr(align(64))], LLVM will optimize to aligned ops
+    _mm512_store_si512(score_arr.0.as_mut_ptr() as *mut _, gmax512);
+    _mm512_store_si512(te_arr.0.as_mut_ptr() as *mut _, te512);
+    _mm512_store_si512(te_arr.0[SIMD_WIDTH16..].as_mut_ptr() as *mut _, te512_); // Uses slicing
+    _mm512_store_si512(qe_arr.0.as_mut_ptr() as *mut _, qe512);
 
     let mut live = 0;
     for l in 0..SIMD_WIDTH8.min(pairs.len()) {
@@ -494,19 +507,19 @@ pub unsafe fn batch_ksw_align_avx512(
     let mut te512_2nd_: __m512i = _mm512_set1_epi16(-1);
 
     // Load exclusion boundaries (16-bit values, split for sequences 0-31 and 32-63)
-    let low512: __m512i = _mm512_loadu_si512(low_arr.0.as_ptr() as *const _);
-    let low512_: __m512i = _mm512_loadu_si512(low_arr.0[SIMD_WIDTH16..].as_ptr() as *const _);
-    let high512: __m512i = _mm512_loadu_si512(high_arr.0.as_ptr() as *const _);
-    let high512_: __m512i = _mm512_loadu_si512(high_arr.0[SIMD_WIDTH16..].as_ptr() as *const _);
-    let rlen512: __m512i = _mm512_loadu_si512(rlen_arr.0.as_ptr() as *const _);
-    let rlen512_: __m512i = _mm512_loadu_si512(rlen_arr.0[SIMD_WIDTH16..].as_ptr() as *const _);
+    let low512: __m512i = _mm512_load_si512(low_arr.0.as_ptr() as *const _);
+    let low512_: __m512i = _mm512_load_si512(low_arr.0[SIMD_WIDTH16..].as_ptr() as *const _);
+    let high512: __m512i = _mm512_load_si512(high_arr.0.as_ptr() as *const _);
+    let high512_: __m512i = _mm512_load_si512(high_arr.0[SIMD_WIDTH16..].as_ptr() as *const _);
+    let rlen512: __m512i = _mm512_load_si512(rlen_arr.0.as_ptr() as *const _);
+    let rlen512_: __m512i = _mm512_load_si512(rlen_arr.0[SIMD_WIDTH16..].as_ptr() as *const _);
 
     // Forward scan: rows [0, maxl) - below exclusion zone
     for row in 0..maxl {
         let i512: __m512i = _mm512_set1_epi16(row as i16);
 
         let rmax512: __m512i =
-            _mm512_loadu_si512(row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _);
+            _mm512_load_si512(row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _);
 
         // mask1: i < low[seq] (16-bit comparison, combined to 64-bit)
         let mask11: __mmask64 = _mm512_cmpgt_epi16_mask(low512, i512) as __mmask64;
@@ -529,7 +542,7 @@ pub unsafe fn batch_ksw_align_avx512(
         let i512: __m512i = _mm512_set1_epi16(row as i16);
 
         let rmax512: __m512i =
-            _mm512_loadu_si512(row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _);
+            _mm512_load_si512(row_max_buf[row as usize * SIMD_WIDTH8..].as_ptr() as *const _);
 
         // mask1: i > high[seq]
         let mask11: __mmask64 = _mm512_cmpgt_epi16_mask(i512, high512) as __mmask64;
@@ -556,9 +569,9 @@ pub unsafe fn batch_ksw_align_avx512(
     let mut score2_arr = AlignedScore([0; SIMD_WIDTH8]);
     let mut te2_arr = AlignedTe([0; SIMD_WIDTH8]);
 
-    _mm512_storeu_si512(score2_arr.0.as_mut_ptr() as *mut _, max512);
-    _mm512_storeu_si512(te2_arr.0.as_mut_ptr() as *mut _, te512_2nd);
-    _mm512_storeu_si512(te2_arr.0[SIMD_WIDTH16..].as_mut_ptr() as *mut _, te512_2nd_);
+    _mm512_store_si512(score2_arr.0.as_mut_ptr() as *mut _, max512);
+    _mm512_store_si512(te2_arr.0.as_mut_ptr() as *mut _, te512_2nd);
+    _mm512_store_si512(te2_arr.0[SIMD_WIDTH16..].as_mut_ptr() as *mut _, te512_2nd_);
 
     for idx in 0..pairs.len().min(SIMD_WIDTH8) {
         if qe_arr.0[idx] != 0 {
