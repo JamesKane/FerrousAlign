@@ -128,8 +128,9 @@ const KSW_SIMD_WIDTH_AVX2: usize = 32;
 /// SIMD width for 8-bit AVX-512 KSW kernel (512-bit / 8-bit = 64 lanes)
 const KSW_SIMD_WIDTH_AVX512: usize = 64;
 
-/// Maximum sequence length for KSW kernel (increased from 256 to handle longer reads)
-const KSW_MAX_SEQ_LEN: usize = 1536;
+/// Maximum sequence length for KSW kernel (matches C++ bwa-mem2 MAX_SEQ_LEN_QER)
+/// Sequences exceeding this length will trigger scalar fallback (ksw_extend2)
+const KSW_MAX_SEQ_LEN: usize = 128;
 
 // Thread-local workspace for alignment buffers
 thread_local! {

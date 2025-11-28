@@ -30,7 +30,6 @@ rand = "0.8"
 crossbeam-channel = "0.5"
 noodles-bgzf = "0.32"
 anyhow = "1.0"
-aligned_box = "0.2.1"
 
 [features]
 # AVX-512 support (requires nightly Rust due to unstable intrinsics)
