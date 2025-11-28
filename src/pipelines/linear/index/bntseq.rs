@@ -473,8 +473,8 @@ impl BntSeq {
             // - A pattern [p, p+len) in FM-index covers forward positions:
             //   [2*l_pac - (p+len), 2*l_pac - p) = [2*l_pac - end, 2*l_pac - start)
             // Formula: beg_f = 2*l_pac - end, end_f = 2*l_pac - start
-            let beg_f = (self.packed_sequence_length << 1).saturating_sub(end);
-            let end_f = (self.packed_sequence_length << 1).saturating_sub(start);
+            let beg_f = (self.packed_sequence_length << 1).saturating_sub(end) as i64;
+            let end_f = (self.packed_sequence_length << 1).saturating_sub(start) as i64;
 
             log::debug!(
                 "get_reference_segment: RC strand start={}, len={}, l_pac={}, beg_f={}, end_f={}",
@@ -485,45 +485,22 @@ impl BntSeq {
                 end_f
             );
 
-            // Read from memory in reverse order with complementation
-            // C++ bwa-mem2 reads j from (beg_f + len - 1) down to beg_f
-            // Since end_f - beg_f = len, this is (end_f - 1) down to beg_f
-            // Using exclusive range: (beg_f..end_f).rev() gives end_f-1, end_f-2, ..., beg_f
-            for k in (beg_f..end_f).rev() {
-                let byte_idx = (k / 4) as usize;
-                let byte_val = self.pac_data[byte_idx];
-
-                let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
-                let base = (byte_val >> base_in_byte_offset) & 0x3;
-                let complement = 3 - base; // A<->T (0<->3), C<->G (1<->2)
-                segment.push(complement);
+            // Use optimized batch extraction then reverse-complement (Session 32)
+            Self::extract_forward_batch(&self.pac_data, beg_f, end_f, &mut segment);
+            segment.reverse();
+            for base in segment.iter_mut() {
+                *base = 3 - *base;
             }
         } else {
-            // Forward strand: read from memory
-            let start_byte_offset = (start / 4) as usize;
-            let end_byte_offset = ((end - 1) / 4) as usize;
-
+            // Forward strand: use optimized batch extraction (Session 32)
             log::debug!(
-                "get_reference_segment: FWD strand start={}, len={}, l_pac={}, start_byte_offset={}, end_byte_offset={}",
+                "get_reference_segment: FWD strand start={}, len={}, l_pac={}",
                 start,
                 len,
                 self.packed_sequence_length,
-                start_byte_offset,
-                end_byte_offset
             );
 
-            for i in 0..len {
-                let k = start + i;
-                let byte_idx = (k / 4) as usize;
-                let byte_val = self.pac_data[byte_idx];
-
-                // CRITICAL: Match C++ bwa-mem2 bit order
-                // C++ uses: ((pac)[(l)>>2]>>((~(l)&3)<<1)&3)
-                // Bit shifts are: l=0->6, l=1->4, l=2->2, l=3->0 (MSB to LSB)
-                let base_in_byte_offset = ((!(k & 3)) & 3) * 2;
-                let base = (byte_val >> base_in_byte_offset) & 0x3;
-                segment.push(base);
-            }
+            Self::extract_forward_batch(&self.pac_data, start as i64, end as i64, &mut segment);
         }
 
         log::debug!(
@@ -588,12 +565,7 @@ impl BntSeq {
     /// Returns [base0, base1, base2, base3] where base0 is at highest bits
     #[inline]
     fn unpack_byte(byte: u8) -> [u8; 4] {
-        [
-            (byte >> 6) & 3,
-            (byte >> 4) & 3,
-            (byte >> 2) & 3,
-            byte & 3,
-        ]
+        [(byte >> 6) & 3, (byte >> 4) & 3, (byte >> 2) & 3, byte & 3]
     }
 
     /// Get reference sequence from packed format (handles both strands)
@@ -707,14 +679,12 @@ impl BntSeq {
         }
 
         // Compute forward FM-index position (always in [0, l_pac) range)
-        let fm_start = offset + start;
-        let fm_end = offset + end;
+        let fm_start = (offset + start) as i64;
+        let fm_end = (offset + end) as i64;
 
-        // Fetch sequence using forward strand path
+        // Use optimized batch extraction (Session 32)
         let mut seq = Vec::with_capacity((end - start) as usize);
-        for k in fm_start..fm_end {
-            seq.push(Self::get_pac(pac, k as i64));
-        }
+        Self::extract_forward_batch(pac, fm_start, fm_end, &mut seq);
         seq
     }
 
