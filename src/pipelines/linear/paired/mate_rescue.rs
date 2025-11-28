@@ -60,6 +60,54 @@ pub struct MateRescueJob {
     pub match_score: i32,
 }
 
+/// Compact mate rescue job that stores indices instead of copying sequences.
+/// Saves ~4GB memory for 2.3M jobs (from ~1.9KB/job to ~64 bytes/job).
+///
+/// Memory layout comparison:
+/// - MateRescueJob: ~1900 bytes (query_seq: 150, ref_seq: 1500, strings: 50, overhead: 200)
+/// - MateRescueJobCompact: ~64 bytes (all fixed-size fields)
+#[derive(Clone, Copy, Debug)]
+pub struct MateRescueJobCompact {
+    /// Index of the pair in the batch
+    pub pair_index: u32,
+    /// Which read is being rescued (true = read1, false = read2)
+    pub rescuing_read1: bool,
+    /// Whether the rescued alignment is on reverse strand
+    pub is_rev: bool,
+    /// Orientation code (0-3)
+    pub orientation: u8,
+    /// Anchor reference ID
+    pub anchor_ref_id: u16,
+    /// Mate sequence length (query length)
+    pub mate_len: u16,
+    /// Minimum seed length for score threshold
+    pub min_seed_len: i16,
+    /// PAC coordinates for reference sequence fetch
+    pub ref_rb: i64,
+    pub ref_re: i64,
+    /// Adjusted reference begin position (after bns_fetch_seq)
+    pub adj_rb: i64,
+    /// Match score for xtra calculation
+    pub match_score: i8,
+}
+
+/// Shared context for batch mate rescue execution.
+/// Contains all data needed to materialize sequences from compact jobs.
+pub struct MateRescueBatchContext<'a> {
+    /// PAC data for fetching reference sequences
+    pub pac: &'a [u8],
+    /// BWA index for coordinate conversion
+    pub bwa_idx: &'a BwaIndex,
+    /// Encoded query sequences for read1 (one per pair in batch)
+    pub query_seqs_r1: &'a [Vec<u8>],
+    /// Encoded query sequences for read2 (one per pair in batch)
+    pub query_seqs_r2: &'a [Vec<u8>],
+    /// Read names for read1
+    pub names_r1: &'a [&'a str],
+    /// Read names for read2
+    pub names_r2: &'a [&'a str],
+}
+
 /// Scoring matrix for mate rescue (5x5 for DNA: A=0, C=1, G=2, T=3, N=4)
 /// Match = 1, Mismatch = -4 (standard BWA-MEM2 defaults)
 const MATE_RESCUE_SCORING_MATRIX: [i8; 25] = [
@@ -1221,6 +1269,399 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
     }
 
     jobs
+}
+
+// ============================================================================
+// COMPACT JOB API (Memory-optimized)
+// ============================================================================
+
+impl MateRescueJobCompact {
+    /// Materialize query sequence from context
+    /// Returns the query with rev-comp applied if needed
+    #[inline]
+    pub fn get_query_seq(&self, ctx: &MateRescueBatchContext) -> Vec<u8> {
+        let pair_idx = self.pair_index as usize;
+        let base_seq = if self.rescuing_read1 {
+            &ctx.query_seqs_r1[pair_idx]
+        } else {
+            &ctx.query_seqs_r2[pair_idx]
+        };
+
+        if self.is_rev {
+            // Reverse complement
+            base_seq
+                .iter()
+                .rev()
+                .map(|&b| if b < 4 { 3 - b } else { 4 })
+                .collect()
+        } else {
+            base_seq.clone()
+        }
+    }
+
+    /// Fetch reference sequence from PAC
+    /// Returns (ref_seq, adj_rb, adj_re, rid)
+    #[inline]
+    pub fn fetch_ref_seq(&self, ctx: &MateRescueBatchContext) -> (Vec<u8>, i64, i64, i32) {
+        ctx.bwa_idx
+            .bns
+            .bns_fetch_seq(ctx.pac, self.ref_rb, (self.ref_rb + self.ref_re) >> 1, self.ref_re)
+    }
+
+    /// Get the mate name from context
+    #[inline]
+    pub fn get_mate_name<'a>(&self, ctx: &'a MateRescueBatchContext) -> &'a str {
+        let pair_idx = self.pair_index as usize;
+        if self.rescuing_read1 {
+            ctx.names_r1[pair_idx]
+        } else {
+            ctx.names_r2[pair_idx]
+        }
+    }
+
+    /// Get the anchor reference name from context
+    #[inline]
+    pub fn get_anchor_ref_name<'a>(&self, ctx: &MateRescueBatchContext<'a>) -> &'a str {
+        &ctx.bwa_idx.bns.annotations[self.anchor_ref_id as usize].name
+    }
+}
+
+/// Prepare compact mate rescue jobs for a single anchor alignment.
+/// Like prepare_mate_rescue_jobs_for_anchor but returns memory-efficient compact jobs.
+pub fn prepare_compact_jobs_for_anchor(
+    bwa_idx: &BwaIndex,
+    pac: &[u8],
+    stats: &[InsertSizeStats; 4],
+    anchor: &Alignment,
+    mate_len: usize,
+    existing_alignments: &[Alignment],
+    pair_index: usize,
+    rescuing_read1: bool,
+) -> Vec<MateRescueJobCompact> {
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
+    let l_ms = mate_len as i32;
+    let min_seed_len = bwa_idx.min_seed_len;
+    let match_score = 1i8;
+
+    let mut jobs = Vec::new();
+
+    // Initialize skip array from failed orientations
+    let mut skip = [false; 4];
+    for r in 0..4 {
+        skip[r] = stats[r].failed;
+    }
+
+    // Convert anchor position to bidirectional coordinates
+    let anchor_is_rev = (anchor.flag & sam_flags::REVERSE) != 0;
+    let anchor_ref_len = anchor.reference_length() as i64;
+    let chr_offset = bwa_idx.bns.annotations[anchor.ref_id].offset as i64;
+    let genome_pos = chr_offset + anchor.pos as i64;
+
+    let anchor_rb = if anchor_is_rev {
+        let rightmost = genome_pos + anchor_ref_len - 1;
+        (l_pac << 1) - 1 - rightmost
+    } else {
+        genome_pos
+    };
+
+    // Check which orientations already have consistent pairs
+    for aln in existing_alignments.iter() {
+        if aln.ref_name == anchor.ref_name {
+            let mate_is_rev = (aln.flag & sam_flags::REVERSE) != 0;
+            let mate_ref_len = aln.reference_length() as i64;
+            let mate_genome_pos = chr_offset + aln.pos as i64;
+
+            let mate_rb = if mate_is_rev {
+                let rightmost = mate_genome_pos + mate_ref_len - 1;
+                (l_pac << 1) - 1 - rightmost
+            } else {
+                mate_genome_pos
+            };
+
+            let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+            if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
+                skip[dir] = true;
+            }
+        }
+    }
+
+    // Early exit if all orientations already have pairs
+    if skip.iter().all(|&x| x) {
+        return jobs;
+    }
+
+    // Try each non-skipped orientation
+    for r in 0..4 {
+        if skip[r] {
+            continue;
+        }
+
+        let is_rev = (r >> 1) != (r & 1);
+        let is_larger = (r >> 1) == 0;
+
+        // Calculate search region (don't fetch ref yet - defer to execution)
+        let (rb, re) = if !is_rev {
+            let rb = if is_larger {
+                anchor_rb + stats[r].low as i64
+            } else {
+                anchor_rb - stats[r].high as i64
+            };
+            let re = if is_larger {
+                anchor_rb + stats[r].high as i64
+            } else {
+                anchor_rb - stats[r].low as i64
+            } + l_ms as i64;
+            (rb, re)
+        } else {
+            let rb = if is_larger {
+                anchor_rb + stats[r].low as i64
+            } else {
+                anchor_rb - stats[r].high as i64
+            } - l_ms as i64;
+            let re = if is_larger {
+                anchor_rb + stats[r].high as i64
+            } else {
+                anchor_rb - stats[r].low as i64
+            };
+            (rb, re)
+        };
+
+        // Clamp to valid range
+        let rb = rb.max(0);
+        let re = re.min(l_pac << 1);
+
+        if rb >= re {
+            continue;
+        }
+
+        // Pre-check: fetch to validate rid and region size
+        // This is needed to avoid creating invalid jobs
+        let (_ref_seq, adj_rb, adj_re, rid) =
+            bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
+
+        if rid as usize != anchor.ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
+            continue;
+        }
+
+        jobs.push(MateRescueJobCompact {
+            pair_index: pair_index as u32,
+            rescuing_read1,
+            is_rev,
+            orientation: r as u8,
+            anchor_ref_id: anchor.ref_id as u16,
+            mate_len: l_ms as u16,
+            min_seed_len: min_seed_len as i16,
+            ref_rb: rb,
+            ref_re: re,
+            adj_rb,
+            match_score,
+        });
+    }
+
+    jobs
+}
+
+/// Result from a compact mate rescue execution
+pub struct MateRescueResultCompact {
+    /// Index of the job this result corresponds to
+    pub job_index: usize,
+    /// The ksw_align2 result
+    pub aln: Kswr,
+}
+
+/// Execute compact mate rescue jobs in parallel
+/// Uses scalar ksw_align2 with sequence materialization on-demand
+pub fn execute_compact_batch(
+    jobs: &[MateRescueJobCompact],
+    ctx: &MateRescueBatchContext,
+    _engine: Option<SimdEngineType>,
+) -> Vec<MateRescueResultCompact> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+
+    // Scoring parameters (matching BWA-MEM2 defaults)
+    let o_del = 6;
+    let e_del = 1;
+    let o_ins = 6;
+    let e_ins = 1;
+
+    jobs.par_iter()
+        .enumerate()
+        .map(|(idx, job)| {
+            // Materialize sequences on-demand
+            let mut query_seq = job.get_query_seq(ctx);
+            let (mut ref_seq, _adj_rb, _adj_re, _rid) = job.fetch_ref_seq(ctx);
+
+            let l_ms = job.mate_len as i32;
+            let ref_len = ref_seq.len() as i32;
+
+            // Build xtra flags matching BWA-MEM2
+            let xtra = KSW_XSUBO
+                | KSW_XSTART
+                | if (l_ms * job.match_score as i32) < 250 {
+                    KSW_XBYTE
+                } else {
+                    0
+                }
+                | (job.min_seed_len as i32 * job.match_score as i32) as u32;
+
+            let aln: Kswr = unsafe {
+                ksw_align2::<SimdEngine128>(
+                    l_ms,
+                    &mut query_seq,
+                    ref_len,
+                    &mut ref_seq,
+                    5, // m (alphabet size)
+                    &MATE_RESCUE_SCORING_MATRIX,
+                    o_del,
+                    e_del,
+                    o_ins,
+                    e_ins,
+                    xtra,
+                )
+            };
+
+            MateRescueResultCompact {
+                job_index: idx,
+                aln,
+            }
+        })
+        .collect()
+}
+
+/// Convert a compact job + SW result to an Alignment
+pub fn compact_result_to_alignment(
+    job: &MateRescueJobCompact,
+    aln: &Kswr,
+    ctx: &MateRescueBatchContext,
+) -> Option<Alignment> {
+    let l_pac = ctx.bwa_idx.bns.packed_sequence_length as i64;
+    let l_ms = job.mate_len as i32;
+    let mate_name = job.get_mate_name(ctx);
+
+    // Check if alignment is good enough
+    if aln.score < job.min_seed_len as i32 || aln.qb < 0 {
+        return None;
+    }
+
+    // Convert coordinates
+    let (rescued_rb, _rescued_re, query_start, query_end) = if job.is_rev {
+        let rb_result = (l_pac << 1) - (job.adj_rb + aln.te as i64 + 1);
+        let _re_result = (l_pac << 1) - (job.adj_rb + aln.tb as i64);
+        let qb_result = l_ms - (aln.qe + 1);
+        let qe_result = l_ms - aln.qb;
+        (rb_result, _re_result, qb_result, qe_result)
+    } else {
+        let rb_result = job.adj_rb + aln.tb as i64;
+        let re_result = job.adj_rb + aln.te as i64 + 1;
+        (rb_result, re_result, aln.qb, aln.qe + 1)
+    };
+
+    // Convert bidirectional position to chromosome-relative
+    let (pos_f, _is_rev_depos) = ctx.bwa_idx.bns.bns_depos(rescued_rb);
+    let rescued_rid = ctx.bwa_idx.bns.bns_pos2rid(pos_f);
+
+    if rescued_rid < 0 || rescued_rid as usize != job.anchor_ref_id as usize {
+        return None;
+    }
+
+    let chr_pos =
+        (pos_f - ctx.bwa_idx.bns.annotations[rescued_rid as usize].offset as i64) as u64;
+
+    // Build CIGAR from alignment endpoints
+    let ref_aligned_len = (aln.te - aln.tb + 1).max(0);
+    let query_aligned = (query_end - query_start).max(0);
+
+    let mut cigar: Vec<(u8, i32)> = Vec::new();
+    if query_start > 0 {
+        cigar.push((b'S', query_start));
+    }
+    if ref_aligned_len > 0 && query_aligned > 0 {
+        if ref_aligned_len == query_aligned {
+            cigar.push((b'M', ref_aligned_len));
+        } else if ref_aligned_len > query_aligned {
+            cigar.push((b'M', query_aligned));
+            cigar.push((b'D', ref_aligned_len - query_aligned));
+        } else {
+            cigar.push((b'M', ref_aligned_len));
+            cigar.push((b'I', query_aligned - ref_aligned_len));
+        }
+    }
+    if query_end < l_ms {
+        cigar.push((b'S', l_ms - query_end));
+    }
+
+    // Create alignment structure
+    let mut flag = 0u16;
+    if job.is_rev {
+        flag |= sam_flags::REVERSE;
+    }
+
+    // Compute NM and MD tags
+    let ref_len_for_md: i32 = cigar
+        .iter()
+        .filter_map(|&(op, len)| {
+            if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                Some(len)
+            } else {
+                None
+            }
+        })
+        .sum();
+
+    // Validate alignment doesn't extend beyond reference bounds
+    let ref_length =
+        ctx.bwa_idx.bns.annotations[rescued_rid as usize].sequence_length as u64;
+    if chr_pos + ref_len_for_md as u64 > ref_length {
+        return None;
+    }
+
+    // Get reference sequence at chromosome position
+    let forward_ref = ctx.bwa_idx.bns.get_forward_ref(
+        ctx.pac,
+        job.anchor_ref_id as usize,
+        chr_pos,
+        ref_len_for_md.max(0) as usize,
+    );
+
+    // Get aligned query portion
+    let query_seq = job.get_query_seq(ctx);
+    let qb_sam = query_start.max(0) as usize;
+    let qe_sam = query_end.max(0) as usize;
+    let aligned_query = if qe_sam <= query_seq.len() {
+        &query_seq[qb_sam..qe_sam]
+    } else {
+        &query_seq[qb_sam..]
+    };
+
+    let (nm, md_tag) = edit_distance::compute_nm_and_md(&forward_ref, aligned_query, &cigar);
+
+    Some(Alignment {
+        query_name: mate_name.to_string(),
+        flag,
+        ref_name: job.get_anchor_ref_name(ctx).to_string(),
+        ref_id: job.anchor_ref_id as usize,
+        pos: chr_pos,
+        mapq: 0,
+        score: aln.score,
+        cigar,
+        rnext: String::from("*"),
+        pnext: 0,
+        tlen: 0,
+        seq: String::new(),
+        qual: String::new(),
+        tags: vec![
+            ("AS".to_string(), format!("i:{}", aln.score)),
+            ("NM".to_string(), format!("i:{}", nm)),
+            ("MD".to_string(), format!("Z:{}", md_tag)),
+        ],
+        query_start,
+        query_end,
+        seed_coverage: (ref_aligned_len.min(query_aligned) >> 1) as i32,
+        hash: 0,
+        frac_rep: 0.0,
+    })
 }
 
 // ============================================================================

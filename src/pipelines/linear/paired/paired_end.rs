@@ -19,8 +19,8 @@ use super::super::mem_opt::MemOpt;
 use super::super::pipeline::align_read_deferred;
 use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats};
 use super::mate_rescue::{
-    MateRescueJob, execute_mate_rescue_batch_with_engine, prepare_mate_rescue_jobs_for_anchor,
-    result_to_alignment,
+    MateRescueBatchContext, MateRescueJobCompact, compact_result_to_alignment,
+    execute_compact_batch, prepare_compact_jobs_for_anchor,
 };
 use super::pairing::mem_pair;
 use crate::alignment::utils::encode_sequence;
@@ -591,29 +591,58 @@ fn mate_rescue_batch(
     }
 
     // ========================================================================
-    // PHASE 1: Collect all SW jobs across all pairs
+    // PHASE 0: Pre-encode all sequences into shared vectors
     // ========================================================================
-    // We collect jobs in parallel from each pair, then flatten into one big list.
-    // Each job stores (pair_index, which_read) so we know where to put results.
+    // OPTIMIZATION (Session 56): Encode sequences once per batch, not per-job.
+    // This allows MateRescueJobCompact to store indices instead of Vec<u8> copies,
+    // saving ~4GB of memory for 2.3M jobs.
+
+    let encode_start = Instant::now();
+
+    // Encode all sequences once - these are shared across all jobs
+    let query_seqs_r1: Vec<Vec<u8>> = batch_seqs1
+        .iter()
+        .map(|(_, seq, _)| encode_sequence(seq))
+        .collect();
+    let query_seqs_r2: Vec<Vec<u8>> = batch_seqs2
+        .iter()
+        .map(|(_, seq, _)| encode_sequence(seq))
+        .collect();
+
+    // Extract names for the context
+    let names_r1: Vec<&str> = batch_seqs1.iter().map(|(name, _, _)| *name).collect();
+    let names_r2: Vec<&str> = batch_seqs2.iter().map(|(name, _, _)| *name).collect();
+
+    let encode_elapsed = encode_start.elapsed();
+
+    // ========================================================================
+    // PHASE 1: Collect all compact SW jobs across all pairs
+    // ========================================================================
+    // OPTIMIZATION (Session 56): Use MateRescueJobCompact (~64 bytes/job)
+    // instead of MateRescueJob (~1.9KB/job). Jobs store indices into shared
+    // vectors instead of copying sequences.
 
     let phase1_start = Instant::now();
-    let all_jobs: Vec<MateRescueJob> = batch_pairs
+    let all_jobs: Vec<MateRescueJobCompact> = batch_pairs
         .par_iter()
         .enumerate()
         .flat_map(|(i, (alns1, alns2))| {
-            let (name1, seq1, _qual1) = batch_seqs1[i];
-            let (name2, seq2, _qual2) = batch_seqs2[i];
-
             let mut pair_jobs = Vec::new();
 
             // Collect jobs for rescuing read2 using read1's anchors
             if !alns1.is_empty() {
-                let mate_seq = encode_sequence(seq2);
+                let mate_len = query_seqs_r2[i].len();
                 let num_anchors = alns1.len().min(max_matesw);
 
                 for j in 0..num_anchors {
-                    let jobs = prepare_mate_rescue_jobs_for_anchor(
-                        bwa_idx, pac, stats, &alns1[j], &mate_seq, name2, alns2, i,
+                    let jobs = prepare_compact_jobs_for_anchor(
+                        bwa_idx,
+                        pac,
+                        stats,
+                        &alns1[j],
+                        mate_len,
+                        alns2,
+                        i,
                         false, // rescuing read2
                     );
                     pair_jobs.extend(jobs);
@@ -622,12 +651,18 @@ fn mate_rescue_batch(
 
             // Collect jobs for rescuing read1 using read2's anchors
             if !alns2.is_empty() {
-                let mate_seq = encode_sequence(seq1);
+                let mate_len = query_seqs_r1[i].len();
                 let num_anchors = alns2.len().min(max_matesw);
 
                 for j in 0..num_anchors {
-                    let jobs = prepare_mate_rescue_jobs_for_anchor(
-                        bwa_idx, pac, stats, &alns2[j], &mate_seq, name1, alns1, i,
+                    let jobs = prepare_compact_jobs_for_anchor(
+                        bwa_idx,
+                        pac,
+                        stats,
+                        &alns2[j],
+                        mate_len,
+                        alns1,
+                        i,
                         true, // rescuing read1
                     );
                     pair_jobs.extend(jobs);
@@ -645,29 +680,35 @@ fn mate_rescue_batch(
     }
 
     log::debug!(
-        "Mate rescue: collected {} SW jobs across {} pairs",
+        "Mate rescue: collected {} compact SW jobs across {} pairs (encode={:.3}s)",
         all_jobs.len(),
-        batch_pairs.len()
+        batch_pairs.len(),
+        encode_elapsed.as_secs_f64()
     );
+
+    // Create batch context with shared sequence data
+    let ctx = MateRescueBatchContext {
+        pac,
+        bwa_idx,
+        query_seqs_r1: &query_seqs_r1,
+        query_seqs_r2: &query_seqs_r2,
+        names_r1: &names_r1,
+        names_r2: &names_r2,
+    };
 
     // ========================================================================
     // PHASE 2: Execute all SW in parallel
     // ========================================================================
-    // Use horizontal SIMD batching when a SIMD engine is specified
+    // Sequences are materialized on-demand during execution
     let phase2_start = Instant::now();
-    let mut jobs_for_execution = all_jobs;
-    let results = execute_mate_rescue_batch_with_engine(&mut jobs_for_execution, simd_engine);
+    let results = execute_compact_batch(&all_jobs, &ctx, simd_engine);
     let phase2_elapsed = phase2_start.elapsed();
 
     // ========================================================================
     // PHASE 3: Distribute results back to pairs (PARALLEL)
     // ========================================================================
     // OPTIMIZATION (Session 53): Parallelize result distribution
-    // The expensive part is result_to_alignment() which computes CIGAR, MD tags, etc.
-    // We use parallel fold to:
-    // 1. Process results in parallel (compute alignments)
-    // 2. Group into thread-local HashMaps by (pair_idx, is_read1)
-    // 3. Merge results at the end
+    // The expensive part is compact_result_to_alignment() which computes CIGAR, MD tags, etc.
     use std::collections::HashMap;
 
     let phase3_start = Instant::now();
@@ -681,11 +722,11 @@ fn mate_rescue_batch(
         .fold(
             || ResultMap::new(),
             |mut acc, result| {
-                let job = &jobs_for_execution[result.job_index];
+                let job = &all_jobs[result.job_index];
 
                 // Convert SW result to Alignment (expensive - CIGAR, MD, NM)
-                if let Some(alignment) = result_to_alignment(job, &result.aln, bwa_idx, pac) {
-                    let key = (job.pair_index, job.rescuing_read1);
+                if let Some(alignment) = compact_result_to_alignment(job, &result.aln, &ctx) {
+                    let key = (job.pair_index as usize, job.rescuing_read1);
                     acc.entry(key).or_default().push(alignment);
                 }
                 acc
@@ -725,19 +766,6 @@ fn mate_rescue_batch(
         phase2_elapsed.as_secs_f64(),
         phase3_elapsed.as_secs_f64(),
         results.len()
-    );
-
-    log::debug!(
-        "Mate rescue: {} SW jobs produced {} rescued alignments in {} pairs",
-        results.len(),
-        results
-            .iter()
-            .filter(
-                |r| result_to_alignment(&jobs_for_execution[r.job_index], &r.aln, bwa_idx, pac)
-                    .is_some()
-            )
-            .count(),
-        rescued_count
     );
 
     rescued_count
