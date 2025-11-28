@@ -69,6 +69,7 @@ const KSW_XSTOP: i32 = 0x20000;
 /// # Safety
 /// Requires AVX-512BW CPU support. Caller must ensure sequence buffers
 /// are properly sized for 64-way parallelism.
+/// If workspace_buffers provided, they must be large enough for the sequences.
 #[target_feature(enable = "avx512bw")]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn batch_ksw_align_avx512(
@@ -87,6 +88,7 @@ pub unsafe fn batch_ksw_align_avx512(
     w_ambig: i8,               // Ambiguous base penalty
     _phase: i32,               // Processing phase (unused in forward pass)
     _debug: bool,              // Debug flag (unused, for API consistency)
+    workspace_buffers: Option<(&mut [u8], &mut [u8], &mut [u8], &mut [u8])>,
 ) -> usize {
     // ========================================================================
     // SECTION 1: Initialization (C++ lines 387-478)
@@ -186,13 +188,66 @@ pub unsafe fn batch_ksw_align_avx512(
     let mut minsc_msk: __mmask64 = 0;
 
     // Allocate DP matrices
+    // Use workspace pre-allocation when provided to avoid ~132KB allocation per call
     let max_query_len = ncol as usize + 1;
     let max_ref_len = nrow as usize + 1;
+    let required_h_size = max_query_len * SIMD_WIDTH8;
+    let required_row_max_size = max_ref_len * SIMD_WIDTH8;
 
-    let mut h0_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
-    let mut h1_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
-    let mut f_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
-    let mut row_max_buf = vec![0u8; max_ref_len * SIMD_WIDTH8];
+    // Check if workspace buffers are provided and large enough
+    let (mut h0_buf_owned, mut h1_buf_owned, mut f_buf_owned, mut row_max_buf_owned);
+    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) =
+        if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
+            // Use workspace buffers if they're large enough
+            if ws_h0.len() >= required_h_size
+                && ws_h1.len() >= required_h_size
+                && ws_f.len() >= required_h_size
+                && ws_row_max.len() >= required_row_max_size
+            {
+                // Zero out the portion we'll use (workspace already allocated)
+                ws_h0[..required_h_size].fill(0);
+                ws_h1[..required_h_size].fill(0);
+                ws_f[..required_h_size].fill(0);
+                ws_row_max[..required_row_max_size].fill(0);
+                (
+                    &mut ws_h0[..required_h_size],
+                    &mut ws_h1[..required_h_size],
+                    &mut ws_f[..required_h_size],
+                    &mut ws_row_max[..required_row_max_size],
+                )
+            } else {
+                // Workspace too small, fall back to allocation
+                log::trace!(
+                    "AVX512 kswv: workspace too small (need {}+{}, have {}+{}), allocating",
+                    required_h_size,
+                    required_row_max_size,
+                    ws_h0.len(),
+                    ws_row_max.len()
+                );
+                h0_buf_owned = vec![0u8; required_h_size];
+                h1_buf_owned = vec![0u8; required_h_size];
+                f_buf_owned = vec![0u8; required_h_size];
+                row_max_buf_owned = vec![0u8; required_row_max_size];
+                (
+                    h0_buf_owned.as_mut_slice(),
+                    h1_buf_owned.as_mut_slice(),
+                    f_buf_owned.as_mut_slice(),
+                    row_max_buf_owned.as_mut_slice(),
+                )
+            }
+        } else {
+            // No workspace provided, allocate locally
+            h0_buf_owned = vec![0u8; required_h_size];
+            h1_buf_owned = vec![0u8; required_h_size];
+            f_buf_owned = vec![0u8; required_h_size];
+            row_max_buf_owned = vec![0u8; required_row_max_size];
+            (
+                h0_buf_owned.as_mut_slice(),
+                h1_buf_owned.as_mut_slice(),
+                f_buf_owned.as_mut_slice(),
+                row_max_buf_owned.as_mut_slice(),
+            )
+        };
 
     // Initialize H0, F to zero
     for i in 0..=ncol as usize {
@@ -332,8 +387,8 @@ pub unsafe fn batch_ksw_align_avx512(
             break;
         }
 
-        // Swap H0/H1 buffers
-        std::mem::swap(&mut h0_buf, &mut h1_buf);
+        // Swap H0/H1 buffers (h0_buf and h1_buf are already &mut [u8])
+        std::ptr::swap(&mut h0_buf, &mut h1_buf);
 
         i += 1;
     }
@@ -624,6 +679,7 @@ mod tests {
                 -1,    // w_ambig
                 0,     // phase
                 false, // debug
+                None,  // workspace_buffers
             );
 
             kswv_avx2::batch_ksw_align_avx2(
@@ -642,6 +698,7 @@ mod tests {
                 -1,    // w_ambig
                 0,     // phase
                 false, // debug
+                None,  // workspace_buffers
             );
         }
 
@@ -741,6 +798,7 @@ mod tests {
                 -1,
                 0,
                 false,
+                None,
             );
 
             kswv_avx2::batch_ksw_align_avx2(
@@ -759,6 +817,7 @@ mod tests {
                 -1,
                 0,
                 false,
+                None,
             );
         }
 
@@ -869,6 +928,7 @@ mod tests {
                 -1,
                 0,
                 false,
+                None,
             );
         }
 
@@ -1051,6 +1111,7 @@ mod tests {
                 -1,
                 0,
                 false,
+                None,
             );
 
             kswv_avx2::batch_ksw_align_avx2(
@@ -1069,6 +1130,7 @@ mod tests {
                 -1,
                 0,
                 false,
+                None,
             );
         }
 

@@ -399,83 +399,100 @@ pub fn batch_ksw_align(
     gap_extend: i32,
     _debug: bool,
 ) -> usize {
-    // Dispatch to appropriate SIMD kernel based on engine type
-    match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => {
-            use crate::alignment::kswv_avx512;
+    use crate::alignment::workspace::with_workspace;
 
-            // Call AVX-512 kernel (64-way horizontal SIMD)
-            unsafe {
-                kswv_avx512::batch_ksw_align_avx512(
-                    soa.ref_ptr(),
-                    soa.query_ptr(),
-                    pairs[0].ref_len as i16,   // nrow
-                    pairs[0].query_len as i16, // ncol
-                    pairs,
-                    results,
-                    match_score,
-                    mismatch_penalty,
-                    gap_open,
-                    gap_extend,
-                    gap_open,   // o_ins (same as o_del for now)
-                    gap_extend, // e_ins (same as e_del for now)
-                    0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
-                    0,          // phase
-                    false,      // debug
-                )
+    // Use thread-local workspace for pre-allocated buffers
+    with_workspace(|ws| {
+        // Dispatch to appropriate SIMD kernel based on engine type
+        match engine {
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+            SimdEngineType::Engine512 => {
+                use crate::alignment::kswv_avx512;
+
+                // Get AVX-512 workspace buffers
+                let workspace_buffers = ws.ksw_buffers_avx512();
+
+                // Call AVX-512 kernel (64-way horizontal SIMD)
+                unsafe {
+                    kswv_avx512::batch_ksw_align_avx512(
+                        soa.ref_ptr(),
+                        soa.query_ptr(),
+                        pairs[0].ref_len as i16,   // nrow
+                        pairs[0].query_len as i16, // ncol
+                        pairs,
+                        results,
+                        match_score,
+                        mismatch_penalty,
+                        gap_open,
+                        gap_extend,
+                        gap_open,   // o_ins (same as o_del for now)
+                        gap_extend, // e_ins (same as e_del for now)
+                        0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
+                        0,          // phase
+                        false,      // debug
+                        Some(workspace_buffers),
+                    )
+                }
+            }
+            #[cfg(target_arch = "x86_64")]
+            SimdEngineType::Engine256 => {
+                use crate::alignment::kswv_avx2;
+
+                // Get AVX2 workspace buffers
+                let workspace_buffers = ws.ksw_buffers_avx2();
+
+                // Call AVX2 kernel (32-way horizontal SIMD)
+                unsafe {
+                    kswv_avx2::batch_ksw_align_avx2(
+                        soa.ref_ptr(),
+                        soa.query_ptr(),
+                        pairs[0].ref_len as i16,   // nrow
+                        pairs[0].query_len as i16, // ncol
+                        pairs,
+                        results,
+                        match_score,
+                        mismatch_penalty,
+                        gap_open,
+                        gap_extend,
+                        gap_open,   // o_ins
+                        gap_extend, // e_ins
+                        0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
+                        0,          // phase
+                        false,      // debug
+                        Some(workspace_buffers),
+                    )
+                }
+            }
+            SimdEngineType::Engine128 => {
+                use crate::alignment::kswv_sse_neon;
+
+                // Get SSE/NEON workspace buffers
+                let workspace_buffers = ws.ksw_buffers_sse_neon();
+
+                // Call SSE/NEON kernel (16-way horizontal SIMD)
+                unsafe {
+                    kswv_sse_neon::batch_ksw_align_sse_neon(
+                        soa.ref_ptr(),
+                        soa.query_ptr(),
+                        pairs[0].ref_len as i16,   // nrow
+                        pairs[0].query_len as i16, // ncol
+                        pairs,
+                        results,
+                        match_score,
+                        mismatch_penalty,
+                        gap_open,
+                        gap_extend,
+                        gap_open,   // o_ins
+                        gap_extend, // e_ins
+                        0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
+                        0,          // phase
+                        false,      // debug
+                        Some(workspace_buffers),
+                    )
+                }
             }
         }
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => {
-            use crate::alignment::kswv_avx2;
-
-            // Call AVX2 kernel (32-way horizontal SIMD)
-            unsafe {
-                kswv_avx2::batch_ksw_align_avx2(
-                    soa.ref_ptr(),
-                    soa.query_ptr(),
-                    pairs[0].ref_len as i16,   // nrow
-                    pairs[0].query_len as i16, // ncol
-                    pairs,
-                    results,
-                    match_score,
-                    mismatch_penalty,
-                    gap_open,
-                    gap_extend,
-                    gap_open,   // o_ins
-                    gap_extend, // e_ins
-                    0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
-                    0,          // phase
-                    false,      // debug
-                )
-            }
-        }
-        SimdEngineType::Engine128 => {
-            use crate::alignment::kswv_sse_neon;
-
-            // Call SSE/NEON kernel (16-way horizontal SIMD)
-            unsafe {
-                kswv_sse_neon::batch_ksw_align_sse_neon(
-                    soa.ref_ptr(),
-                    soa.query_ptr(),
-                    pairs[0].ref_len as i16,   // nrow
-                    pairs[0].query_len as i16, // ncol
-                    pairs,
-                    results,
-                    match_score,
-                    mismatch_penalty,
-                    gap_open,
-                    gap_extend,
-                    gap_open,   // o_ins
-                    gap_extend, // e_ins
-                    0,          // w_ambig (match scalar scoring matrix: N vs anything = 0)
-                    0,          // phase
-                    false,      // debug
-                )
-            }
-        }
-    }
+    })
 }
 
 /// Fallback scalar implementation for batch_ksw_align

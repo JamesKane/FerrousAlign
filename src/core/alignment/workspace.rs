@@ -8,6 +8,16 @@
 //!
 //! The SW kernel buffers eliminate ~65KB of allocations per batch call in
 //! `simd_banded_swa_batch16_int16` and ~32KB per call in `batch_ksw_align_avx2`.
+//!
+//! ## KSW Horizontal SIMD Buffers (Mate Rescue)
+//!
+//! The KSW buffers eliminate ~32KB (AVX2) or ~64KB (AVX-512) allocations per
+//! batch call in `batch_ksw_align_avx2` and `batch_ksw_align_avx512`. These are
+//! called millions of times during mate rescue.
+//!
+//! **Key optimization**: BWA-MEM2 pre-allocates all buffers at construction time
+//! and reuses them across all batches. We replicate this pattern with thread-local
+//! workspace to avoid per-batch allocation overhead.
 
 use crate::pipelines::linear::seeding::SMEM;
 use std::cell::RefCell;
@@ -27,11 +37,17 @@ const SW_SIMD_WIDTH_16: usize = 16;
 /// SIMD width for 16-bit batch32 kernel (AVX-512: 512-bit / 16-bit = 32 lanes)
 const SW_SIMD_WIDTH_32: usize = 32;
 
-/// SIMD width for 8-bit batch32 kernel (KSW)
-const KSW_SIMD_WIDTH_8: usize = 32;
+/// SIMD width for 8-bit SSE/NEON KSW kernel (128-bit / 8-bit = 16 lanes)
+const KSW_SIMD_WIDTH_SSE_NEON: usize = 16;
 
-/// Maximum sequence length for KSW kernel
-const KSW_MAX_SEQ_LEN: usize = 256;
+/// SIMD width for 8-bit AVX2 KSW kernel (256-bit / 8-bit = 32 lanes)
+const KSW_SIMD_WIDTH_AVX2: usize = 32;
+
+/// SIMD width for 8-bit AVX-512 KSW kernel (512-bit / 8-bit = 64 lanes)
+const KSW_SIMD_WIDTH_AVX512: usize = 64;
+
+/// Maximum sequence length for KSW kernel (increased from 256 to handle longer reads)
+const KSW_MAX_SEQ_LEN: usize = 512;
 
 // Thread-local workspace for alignment buffers
 thread_local! {
@@ -80,17 +96,46 @@ pub struct AlignmentWorkspace {
     pub sw_e_matrix_32: Vec<i16>,
 
     // ========================================================================
-    // KSW Kernel Buffers (batch_ksw_align_avx2)
+    // KSW Kernel Buffers for SSE/NEON (batch_ksw_align_sse_neon)
     // ========================================================================
-    // These eliminate ~32KB of allocations per batch call
+    // These eliminate ~33KB of allocations per batch call
+    // Size: (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON = 513 * 16 = 8,208 bytes each
+    /// H0 buffer for horizontal SIMD (8-bit, 16 lanes)
+    pub ksw_h0_buf_sse_neon: Vec<u8>,
+    /// H1 buffer for horizontal SIMD (8-bit, 16 lanes)
+    pub ksw_h1_buf_sse_neon: Vec<u8>,
+    /// F buffer for horizontal SIMD (8-bit, 16 lanes)
+    pub ksw_f_buf_sse_neon: Vec<u8>,
+    /// Row max buffer for horizontal SIMD (8-bit, 16 lanes)
+    pub ksw_row_max_buf_sse_neon: Vec<u8>,
+
+    // ========================================================================
+    // KSW Kernel Buffers for AVX2 (batch_ksw_align_avx2)
+    // ========================================================================
+    // These eliminate ~66KB of allocations per batch call
+    // Size: (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2 = 513 * 32 = 16,416 bytes each
     /// H0 buffer for horizontal SIMD (8-bit, 32 lanes)
-    pub ksw_h0_buf: Vec<u8>,
+    pub ksw_h0_buf_avx2: Vec<u8>,
     /// H1 buffer for horizontal SIMD (8-bit, 32 lanes)
-    pub ksw_h1_buf: Vec<u8>,
+    pub ksw_h1_buf_avx2: Vec<u8>,
     /// F buffer for horizontal SIMD (8-bit, 32 lanes)
-    pub ksw_f_buf: Vec<u8>,
+    pub ksw_f_buf_avx2: Vec<u8>,
     /// Row max buffer for horizontal SIMD (8-bit, 32 lanes)
-    pub ksw_row_max_buf: Vec<u8>,
+    pub ksw_row_max_buf_avx2: Vec<u8>,
+
+    // ========================================================================
+    // KSW Kernel Buffers for AVX-512 (batch_ksw_align_avx512)
+    // ========================================================================
+    // These eliminate ~132KB of allocations per batch call
+    // Size: (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512 = 513 * 64 = 32,832 bytes each
+    /// H0 buffer for horizontal SIMD (8-bit, 64 lanes)
+    pub ksw_h0_buf_avx512: Vec<u8>,
+    /// H1 buffer for horizontal SIMD (8-bit, 64 lanes)
+    pub ksw_h1_buf_avx512: Vec<u8>,
+    /// F buffer for horizontal SIMD (8-bit, 64 lanes)
+    pub ksw_f_buf_avx512: Vec<u8>,
+    /// Row max buffer for horizontal SIMD (8-bit, 64 lanes)
+    pub ksw_row_max_buf_avx512: Vec<u8>,
 }
 
 impl AlignmentWorkspace {
@@ -116,11 +161,23 @@ impl AlignmentWorkspace {
             sw_h_matrix_32: vec![0i16; SW_MAX_SEQ_LEN * SW_SIMD_WIDTH_32],
             sw_e_matrix_32: vec![0i16; SW_MAX_SEQ_LEN * SW_SIMD_WIDTH_32],
 
-            // KSW kernel buffers (8-bit, 32 lanes) - ~32KB total
-            ksw_h0_buf: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_8],
-            ksw_h1_buf: vec![0u8; KSW_MAX_SEQ_LEN * KSW_SIMD_WIDTH_8],
-            ksw_f_buf: vec![0u8; KSW_MAX_SEQ_LEN * KSW_SIMD_WIDTH_8],
-            ksw_row_max_buf: vec![0u8; KSW_MAX_SEQ_LEN * KSW_SIMD_WIDTH_8],
+            // KSW kernel buffers for SSE/NEON (8-bit, 16 lanes) - ~33KB total
+            ksw_h0_buf_sse_neon: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON],
+            ksw_h1_buf_sse_neon: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON],
+            ksw_f_buf_sse_neon: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON],
+            ksw_row_max_buf_sse_neon: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON],
+
+            // KSW kernel buffers for AVX2 (8-bit, 32 lanes) - ~66KB total
+            ksw_h0_buf_avx2: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2],
+            ksw_h1_buf_avx2: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2],
+            ksw_f_buf_avx2: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2],
+            ksw_row_max_buf_avx2: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2],
+
+            // KSW kernel buffers for AVX-512 (8-bit, 64 lanes) - ~132KB total
+            ksw_h0_buf_avx512: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512],
+            ksw_h1_buf_avx512: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512],
+            ksw_f_buf_avx512: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512],
+            ksw_row_max_buf_avx512: vec![0u8; (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512],
         }
     }
 
@@ -154,13 +211,79 @@ impl AlignmentWorkspace {
         self.sw_e_matrix_32.fill(0);
     }
 
-    /// Reset KSW kernel buffers to zero (call before batch processing)
+    /// Reset KSW kernel buffers to zero for SSE/NEON (call before batch processing)
     #[inline]
-    pub fn reset_ksw_buffers(&mut self) {
-        self.ksw_h0_buf.fill(0);
-        self.ksw_h1_buf.fill(0);
-        self.ksw_f_buf.fill(0);
-        self.ksw_row_max_buf.fill(0);
+    pub fn reset_ksw_buffers_sse_neon(&mut self) {
+        self.ksw_h0_buf_sse_neon.fill(0);
+        self.ksw_h1_buf_sse_neon.fill(0);
+        self.ksw_f_buf_sse_neon.fill(0);
+        self.ksw_row_max_buf_sse_neon.fill(0);
+    }
+
+    /// Reset KSW kernel buffers to zero for AVX2 (call before batch processing)
+    #[inline]
+    pub fn reset_ksw_buffers_avx2(&mut self) {
+        self.ksw_h0_buf_avx2.fill(0);
+        self.ksw_h1_buf_avx2.fill(0);
+        self.ksw_f_buf_avx2.fill(0);
+        self.ksw_row_max_buf_avx2.fill(0);
+    }
+
+    /// Reset KSW kernel buffers to zero for AVX-512 (call before batch processing)
+    #[inline]
+    pub fn reset_ksw_buffers_avx512(&mut self) {
+        self.ksw_h0_buf_avx512.fill(0);
+        self.ksw_h1_buf_avx512.fill(0);
+        self.ksw_f_buf_avx512.fill(0);
+        self.ksw_row_max_buf_avx512.fill(0);
+    }
+
+    /// Get mutable references to SSE/NEON KSW buffers
+    ///
+    /// Returns (h0, h1, f, row_max) tuples suitable for the kswv_sse_neon kernel.
+    /// The caller must ensure the workspace is not borrowed elsewhere.
+    #[inline]
+    pub fn ksw_buffers_sse_neon(&mut self) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+        (
+            &mut self.ksw_h0_buf_sse_neon,
+            &mut self.ksw_h1_buf_sse_neon,
+            &mut self.ksw_f_buf_sse_neon,
+            &mut self.ksw_row_max_buf_sse_neon,
+        )
+    }
+
+    /// Get mutable references to AVX2 KSW buffers
+    ///
+    /// Returns (h0, h1, f, row_max) tuples suitable for the kswv_avx2 kernel.
+    /// The caller must ensure the workspace is not borrowed elsewhere.
+    #[inline]
+    pub fn ksw_buffers_avx2(&mut self) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+        (
+            &mut self.ksw_h0_buf_avx2,
+            &mut self.ksw_h1_buf_avx2,
+            &mut self.ksw_f_buf_avx2,
+            &mut self.ksw_row_max_buf_avx2,
+        )
+    }
+
+    /// Get mutable references to AVX-512 KSW buffers
+    ///
+    /// Returns (h0, h1, f, row_max) tuples suitable for the kswv_avx512 kernel.
+    /// The caller must ensure the workspace is not borrowed elsewhere.
+    #[inline]
+    pub fn ksw_buffers_avx512(&mut self) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+        (
+            &mut self.ksw_h0_buf_avx512,
+            &mut self.ksw_h1_buf_avx512,
+            &mut self.ksw_f_buf_avx512,
+            &mut self.ksw_row_max_buf_avx512,
+        )
+    }
+
+    /// Maximum supported query/reference length for KSW kernels
+    #[inline]
+    pub const fn ksw_max_seq_len() -> usize {
+        KSW_MAX_SEQ_LEN
     }
 }
 

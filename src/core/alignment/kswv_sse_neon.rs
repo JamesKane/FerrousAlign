@@ -88,6 +88,7 @@ const KSW_XSTOP: i32 = 0x20000;
 /// - CPU has SSE2+ (x86_64) or NEON (aarch64) support
 /// - Sequence buffers are properly aligned (16-byte)
 /// - Buffer sizes match documented layout
+/// - If workspace_buffers provided, they must be large enough for the sequences
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn batch_ksw_align_sse_neon(
     seq1_soa: *const u8,       // Reference sequences (SoA layout)
@@ -105,6 +106,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
     w_ambig: i8,               // Ambiguous base penalty
     _phase: i32,               // Processing phase
     _debug: bool,              // Debug flag (unused, for API consistency)
+    workspace_buffers: Option<(&mut [u8], &mut [u8], &mut [u8], &mut [u8])>,
 ) -> usize {
     log::debug!(
         "[SIMD] Horizontal kernel (SSE/NEON): processing {} alignments",
@@ -195,13 +197,66 @@ pub unsafe fn batch_ksw_align_sse_neon(
     let mut te128_hi = SimdEngine128::set1_epi16(-1); // sequences 8-15
 
     // Allocate DP matrices (H, F, rowMax)
+    // Use workspace pre-allocation when provided to avoid ~33KB allocation per call
     let max_query_len = ncol as usize + 1;
     let max_ref_len = nrow as usize + 1;
+    let required_h_size = max_query_len * SIMD_WIDTH8;
+    let required_row_max_size = max_ref_len * SIMD_WIDTH8;
 
-    let mut h0_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
-    let mut h1_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
-    let mut f_buf = vec![0u8; max_query_len * SIMD_WIDTH8];
-    let mut row_max_buf = vec![0u8; max_ref_len * SIMD_WIDTH8];
+    // Check if workspace buffers are provided and large enough
+    let (mut h0_buf_owned, mut h1_buf_owned, mut f_buf_owned, mut row_max_buf_owned);
+    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) =
+        if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
+            // Use workspace buffers if they're large enough
+            if ws_h0.len() >= required_h_size
+                && ws_h1.len() >= required_h_size
+                && ws_f.len() >= required_h_size
+                && ws_row_max.len() >= required_row_max_size
+            {
+                // Zero out the portion we'll use (workspace already allocated)
+                ws_h0[..required_h_size].fill(0);
+                ws_h1[..required_h_size].fill(0);
+                ws_f[..required_h_size].fill(0);
+                ws_row_max[..required_row_max_size].fill(0);
+                (
+                    &mut ws_h0[..required_h_size],
+                    &mut ws_h1[..required_h_size],
+                    &mut ws_f[..required_h_size],
+                    &mut ws_row_max[..required_row_max_size],
+                )
+            } else {
+                // Workspace too small, fall back to allocation
+                log::trace!(
+                    "SSE/NEON kswv: workspace too small (need {}+{}, have {}+{}), allocating",
+                    required_h_size,
+                    required_row_max_size,
+                    ws_h0.len(),
+                    ws_row_max.len()
+                );
+                h0_buf_owned = vec![0u8; required_h_size];
+                h1_buf_owned = vec![0u8; required_h_size];
+                f_buf_owned = vec![0u8; required_h_size];
+                row_max_buf_owned = vec![0u8; required_row_max_size];
+                (
+                    h0_buf_owned.as_mut_slice(),
+                    h1_buf_owned.as_mut_slice(),
+                    f_buf_owned.as_mut_slice(),
+                    row_max_buf_owned.as_mut_slice(),
+                )
+            }
+        } else {
+            // No workspace provided, allocate locally
+            h0_buf_owned = vec![0u8; required_h_size];
+            h1_buf_owned = vec![0u8; required_h_size];
+            f_buf_owned = vec![0u8; required_h_size];
+            row_max_buf_owned = vec![0u8; required_row_max_size];
+            (
+                h0_buf_owned.as_mut_slice(),
+                h1_buf_owned.as_mut_slice(),
+                f_buf_owned.as_mut_slice(),
+                row_max_buf_owned.as_mut_slice(),
+            )
+        };
 
     // Initialize H0, F to zero (using unaligned stores for Vec buffers)
     for i in 0..=ncol as usize {
@@ -363,8 +418,8 @@ pub unsafe fn batch_ksw_align_sse_neon(
             break;
         }
 
-        // Swap buffers
-        std::mem::swap(&mut h0_buf, &mut h1_buf);
+        // Swap buffers (h0_buf and h1_buf are already &mut [u8])
+        std::ptr::swap(&mut h0_buf, &mut h1_buf);
 
         // Increment row index (final value unused after last iteration)
         let one256_16 = SimdEngine128::set1_epi16(1);
@@ -599,6 +654,7 @@ mod tests {
                 -1,
                 0,
                 false, // debug
+                None,  // workspace_buffers (use allocation)
             );
         }
     }
