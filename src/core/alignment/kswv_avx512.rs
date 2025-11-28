@@ -43,7 +43,6 @@ use std::arch::x86_64::{
     // Vector creation
     _mm512_setzero_si512,
     _mm512_shuffle_epi8,
-    _mm512_store_si512,     // Aligned store (for workspace buffers)
     _mm512_storeu_si512,
     _mm512_subs_epu8,
     // Vector logic
@@ -250,11 +249,11 @@ pub unsafe fn batch_ksw_align_avx512(
             )
         };
 
-    // Initialize H0, F to zero (using aligned stores for workspace buffers)
+    // Initialize H0, F to zero
     for i in 0..=ncol as usize {
         let offset = i * SIMD_WIDTH8;
-        _mm512_store_si512(h0_buf[offset..].as_mut_ptr() as *mut _, zero512);
-        _mm512_store_si512(f_buf[offset..].as_mut_ptr() as *mut _, zero512);
+        _mm512_storeu_si512(h0_buf[offset..].as_mut_ptr() as *mut _, zero512);
+        _mm512_storeu_si512(f_buf[offset..].as_mut_ptr() as *mut _, zero512);
     }
 
     let mut pimax512: __m512i = zero512;
@@ -325,9 +324,9 @@ pub unsafe fn batch_ksw_align_avx512(
             let mut f21: __m512i = _mm512_subs_epu8(f11, e_del512);
             f21 = _mm512_max_epu8(gap_d512, f21);
 
-            // Store updated DP values (aligned for workspace buffers)
-            _mm512_store_si512(h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, h11);
-            _mm512_store_si512(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
+            // Store updated DP values
+            _mm512_storeu_si512(h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, h11);
+            _mm512_storeu_si512(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
 
             // Increment query position
             l512 = _mm512_add_epi8(l512, one512);
@@ -347,7 +346,7 @@ pub unsafe fn batch_ksw_align_avx512(
             // pimax512 = where(!exit0, zero512, pimax512)
             pimax512_tmp = _mm512_mask_blend_epi8(exit0, zero512, pimax512_tmp);
 
-            _mm512_store_si512(
+            _mm512_storeu_si512(
                 row_max_buf[(i as usize - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
                 pimax512_tmp,
             );
@@ -402,7 +401,7 @@ pub unsafe fn batch_ksw_align_avx512(
     };
 
     if limit > 0 {
-        _mm512_store_si512(
+        _mm512_storeu_si512(
             row_max_buf[(limit as usize - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
             pimax512_final,
         );

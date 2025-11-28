@@ -257,11 +257,11 @@ pub unsafe fn batch_ksw_align_avx2(
             )
         };
 
-    // Initialize H0, F to zero (using aligned stores for workspace buffers)
+    // Initialize H0, F to zero (using unaligned stores for Vec buffers)
     for i in 0..=ncol as usize {
         let offset = i * SIMD_WIDTH8;
-        SimdEngine256::store_si128(h0_buf[offset..].as_mut_ptr() as *mut _, zero256);
-        SimdEngine256::store_si128(f_buf[offset..].as_mut_ptr() as *mut _, zero256);
+        SimdEngine256::storeu_si128(h0_buf[offset..].as_mut_ptr() as *mut _, zero256);
+        SimdEngine256::storeu_si128(f_buf[offset..].as_mut_ptr() as *mut _, zero256);
     }
 
     // Initialize tracking variables for main loop
@@ -270,8 +270,8 @@ pub unsafe fn batch_ksw_align_avx2(
     let mut minsc_msk = zero256;
     let mut qe256 = SimdEngine256::set1_epi8(0);
 
-    SimdEngine256::store_si128(h0_buf.as_mut_ptr() as *mut _, zero256);
-    SimdEngine256::store_si128(h1_buf.as_mut_ptr() as *mut _, zero256);
+    SimdEngine256::storeu_si128(h0_buf.as_mut_ptr() as *mut _, zero256);
+    SimdEngine256::storeu_si128(h1_buf.as_mut_ptr() as *mut _, zero256);
 
     // ========================================================================
     // SECTION 2: Main DP Loop
@@ -342,12 +342,12 @@ pub unsafe fn batch_ksw_align_avx2(
             let mut f21 = SimdEngine256::subs_epu8(f11, e_del256);
             f21 = SimdEngine256::max_epu8(gap_d256, f21);
 
-            // Store updated DP values (aligned for workspace buffers)
-            SimdEngine256::store_si128(
+            // Store updated DP values (unaligned for Vec buffers)
+            SimdEngine256::storeu_si128(
                 h1_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
                 h11,
             );
-            SimdEngine256::store_si128(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
+            SimdEngine256::storeu_si128(f_buf[(j + 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _, f21);
 
             // Increment query position counter
             l256 = SimdEngine256::add_epi8(l256, one256);
@@ -367,7 +367,7 @@ pub unsafe fn batch_ksw_align_avx2(
             // Apply exit mask
             pimax256_tmp = SimdEngine256::blendv_epi8(pimax256_tmp, zero256, exit0_vec);
 
-            SimdEngine256::store_si128(
+            SimdEngine256::storeu_si128(
                 row_max_buf[(i - 1) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
                 pimax256_tmp,
             );
@@ -455,10 +455,10 @@ pub unsafe fn batch_ksw_align_avx2(
         }
     }
 
-    // Final row max update (aligned for workspace buffers)
+    // Final row max update (unaligned for Vec buffers)
     let msk = SimdEngine256::or_si128(mask256, SimdEngine256::set1_epi8(0));
     let pimax256_final = SimdEngine256::blendv_epi8(pimax256, zero256, msk);
-    SimdEngine256::store_si128(
+    SimdEngine256::storeu_si128(
         row_max_buf[((limit - 1) as usize) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
         pimax256_final,
     );
