@@ -17,6 +17,7 @@
 #![feature(stdarch_x86_avx512)]
 
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
+use aligned_box::AlignedBox;
 
 // Raw AVX-512 intrinsics - faithful to C++
 use std::arch::x86_64::{
@@ -225,28 +226,28 @@ pub unsafe fn batch_ksw_align_avx512(
                     ws_h0.len(),
                     ws_row_max.len()
                 );
-                h0_buf_owned = vec![0u8; required_h_size];
-                h1_buf_owned = vec![0u8; required_h_size];
-                f_buf_owned = vec![0u8; required_h_size];
-                row_max_buf_owned = vec![0u8; required_row_max_size];
+                h0_buf_owned = AlignedBox::slice_from_default(64, required_h_size).unwrap();
+                h1_buf_owned = AlignedBox::slice_from_default(64, required_h_size).unwrap();
+                f_buf_owned = AlignedBox::slice_from_default(64, required_h_size).unwrap();
+                row_max_buf_owned = AlignedBox::slice_from_default(64, required_row_max_size).unwrap();
                 (
-                    h0_buf_owned.as_mut_slice(),
-                    h1_buf_owned.as_mut_slice(),
-                    f_buf_owned.as_mut_slice(),
-                    row_max_buf_owned.as_mut_slice(),
+                    h0_buf_owned.as_mut(),
+                    h1_buf_owned.as_mut(),
+                    f_buf_owned.as_mut(),
+                    row_max_buf_owned.as_mut(),
                 )
             }
         } else {
             // No workspace provided, allocate locally
-            h0_buf_owned = vec![0u8; required_h_size];
-            h1_buf_owned = vec![0u8; required_h_size];
-            f_buf_owned = vec![0u8; required_h_size];
-            row_max_buf_owned = vec![0u8; required_row_max_size];
+            h0_buf_owned = AlignedBox::slice_from_default(64, required_h_size).unwrap();
+            h1_buf_owned = AlignedBox::slice_from_default(64, required_h_size).unwrap();
+            f_buf_owned = AlignedBox::slice_from_default(64, required_h_size).unwrap();
+            row_max_buf_owned = AlignedBox::slice_from_default(64, required_row_max_size).unwrap();
             (
-                h0_buf_owned.as_mut_slice(),
-                h1_buf_owned.as_mut_slice(),
-                f_buf_owned.as_mut_slice(),
-                row_max_buf_owned.as_mut_slice(),
+                h0_buf_owned.as_mut(),
+                h1_buf_owned.as_mut(),
+                f_buf_owned.as_mut(),
+                row_max_buf_owned.as_mut(),
             )
         };
 
