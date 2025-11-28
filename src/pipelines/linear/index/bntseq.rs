@@ -584,8 +584,22 @@ impl BntSeq {
         (pac[byte_idx] >> shift) & 3
     }
 
+    /// Extract 4 bases from a single packed byte
+    /// Returns [base0, base1, base2, base3] where base0 is at highest bits
+    #[inline]
+    fn unpack_byte(byte: u8) -> [u8; 4] {
+        [
+            (byte >> 6) & 3,
+            (byte >> 4) & 3,
+            (byte >> 2) & 3,
+            byte & 3,
+        ]
+    }
+
     /// Get reference sequence from packed format (handles both strands)
     /// Equivalent to C's bns_get_seq
+    ///
+    /// Optimized to extract 4 bases per byte when possible (Session 32).
     pub fn bns_get_seq(&self, pac: &[u8], mut beg: i64, mut end: i64) -> Vec<u8> {
         // Swap if end < beg
         if end < beg {
@@ -606,22 +620,58 @@ impl BntSeq {
             let mut seq = Vec::with_capacity(len);
 
             if beg >= self.packed_sequence_length as i64 {
-                // Reverse strand
+                // Reverse strand - extract forward then reverse-complement
                 let beg_f = ((self.packed_sequence_length as i64) << 1) - 1 - end;
                 let end_f = ((self.packed_sequence_length as i64) << 1) - 1 - beg;
-                for k in (beg_f + 1..=end_f).rev() {
-                    seq.push(3 - Self::get_pac(pac, k));
+
+                // Use optimized batch extraction for forward coordinates
+                Self::extract_forward_batch(pac, beg_f + 1, end_f + 1, &mut seq);
+
+                // Reverse and complement in place
+                seq.reverse();
+                for base in seq.iter_mut() {
+                    *base = 3 - *base;
                 }
             } else {
-                // Forward strand
-                for k in beg..end {
-                    seq.push(Self::get_pac(pac, k));
-                }
+                // Forward strand - use optimized batch extraction
+                Self::extract_forward_batch(pac, beg, end, &mut seq);
             }
             seq
         } else {
             // Bridging forward-reverse boundary, return empty
             Vec::new()
+        }
+    }
+
+    /// Extract bases from forward strand coordinates using batch unpacking
+    /// Extracts 4 bases per byte when aligned, falls back to per-base for edges
+    #[inline]
+    fn extract_forward_batch(pac: &[u8], beg: i64, end: i64, seq: &mut Vec<u8>) {
+        if beg >= end {
+            return;
+        }
+
+        let mut pos = beg;
+
+        // Handle unaligned prefix (until we reach a byte boundary)
+        while pos < end && (pos & 3) != 0 {
+            seq.push(Self::get_pac(pac, pos));
+            pos += 1;
+        }
+
+        // Process aligned middle section - 4 bases per byte
+        let aligned_end = end & !3; // Round down to byte boundary
+        while pos < aligned_end {
+            let byte_idx = (pos >> 2) as usize;
+            let bases = Self::unpack_byte(pac[byte_idx]);
+            seq.extend_from_slice(&bases);
+            pos += 4;
+        }
+
+        // Handle unaligned suffix
+        while pos < end {
+            seq.push(Self::get_pac(pac, pos));
+            pos += 1;
         }
     }
 

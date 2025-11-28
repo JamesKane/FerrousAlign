@@ -1041,7 +1041,15 @@ fn create_unmapped_alignment_internal(query_name: &str) -> Alignment {
 // This maintains rayon parallelism while getting better SIMD utilization.
 // ============================================================================
 
-/// Sub-batch size for parallel processing (matches BWA-MEM2 BATCH_SIZE)
+/// Sub-batch size for parallel processing
+///
+/// On x86_64 with AVX2 (256-bit, batch16), 512 reads provides good SIMD utilization.
+/// On aarch64 with NEON (128-bit, batch8), we use 1024 reads to compensate for
+/// the smaller batch size and amortize per-batch overhead.
+#[cfg(target_arch = "aarch64")]
+const SUB_BATCH_SIZE: usize = 1024;
+
+#[cfg(not(target_arch = "aarch64"))]
 const SUB_BATCH_SIZE: usize = 512;
 
 /// Process a batch of reads using parallel sub-batches with cross-read SIMD batching
