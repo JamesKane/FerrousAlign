@@ -28,7 +28,7 @@ use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::io::sam_output::{
     PairedFlagContext, create_unmapped_paired, prepare_paired_alignment_read1,
-    prepare_paired_alignment_read2, write_sam_record,
+    prepare_paired_alignment_read2,
 };
 use crate::utils::cputime;
 use rayon::prelude::*;
