@@ -205,7 +205,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
 
     // Check if workspace buffers are provided and large enough
     let (mut h0_buf_owned, mut h1_buf_owned, mut f_buf_owned, mut row_max_buf_owned);
-    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) =
+    let (mut h0_buf, mut h1_buf, f_buf, row_max_buf): (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) =
         if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
             // Use workspace buffers if they're large enough
             if ws_h0.len() >= required_h_size
@@ -511,7 +511,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
 
     // Second-best computation samples every other sequence (8 of 16)
     // This is an approximation that matches BWA-MEM2's approach
-    for i in 0..SIMD_WIDTH16.min((pairs.len() + 1) / 2) {
+    for i in 0..SIMD_WIDTH16.min(pairs.len().div_ceil(2)) {
         let seq_idx = i * 2; // Map to actual sequence index
         let val = (score_arr.0[seq_idx] as i32 + qmax as i32 - 1) / qmax as i32;
 
@@ -523,7 +523,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
         };
 
         low_arr.0[i] = (te_val - val as i16).max(0);
-        high_arr.0[i] = (te_val + val as i16).min(nrow as i16 - 1);
+        high_arr.0[i] = (te_val + val as i16).min(nrow - 1);
         rlen_arr.0[i] = pairs[seq_idx].ref_len as i16;
 
         if qe_arr.0[seq_idx] != 0 {

@@ -33,7 +33,6 @@ use std::arch::x86_64::{
     _mm512_cmpgt_epu8_mask,
     // Vector loads/stores (64-byte aligned for performance)
     _mm512_load_si512,
-    _mm512_store_si512,
     // Mask blends
     _mm512_mask_blend_epi8,
     _mm512_mask_blend_epi16,
@@ -45,6 +44,7 @@ use std::arch::x86_64::{
     // Vector creation
     _mm512_setzero_si512,
     _mm512_shuffle_epi8,
+    _mm512_store_si512,
     _mm512_subs_epu8,
     // Vector logic
     _mm512_xor_si512,
@@ -197,47 +197,38 @@ pub unsafe fn batch_ksw_align_avx512(
 
     // Check if workspace buffers are provided and large enough
     let (mut h0_buf_owned, mut h1_buf_owned, mut f_buf_owned, mut row_max_buf_owned);
-    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) =
-        if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
-            // Use workspace buffers if they're large enough
-            if ws_h0.len() >= required_h_size
-                && ws_h1.len() >= required_h_size
-                && ws_f.len() >= required_h_size
-                && ws_row_max.len() >= required_row_max_size
-            {
-                // Zero out the portion we'll use (workspace already allocated)
-                ws_h0[..required_h_size].fill(0);
-                ws_h1[..required_h_size].fill(0);
-                ws_f[..required_h_size].fill(0);
-                ws_row_max[..required_row_max_size].fill(0);
-                (
-                    &mut ws_h0[..required_h_size],
-                    &mut ws_h1[..required_h_size],
-                    &mut ws_f[..required_h_size],
-                    &mut ws_row_max[..required_row_max_size],
-                )
-            } else {
-                // Workspace too small, fall back to allocation
-                log::trace!(
-                    "AVX512 kswv: workspace too small (need {}+{}, have {}+{}), allocating",
-                    required_h_size,
-                    required_row_max_size,
-                    ws_h0.len(),
-                    ws_row_max.len()
-                );
-                h0_buf_owned = vec![0u8; required_h_size];
-                h1_buf_owned = vec![0u8; required_h_size];
-                f_buf_owned = vec![0u8; required_h_size];
-                row_max_buf_owned = vec![0u8; required_row_max_size];
-                (
-                    &mut h0_buf_owned,
-                    &mut h1_buf_owned,
-                    &mut f_buf_owned,
-                    &mut row_max_buf_owned,
-                )
-            }
+    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (
+        &mut [u8],
+        &mut [u8],
+        &mut [u8],
+        &mut [u8],
+    ) = if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
+        // Use workspace buffers if they're large enough
+        if ws_h0.len() >= required_h_size
+            && ws_h1.len() >= required_h_size
+            && ws_f.len() >= required_h_size
+            && ws_row_max.len() >= required_row_max_size
+        {
+            // Zero out the portion we'll use (workspace already allocated)
+            ws_h0[..required_h_size].fill(0);
+            ws_h1[..required_h_size].fill(0);
+            ws_f[..required_h_size].fill(0);
+            ws_row_max[..required_row_max_size].fill(0);
+            (
+                &mut ws_h0[..required_h_size],
+                &mut ws_h1[..required_h_size],
+                &mut ws_f[..required_h_size],
+                &mut ws_row_max[..required_row_max_size],
+            )
         } else {
-            // No workspace provided, allocate locally
+            // Workspace too small, fall back to allocation
+            log::trace!(
+                "AVX512 kswv: workspace too small (need {}+{}, have {}+{}), allocating",
+                required_h_size,
+                required_row_max_size,
+                ws_h0.len(),
+                ws_row_max.len()
+            );
             h0_buf_owned = vec![0u8; required_h_size];
             h1_buf_owned = vec![0u8; required_h_size];
             f_buf_owned = vec![0u8; required_h_size];
@@ -248,7 +239,20 @@ pub unsafe fn batch_ksw_align_avx512(
                 &mut f_buf_owned,
                 &mut row_max_buf_owned,
             )
-        };
+        }
+    } else {
+        // No workspace provided, allocate locally
+        h0_buf_owned = vec![0u8; required_h_size];
+        h1_buf_owned = vec![0u8; required_h_size];
+        f_buf_owned = vec![0u8; required_h_size];
+        row_max_buf_owned = vec![0u8; required_row_max_size];
+        (
+            &mut h0_buf_owned,
+            &mut h1_buf_owned,
+            &mut f_buf_owned,
+            &mut row_max_buf_owned,
+        )
+    };
 
     // Initialize H0, F to zero
     // Use pointer arithmetic to preserve 64-byte alignment (allows LLVM to optimize to aligned ops)

@@ -600,12 +600,12 @@ mod tests {
         // Check SoA layout: position 0 of all sequences
         unsafe {
             // ref[0][0] = 0 (A), ref[1][0] = 3 (T)
-            assert_eq!(*soa.ref_ptr().add(0 * batch_size + 0), 0);
+            assert_eq!(*soa.ref_ptr().add(0 * batch_size), 0);
             assert_eq!(*soa.ref_ptr().add(0 * batch_size + 1), 3);
 
             // ref[0][1] = 1 (C), ref[1][1] = 2 (G)
-            assert_eq!(*soa.ref_ptr().add(1 * batch_size + 0), 1);
-            assert_eq!(*soa.ref_ptr().add(1 * batch_size + 1), 2);
+            assert_eq!(*soa.ref_ptr().add(batch_size), 1);
+            assert_eq!(*soa.ref_ptr().add(batch_size + 1), 2);
         }
     }
 

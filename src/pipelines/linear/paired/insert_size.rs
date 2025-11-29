@@ -133,17 +133,11 @@ pub fn calculate_insert_size_stats(
         let dir_name = format!("{}{}", &"FR"[d >> 1 & 1..=d >> 1 & 1], &"FR"[d & 1..=d & 1]);
 
         if sizes.len() < MIN_DIR_CNT {
-            log::info!(
-                "[PE] skip orientation {} as there are not enough pairs",
-                dir_name
-            );
+            log::info!("[PE] skip orientation {dir_name} as there are not enough pairs");
             continue;
         }
 
-        log::info!(
-            "[PE] analyzing insert size distribution for orientation {}...",
-            dir_name
-        );
+        log::info!("[PE] analyzing insert size distribution for orientation {dir_name}...");
 
         // Sort insert sizes (BWA-MEM2: ks_introsort_64)
         sizes.sort_unstable();
@@ -163,11 +157,9 @@ pub fn calculate_insert_size_stats(
         }
         let high_outlier = ((p75 as f64 + OUTLIER_BOUND * iqr as f64) + 0.499) as i32;
 
-        log::info!("[PE] (25, 50, 75) percentile: ({}, {}, {})", p25, p50, p75);
+        log::info!("[PE] (25, 50, 75) percentile: ({p25}, {p50}, {p75})");
         log::info!(
-            "[PE] low and high boundaries for computing mean and std.dev: ({}, {})",
-            low,
-            high_outlier
+            "[PE] low and high boundaries for computing mean and std.dev: ({low}, {high_outlier})"
         );
 
         // Calculate mean (excluding outliers) - BWA-MEM2 bwamem_pair.cpp:123-126
@@ -181,10 +173,7 @@ pub fn calculate_insert_size_stats(
         }
 
         if count == 0 {
-            log::warn!(
-                "[PE] no valid samples for orientation {} within bounds",
-                dir_name
-            );
+            log::warn!("[PE] no valid samples for orientation {dir_name} within bounds");
             continue;
         }
 
@@ -200,7 +189,7 @@ pub fn calculate_insert_size_stats(
         }
         let std = (sum_sq / count as f64).sqrt();
 
-        log::info!("[PE] mean and std.dev: ({:.2}, {:.2})", avg, std);
+        log::info!("[PE] mean and std.dev: ({avg:.2}, {std:.2})");
 
         // Calculate final bounds for proper pairs (mapping bounds)
         // BWA-MEM2 bwamem_pair.cpp:133-137
@@ -222,11 +211,7 @@ pub fn calculate_insert_size_stats(
             low = 1;
         }
 
-        log::info!(
-            "[PE] low and high boundaries for proper pairs: ({}, {})",
-            low,
-            high
-        );
+        log::info!("[PE] low and high boundaries for proper pairs: ({low}, {high})");
 
         stats[d] = InsertSizeStats {
             avg,

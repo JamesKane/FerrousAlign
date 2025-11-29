@@ -325,7 +325,7 @@ mod tests {
         assert!(matches!(backend, ComputeBackend::CpuSimd(_)));
         let desc = backend_description(backend);
         assert!(!desc.is_empty());
-        println!("Detected backend: {} ({:?})", desc, backend);
+        println!("Detected backend: {desc} ({backend:?})");
     }
 
     #[test]

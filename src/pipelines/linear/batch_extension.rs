@@ -950,8 +950,8 @@ pub fn process_batch_cross_read(
                     qual: String::new(),
                     tags: vec![
                         ("AS".to_string(), format!("i:{}", region.score)),
-                        ("NM".to_string(), format!("i:{}", nm)),
-                        ("MD".to_string(), format!("Z:{}", md_tag)),
+                        ("NM".to_string(), format!("i:{nm}")),
+                        ("MD".to_string(), format!("Z:{md_tag}")),
                     ],
                     query_start: region.qb,
                     query_end: region.qe,
@@ -1095,13 +1095,10 @@ pub fn process_batch_parallel_subbatch(
     }
 
     // Calculate number of sub-batches
-    let num_sub_batches = (batch_size + SUB_BATCH_SIZE - 1) / SUB_BATCH_SIZE;
+    let num_sub_batches = batch_size.div_ceil(SUB_BATCH_SIZE);
 
     log::debug!(
-        "PARALLEL_SUBBATCH: Processing {} reads in {} sub-batches of ~{} reads each",
-        batch_size,
-        num_sub_batches,
-        SUB_BATCH_SIZE
+        "PARALLEL_SUBBATCH: Processing {batch_size} reads in {num_sub_batches} sub-batches of ~{SUB_BATCH_SIZE} reads each"
     );
 
     // Process sub-batches in parallel
@@ -1305,8 +1302,8 @@ fn process_sub_batch_internal(
                     qual: String::new(),
                     tags: vec![
                         ("AS".to_string(), format!("i:{}", region.score)),
-                        ("NM".to_string(), format!("i:{}", nm)),
-                        ("MD".to_string(), format!("Z:{}", md_tag)),
+                        ("NM".to_string(), format!("i:{nm}")),
+                        ("MD".to_string(), format!("Z:{md_tag}")),
                     ],
                     query_start: region.qb,
                     query_end: region.qe,

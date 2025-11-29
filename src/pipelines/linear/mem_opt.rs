@@ -307,7 +307,7 @@ pub fn parse_xa_hits(s: &str) -> Result<(i32, i32), String> {
         1 => {
             let val = parts[0]
                 .parse::<i32>()
-                .map_err(|_| format!("Invalid XA hits value: {}", s))?;
+                .map_err(|_| format!("Invalid XA hits value: {s}"))?;
             Ok((val, 200)) // Default alt hits to 200
         }
         2 => {
@@ -319,7 +319,7 @@ pub fn parse_xa_hits(s: &str) -> Result<(i32, i32), String> {
                 .map_err(|_| format!("Invalid alt XA hits: {}", parts[1]))?;
             Ok((primary, alt))
         }
-        _ => Err(format!("XA hits must be INT or INT,INT: {}", s)),
+        _ => Err(format!("XA hits must be INT or INT,INT: {s}")),
     }
 }
 
@@ -579,7 +579,7 @@ impl MemOpt {
             1 => {
                 let val = parts[0]
                     .parse::<i32>()
-                    .map_err(|_| format!("Invalid gap penalty: {}", s))?;
+                    .map_err(|_| format!("Invalid gap penalty: {s}"))?;
                 Ok((val, val))
             }
             2 => {
@@ -591,7 +591,7 @@ impl MemOpt {
                     .map_err(|_| format!("Invalid insertion penalty: {}", parts[1]))?;
                 Ok((del, ins))
             }
-            _ => Err(format!("Gap penalty must be INT or INT,INT: {}", s)),
+            _ => Err(format!("Gap penalty must be INT or INT,INT: {s}")),
         }
     }
 
@@ -603,7 +603,7 @@ impl MemOpt {
             1 => {
                 let val = parts[0]
                     .parse::<i32>()
-                    .map_err(|_| format!("Invalid clipping penalty: {}", s))?;
+                    .map_err(|_| format!("Invalid clipping penalty: {s}"))?;
                 Ok((val, val))
             }
             2 => {
@@ -615,7 +615,7 @@ impl MemOpt {
                     .map_err(|_| format!("Invalid 3' clipping penalty: {}", parts[1]))?;
                 Ok((clip5, clip3))
             }
-            _ => Err(format!("Clipping penalty must be INT or INT,INT: {}", s)),
+            _ => Err(format!("Clipping penalty must be INT or INT,INT: {s}")),
         }
     }
 
@@ -648,12 +648,12 @@ impl MemOpt {
         } else {
             // File path - read lines from file
             let file = File::open(input)
-                .map_err(|e| format!("Failed to open header file {}: {}", input, e))?;
+                .map_err(|e| format!("Failed to open header file {input}: {e}"))?;
             let reader = BufReader::new(file);
 
             let mut lines = Vec::new();
             for line in reader.lines() {
-                let line = line.map_err(|e| format!("Failed to read header file: {}", e))?;
+                let line = line.map_err(|e| format!("Failed to read header file: {e}"))?;
                 if !line.is_empty() {
                     lines.push(line);
                 }
@@ -670,8 +670,7 @@ impl MemOpt {
 
         if parts.is_empty() || parts.len() > 4 {
             return Err(format!(
-                "Insert size must be FLOAT[,FLOAT[,INT[,INT]]]: {}",
-                s
+                "Insert size must be FLOAT[,FLOAT[,INT[,INT]]]: {s}"
             ));
         }
 
@@ -681,7 +680,7 @@ impl MemOpt {
             .map_err(|_| format!("Invalid insert size mean: {}", parts[0]))?;
 
         if mean <= 0.0 {
-            return Err(format!("Insert size mean must be positive: {}", mean));
+            return Err(format!("Insert size mean must be positive: {mean}"));
         }
 
         // Parse stddev (default: 10% of mean)
@@ -752,19 +751,19 @@ mod tests {
         let opt = MemOpt::default();
 
         // Check diagonal (matches) - should be +1
-        assert_eq!(opt.mat[0 * 5 + 0], 1, "A-A match");
-        assert_eq!(opt.mat[1 * 5 + 1], 1, "C-C match");
+        assert_eq!(opt.mat[0], 1, "A-A match");
+        assert_eq!(opt.mat[5 + 1], 1, "C-C match");
         assert_eq!(opt.mat[2 * 5 + 2], 1, "G-G match");
         assert_eq!(opt.mat[3 * 5 + 3], 1, "T-T match");
 
         // Check mismatches - should be -4
-        assert_eq!(opt.mat[0 * 5 + 1], -4, "A-C mismatch");
-        assert_eq!(opt.mat[0 * 5 + 2], -4, "A-G mismatch");
-        assert_eq!(opt.mat[1 * 5 + 3], -4, "C-T mismatch");
+        assert_eq!(opt.mat[1], -4, "A-C mismatch");
+        assert_eq!(opt.mat[2], -4, "A-G mismatch");
+        assert_eq!(opt.mat[5 + 3], -4, "C-T mismatch");
 
         // Check N (ambiguous) - should be -1
-        assert_eq!(opt.mat[0 * 5 + 4], -1, "A-N");
-        assert_eq!(opt.mat[4 * 5 + 0], -1, "N-A");
+        assert_eq!(opt.mat[4], -1, "A-N");
+        assert_eq!(opt.mat[4 * 5], -1, "N-A");
         assert_eq!(opt.mat[4 * 5 + 4], -1, "N-N");
     }
 
@@ -775,8 +774,8 @@ mod tests {
 
         assert_eq!(opt.a, 2);
         assert_eq!(opt.b, 6);
-        assert_eq!(opt.mat[0 * 5 + 0], 2, "Match should be 2");
-        assert_eq!(opt.mat[0 * 5 + 1], -6, "Mismatch should be -6");
+        assert_eq!(opt.mat[0], 2, "Match should be 2");
+        assert_eq!(opt.mat[1], -6, "Mismatch should be -6");
     }
 
     #[test]

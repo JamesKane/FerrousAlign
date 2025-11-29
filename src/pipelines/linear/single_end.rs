@@ -105,7 +105,7 @@ pub fn process_single_end(
         let mut reader = match FastqReader::new(query_file_name) {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Error opening query file {}: {}", query_file_name, e);
+                log::error!("Error opening query file {query_file_name}: {e}");
                 continue;
             }
         };
@@ -115,7 +115,7 @@ pub fn process_single_end(
             let batch = match reader.read_batch(reads_per_batch) {
                 Ok(b) => b,
                 Err(e) => {
-                    log::error!("Error reading batch from {}: {}", query_file_name, e);
+                    log::error!("Error reading batch from {query_file_name}: {e}");
                     break;
                 }
             };
@@ -132,10 +132,7 @@ pub fn process_single_end(
             total_bases += batch_bp;
 
             log::info!(
-                "read_chunk: {}, work_chunk_size: {}, nseq: {}",
-                reads_per_batch,
-                batch_bp,
-                batch_size
+                "read_chunk: {reads_per_batch}, work_chunk_size: {batch_bp}, nseq: {batch_size}"
             );
 
             // Track per-batch timing
@@ -147,16 +144,16 @@ pub fn process_single_end(
             let pac_data_clone = Arc::clone(&pac_data);
             let opt_clone = Arc::clone(&opt);
             let batch_start_id = reads_processed; // Capture for closure
-            let compute_backend = compute_ctx.backend.clone();
+            let compute_backend = compute_ctx.backend;
 
             // Check batching mode via environment variables:
             // - FERROUS_CROSS_READ_BATCH=1: Global cross-read batching (experimental, slow)
             // - FERROUS_PARALLEL_SUBBATCH=1: Parallel sub-batch processing (optimized)
             // - Default: Per-read processing with rayon
             let use_cross_read_batching =
-                std::env::var("FERROUS_CROSS_READ_BATCH").map_or(false, |v| v == "1");
+                std::env::var("FERROUS_CROSS_READ_BATCH").is_ok_and(|v| v == "1");
             let use_parallel_subbatch =
-                std::env::var("FERROUS_PARALLEL_SUBBATCH").map_or(false, |v| v == "1");
+                std::env::var("FERROUS_PARALLEL_SUBBATCH").is_ok_and(|v| v == "1");
 
             let alignments: Vec<Vec<Alignment>> = if use_parallel_subbatch {
                 // OPTIMIZED: Parallel sub-batch processing (BWA-MEM2 style)
@@ -213,7 +210,7 @@ pub fn process_single_end(
                             seq,
                             qual,
                             &opt_clone,
-                            compute_backend.clone(),
+                            compute_backend,
                             read_id,
                             false, // don't skip secondary marking
                         )
@@ -248,11 +245,11 @@ pub fn process_single_end(
                     let mut unmapped = create_unmapped_single_end(query_name, orig_seq.len());
 
                     if let Some(ref rg) = rg_id {
-                        unmapped.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+                        unmapped.tags.push(("RG".to_string(), format!("Z:{rg}")));
                     }
 
                     if let Err(e) = write_sam_record(writer, &unmapped, orig_seq, orig_qual) {
-                        log::error!("Error writing SAM record: {}", e);
+                        log::error!("Error writing SAM record: {e}");
                     }
                     continue;
                 }
@@ -269,7 +266,7 @@ pub fn process_single_end(
                     if let Err(e) =
                         write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual)
                     {
-                        log::error!("Error writing SAM record: {}", e);
+                        log::error!("Error writing SAM record: {e}");
                     }
                 }
             }

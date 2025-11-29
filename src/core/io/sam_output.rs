@@ -168,7 +168,7 @@ pub fn prepare_single_end_alignment(
 
     // Add RG tag if read group is specified
     if let Some(rg) = rg_id {
-        alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+        alignment.tags.push(("RG".to_string(), format!("Z:{rg}")));
     }
 }
 
@@ -265,7 +265,7 @@ pub fn prepare_paired_alignment_read1(
 
     // Add tags
     if let Some(rg) = rg_id {
-        alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+        alignment.tags.push(("RG".to_string(), format!("Z:{rg}")));
     }
 
     // MC tag only for mapped mates
@@ -359,7 +359,7 @@ pub fn prepare_paired_alignment_read2(
 
     // Add tags
     if let Some(rg) = rg_id {
-        alignment.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+        alignment.tags.push(("RG".to_string(), format!("Z:{rg}")));
     }
 
     // MC tag only for mapped mates
@@ -470,7 +470,7 @@ pub fn write_single_end_alignments<W: Write>(
         let mut unmapped = create_unmapped_single_end(query_name, seq.len());
 
         if let Some(rg) = rg_id {
-            unmapped.tags.push(("RG".to_string(), format!("Z:{}", rg)));
+            unmapped.tags.push(("RG".to_string(), format!("Z:{rg}")));
         }
 
         write_sam_record(writer, &unmapped, seq, qual)?;

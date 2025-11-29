@@ -43,7 +43,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
         // CRITICAL: Match C++ bwa-mem2 bit order (same as extraction in bntseq.rs)
         let bit_offset = ((!(i % 4)) & 3) * 2;
         let base = (pac_data[byte_idx] >> bit_offset) & 0x03;
-        text_for_sais.push((base + 1) as u8); // Shift: A=1, C=2, G=3, T=4
+        text_for_sais.push(base + 1); // Shift: A=1, C=2, G=3, T=4
     }
 
     // Add reverse complement strand
@@ -52,7 +52,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
         let bit_offset = ((!(i % 4)) & 3) * 2;
         let base = (pac_data[byte_idx] >> bit_offset) & 0x03;
         let complement = (3 - base) + 1; // Complement: A<->T (0<->3), C<->G (1<->2), then shift
-        text_for_sais.push(complement as u8);
+        text_for_sais.push(complement);
     }
 
     text_for_sais.push(0); // Sentinel: lexicographically smallest
@@ -109,7 +109,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
             } else {
                 "FWD"
             };
-            eprintln!("  [RUST] SA[{}] = {} ({})", i, sa_val, region);
+            eprintln!("  [RUST] SA[{i}] = {sa_val} ({region})");
         }
     }
 
@@ -147,7 +147,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     eprintln!("[RUST] BWT character counts:");
     let mut bwt_char_counts = [0; 5];
     for &ch in bwt_output.iter() {
-        if ch >= 0 && ch < 5 {
+        if (0..5).contains(&ch) {
             bwt_char_counts[ch as usize] += 1;
         }
     }
@@ -161,7 +161,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     );
 
     // Pack BWT into 2-bit format
-    let mut packed_bwt_data = Vec::with_capacity((bwt_output.len() + 3) / 4);
+    let mut packed_bwt_data = Vec::with_capacity(bwt_output.len().div_ceil(4));
     let mut current_byte = 0u8;
     for (idx, &base) in bwt_output.iter().enumerate() {
         // base is 0,1,2,3 for A,C,G,T or 4 for sentinel
@@ -178,7 +178,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     // Calculate l2 array (count of each base)
     let mut l2_counts = [0u64; 4]; // For A, C, G, T
     for &base_code in bwt_output.iter() {
-        if base_code >= 0 && base_code < 4 {
+        if (0..4).contains(&base_code) {
             l2_counts[base_code as usize] += 1;
         }
         // base_code == 4 is sentinel, not counted
@@ -202,10 +202,7 @@ pub fn bwa_index(fasta_file: &Path, prefix: &Path) -> io::Result<()> {
     for i in 0..seq_len_with_sentinel {
         if sa_full[i] == 0 {
             sentinel_index = i as i64;
-            eprintln!(
-                "[RUST] Found sentinel at BWT position {} (SA[{}]=0)",
-                sentinel_index, i
-            );
+            eprintln!("[RUST] Found sentinel at BWT position {sentinel_index} (SA[{i}]=0)");
             break;
         }
     }

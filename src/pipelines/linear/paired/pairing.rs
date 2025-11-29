@@ -155,8 +155,7 @@ pub fn mem_pair(
         let sort_key = ((aln.ref_id as u64) << 32) | (fwd_normalized_pos as u64);
         let packed_info = ((aln.score as u64) << 32)
             | ((alignment_idx as u64) << 2)
-            | ((is_in_reverse_half as u64) << 1)
-            | 0; // 0 = read1
+            | ((is_in_reverse_half as u64) << 1); // 0 = read1
 
         log::trace!(
             "mem_pair R1[{}]: sam_pos={}, ref_len={}, is_rev={}, bidir_pos={}, fwd_norm={}, ref_id={}",
@@ -349,10 +348,7 @@ pub fn mem_pair(
                 });
 
                 log::trace!(
-                    "mem_pair: Valid pair found! orientation={}, distance={}, combined_score={}",
-                    orientation_idx,
-                    distance,
-                    combined_score
+                    "mem_pair: Valid pair found! orientation={orientation_idx}, distance={distance}, combined_score={combined_score}"
                 );
 
                 if search_idx == 0 {

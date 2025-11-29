@@ -240,13 +240,13 @@ mod tests {
 
         // All values should be 10 (5 + 5)
         for i in 0..16 {
-            assert_eq!(sse_result[i], 10, "SSE lane {} incorrect", i);
+            assert_eq!(sse_result[i], 10, "SSE lane {i} incorrect");
         }
 
         // Test with AVX2 if available
         if is_x86_feature_detected!("avx2") {
             use super::super::SimdEngine256;
-            let mut avx2_test_pattern = [5u8; 32];
+            let avx2_test_pattern = [5u8; 32];
             let mut avx2_result = [0u8; 32];
 
             unsafe {
@@ -257,7 +257,7 @@ mod tests {
 
             // All values should be 10 (5 + 5)
             for i in 0..32 {
-                assert_eq!(avx2_result[i], 10, "AVX2 lane {} incorrect", i);
+                assert_eq!(avx2_result[i], 10, "AVX2 lane {i} incorrect");
             }
         }
 

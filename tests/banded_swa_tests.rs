@@ -26,16 +26,14 @@ fn test_soft_clipping_at_end() {
     let has_soft_clip = cigar.iter().any(|(op, _)| *op == b'S');
     assert!(
         has_soft_clip,
-        "CIGAR should contain soft clipping for unaligned query tail. Got: {:?}",
-        cigar
+        "CIGAR should contain soft clipping for unaligned query tail. Got: {cigar:?}"
     );
 
     // The last operation should be soft clipping
     if let Some(&(op, _)) = cigar.last() {
         assert_eq!(
             op, b'S',
-            "Last CIGAR operation should be soft clip (S). Got: {:?}",
-            cigar
+            "Last CIGAR operation should be soft clip (S). Got: {cigar:?}"
         );
     }
 }
@@ -64,8 +62,7 @@ fn test_soft_clipping_at_beginning() {
     let has_soft_clip_or_insertion = cigar.iter().any(|(op, _)| *op == b'S' || *op == b'I');
     assert!(
         has_soft_clip_or_insertion,
-        "CIGAR should handle unaligned query head with S or I operations. Got: {:?}",
-        cigar
+        "CIGAR should handle unaligned query head with S or I operations. Got: {cigar:?}"
     );
 }
 
@@ -89,8 +86,7 @@ fn test_soft_clipping_both_ends() {
     let soft_clip_count = cigar.iter().filter(|(op, _)| *op == b'S').count();
     assert!(
         soft_clip_count >= 1,
-        "Should have at least one soft clip operation. Got CIGAR: {:?}",
-        cigar
+        "Should have at least one soft clip operation. Got CIGAR: {cigar:?}"
     );
 }
 
@@ -109,8 +105,7 @@ fn test_no_soft_clipping_for_full_alignment() {
     let has_soft_clip = cigar.iter().any(|(op, _)| *op == b'S');
     assert!(
         !has_soft_clip,
-        "Full alignment should not have soft clipping. Got: {:?}",
-        cigar
+        "Full alignment should not have soft clipping. Got: {cigar:?}"
     );
 
     // Should be all matches

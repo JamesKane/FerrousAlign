@@ -33,7 +33,7 @@ mod tests {
     fn test_batch_size_limit() {
         let mut file = NamedTempFile::new().unwrap();
         for i in 0..100 {
-            writeln!(file, "@read{}", i).unwrap();
+            writeln!(file, "@read{i}").unwrap();
             writeln!(file, "ACGT").unwrap();
             writeln!(file, "+").unwrap();
             writeln!(file, "IIII").unwrap();

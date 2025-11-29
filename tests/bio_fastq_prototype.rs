@@ -28,7 +28,7 @@ fn test_basic_fastq_reading() {
     let seq = record.seq(); // Returns &[u8]
     let qual = record.qual(); // Returns &[u8]
 
-    println!("Read ID: {}", id);
+    println!("Read ID: {id}");
     println!("Sequence length: {}", seq.len());
     println!("Quality length: {}", qual.len());
 
@@ -45,7 +45,7 @@ fn test_batch_reading_pattern() {
 
     // Write 1000 reads
     for i in 0..1000 {
-        writeln!(file, "@read{}", i).unwrap();
+        writeln!(file, "@read{i}").unwrap();
         writeln!(file, "ACGT").unwrap();
         writeln!(file, "+").unwrap();
         writeln!(file, "IIII").unwrap();
@@ -95,7 +95,7 @@ fn test_gzip_support() {
     use std::io::Write;
 
     // Create a gzipped FASTQ file
-    let mut temp_file = NamedTempFile::new().unwrap();
+    let temp_file = NamedTempFile::new().unwrap();
     let temp_path = temp_file.path().to_str().unwrap().to_string() + ".gz";
 
     {
@@ -103,7 +103,7 @@ fn test_gzip_support() {
         let mut encoder = GzEncoder::new(file, Compression::default());
 
         for i in 0..10 {
-            writeln!(encoder, "@read{}", i).unwrap();
+            writeln!(encoder, "@read{i}").unwrap();
             writeln!(encoder, "ACGTACGT").unwrap();
             writeln!(encoder, "+").unwrap();
             writeln!(encoder, "IIIIIIII").unwrap();
@@ -122,7 +122,7 @@ fn test_gzip_support() {
     assert_eq!(records.len(), 10);
 
     for (i, record) in records.iter().enumerate() {
-        let expected_id = format!("read{}", i);
+        let expected_id = format!("read{i}");
         assert_eq!(record.id(), expected_id.as_str());
         assert_eq!(record.seq(), b"ACGTACGT");
     }
@@ -165,6 +165,6 @@ fn test_quality_score_handling() {
     assert_eq!(qual, b"!#$%");
 
     // Verify quality is returned as bytes (same as our kseq implementation)
-    println!("Quality bytes: {:?}", qual);
+    println!("Quality bytes: {qual:?}");
     println!("✓ Quality score handling works!");
 }

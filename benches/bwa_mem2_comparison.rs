@@ -73,18 +73,18 @@ fn benchmark_comparison(c: &mut Criterion) {
     let read2_path_str = env::var("READ2_PATH")
         .unwrap_or_else(|_| "test_data/HG002_local/read2.fastq.gz".to_string());
 
-    eprintln!("DEBUG: bwa_path: {}", bwa_path);
-    eprintln!("DEBUG: ref_path: {}", ref_path);
-    eprintln!("DEBUG: read1_path_str: {}", read1_path_str);
-    eprintln!("DEBUG: read2_path_str: {}", read2_path_str);
+    eprintln!("DEBUG: bwa_path: {bwa_path}");
+    eprintln!("DEBUG: ref_path: {ref_path}");
+    eprintln!("DEBUG: read1_path_str: {read1_path_str}");
+    eprintln!("DEBUG: read2_path_str: {read2_path_str}");
 
     // Check if files exist
     if !Path::new(&bwa_path).exists() {
-        eprintln!("bwa-mem2 executable not found at {}", bwa_path);
+        eprintln!("bwa-mem2 executable not found at {bwa_path}");
         return;
     }
     if !Path::new(&ref_path).exists() {
-        eprintln!("Reference file not found at {}", ref_path);
+        eprintln!("Reference file not found at {ref_path}");
         return;
     }
     if !Path::new(&read1_path_str).exists() || !Path::new(&read2_path_str).exists() {
@@ -95,7 +95,7 @@ fn benchmark_comparison(c: &mut Criterion) {
     // Index reference for bwa-mem2 if needed
     let bwa_index_files = ["amb", "ann", "bwt.2bit.64", "pac"]
         .iter()
-        .all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
+        .all(|ext| Path::new(&format!("{ref_path}.{ext}")).exists());
     if !bwa_index_files {
         Command::new(&bwa_path)
             .arg("index")
@@ -107,7 +107,7 @@ fn benchmark_comparison(c: &mut Criterion) {
     // Index reference for bwa if needed
     let bwa_index_files_bwa = ["amb", "ann", "bwt", "pac", "sa"]
         .iter()
-        .all(|ext| Path::new(&format!("{}.{}", ref_path, ext)).exists());
+        .all(|ext| Path::new(&format!("{ref_path}.{ext}")).exists());
     if !bwa_index_files_bwa {
         Command::new("bwa")
             .arg("index")
@@ -117,7 +117,7 @@ fn benchmark_comparison(c: &mut Criterion) {
     }
 
     // Index reference for FerrousAlign if needed
-    let fa_index_file = format!("{}.fai", ref_path);
+    let fa_index_file = format!("{ref_path}.fai");
     if !Path::new(&fa_index_file).exists() {
         Command::new("samtools")
             .arg("faidx")

@@ -7,7 +7,7 @@ use std::process::Command;
 
 // Helper function to create a temporary directory for test files
 fn setup_test_dir(test_name: &str) -> io::Result<PathBuf> {
-    let temp_dir = PathBuf::from(format!("target/test_integration_{}", test_name));
+    let temp_dir = PathBuf::from(format!("target/test_integration_{test_name}"));
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir)?;
     }
@@ -147,17 +147,15 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCA
     // Position should be reasonable (1-32 for 32bp reference)
     let pos: i32 = fields[3].parse().expect("Position should be numeric");
     assert!(
-        pos >= 1 && pos <= 32,
-        "Position should be between 1-32, got {}",
-        pos
+        (1..=32).contains(&pos),
+        "Position should be between 1-32, got {pos}"
     );
 
     // CIGAR should use M-only format (32M for 32bp alignment, or 31M1S if last base soft-clipped)
     let cigar = fields[5];
     assert!(
         cigar.contains('M'),
-        "CIGAR should contain M operator: {}",
-        cigar
+        "CIGAR should contain M operator: {cigar}"
     );
 
     // Verify MD tag indicates mismatch (if aligned with M operator)
@@ -169,8 +167,7 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCA
             .expect("Should have MD tag");
         assert!(
             md_tag.len() >= 5,
-            "MD tag should contain mismatch information: {}",
-            md_tag
+            "MD tag should contain mismatch information: {md_tag}"
         );
     }
 

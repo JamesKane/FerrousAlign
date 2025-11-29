@@ -489,7 +489,7 @@ pub fn extend_chains_to_regions(
     // Log h0 values for debugging
     if log::log_enabled!(log::Level::Debug) && !left_jobs.is_empty() {
         let left_h0s: Vec<i32> = left_jobs.iter().map(|j| j.h0).collect();
-        log::debug!("DEFERRED_CIGAR: left h0 values: {:?}", left_h0s);
+        log::debug!("DEFERRED_CIGAR: left h0 values: {left_h0s:?}");
     }
 
     // ========================================================================
@@ -592,8 +592,8 @@ pub fn extend_chains_to_regions(
     {
         let left_raw: Vec<i32> = left_scores.iter().map(|s| s.score).collect();
         let right_raw: Vec<i32> = right_scores.iter().map(|s| s.score).collect();
-        log::debug!("DEFERRED_CIGAR: raw left scores: {:?}", left_raw);
-        log::debug!("DEFERRED_CIGAR: raw right scores: {:?}", right_raw);
+        log::debug!("DEFERRED_CIGAR: raw left scores: {left_raw:?}");
+        log::debug!("DEFERRED_CIGAR: raw right scores: {right_raw:?}");
     }
 
     // Merge scores into AlignmentRegions
@@ -1075,7 +1075,7 @@ pub fn generate_cigar_from_region(
     let rseq = match bwa_idx.bns.get_reference_segment(region.rb, ref_len) {
         Ok(seq) => seq,
         Err(e) => {
-            log::debug!("Failed to fetch reference: {:?}", e);
+            log::debug!("Failed to fetch reference: {e:?}");
             return None;
         }
     };

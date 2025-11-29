@@ -308,7 +308,7 @@ impl BandedPairWiseSW {
                 let mut _current_tb = TB_MATCH; // Default to match
 
                 // Calculate M (match/mismatch) score
-                m_score = m_score + q_slice[j as usize] as i32;
+                m_score += q_slice[j as usize] as i32;
                 if m_score < 0 {
                     m_score = 0;
                 } // Local alignment: clamp to 0
@@ -349,11 +349,9 @@ impl BandedPairWiseSW {
             eh[current_end as usize].h = _h1;
             eh[current_end as usize].e = 0;
 
-            if current_end == qlen {
-                if current_gscore < _h1 {
-                    current_gscore = _h1;
-                    _max_ie = i;
-                }
+            if current_end == qlen && current_gscore < _h1 {
+                current_gscore = _h1;
+                _max_ie = i;
             }
 
             if m_val == 0 {
@@ -372,10 +370,8 @@ impl BandedPairWiseSW {
                     if max_score - m_val - (diff_i - diff_j) * self.e_del > self.zdrop {
                         break;
                     }
-                } else {
-                    if max_score - m_val - (diff_j - diff_i) * self.e_ins > self.zdrop {
-                        break;
-                    }
+                } else if max_score - m_val - (diff_j - diff_i) * self.e_ins > self.zdrop {
+                    break;
                 }
             }
 
@@ -420,16 +416,9 @@ impl BandedPairWiseSW {
             // Safety check: prevent infinite loops
             if iteration_count >= MAX_TRACEBACK_ITERATIONS {
                 log::error!(
-                    "Traceback exceeded MAX_TRACEBACK_ITERATIONS ({}) - possible infinite loop!",
-                    MAX_TRACEBACK_ITERATIONS
+                    "Traceback exceeded MAX_TRACEBACK_ITERATIONS ({MAX_TRACEBACK_ITERATIONS}) - possible infinite loop!"
                 );
-                log::error!(
-                    "  curr_i={}, curr_j={}, qlen={}, tlen={}",
-                    curr_i,
-                    curr_j,
-                    qlen,
-                    tlen
-                );
+                log::error!("  curr_i={curr_i}, curr_j={curr_j}, qlen={qlen}, tlen={tlen}");
                 break;
             }
             iteration_count += 1;
@@ -497,10 +486,7 @@ impl BandedPairWiseSW {
             // Safety check: ensure we made progress
             if curr_i == prev_i && curr_j == prev_j {
                 log::warn!(
-                    "Traceback made no progress at curr_i={}, curr_j={}, tb_code={}",
-                    curr_i,
-                    curr_j,
-                    tb_code
+                    "Traceback made no progress at curr_i={curr_i}, curr_j={curr_j}, tb_code={tb_code}"
                 );
                 break; // Exit to prevent infinite loop
             }
@@ -606,12 +592,7 @@ impl BandedPairWiseSW {
             );
             log::warn!("  Query preview: {:?}", &query[..10.min(query.len())]);
             log::warn!("  Target preview: {:?}", &target[..10.min(target.len())]);
-            log::warn!(
-                "  query_start={}, query_end={}, qlen={}",
-                query_start,
-                query_end,
-                qlen
-            );
+            log::warn!("  query_start={query_start}, query_end={query_end}, qlen={qlen}");
         }
 
         let out_score = OutScore {
@@ -821,10 +802,10 @@ impl BandedPairWiseSW {
 
         // Initialize scores and tracking arrays
         let mut max_scores = vec![0i8; SIMD_WIDTH];
-        let mut max_i = vec![0i8; SIMD_WIDTH];
-        let mut max_j = vec![0i8; SIMD_WIDTH];
-        let gscores = vec![0i8; SIMD_WIDTH];
-        let max_ie = vec![0i8; SIMD_WIDTH];
+        let mut max_i = [0i8; SIMD_WIDTH];
+        let mut max_j = [0i8; SIMD_WIDTH];
+        let gscores = [0i8; SIMD_WIDTH];
+        let max_ie = [0i8; SIMD_WIDTH];
 
         // SIMD constants
         let zero_vec = unsafe { _mm_setzero_si128() };
@@ -884,9 +865,9 @@ impl BandedPairWiseSW {
 
         // Compute band boundaries for each lane
         // For each target position i, we only compute DP for j in [i-w, i+w+1] ∩ [0, qlen]
-        let mut beg = vec![0i8; SIMD_WIDTH]; // Current band start for each lane
-        let mut end = vec![0i8; SIMD_WIDTH]; // Current band end for each lane
-        let mut terminated = vec![false; SIMD_WIDTH]; // Track which lanes have terminated early
+        let mut beg = [0i8; SIMD_WIDTH]; // Current band start for each lane
+        let mut end = [0i8; SIMD_WIDTH]; // Current band end for each lane
+        let mut terminated = [false; SIMD_WIDTH]; // Track which lanes have terminated early
 
         for lane in 0..SIMD_WIDTH {
             beg[lane] = 0;
@@ -1235,10 +1216,10 @@ impl BandedPairWiseSW {
         // Note: max_i/max_j initialized to -1 to match scalar ksw_extend2 behavior
         // When no score exceeds h0, scalar returns qle=max_j+1=0, tle=max_i+1=0
         let mut max_scores = vec![0i16; SIMD_WIDTH];
-        let mut max_i = vec![-1i16; SIMD_WIDTH];
-        let mut max_j = vec![-1i16; SIMD_WIDTH];
-        let gscores = vec![0i16; SIMD_WIDTH];
-        let max_ie = vec![0i16; SIMD_WIDTH];
+        let mut max_i = [-1i16; SIMD_WIDTH];
+        let mut max_j = [-1i16; SIMD_WIDTH];
+        let gscores = [0i16; SIMD_WIDTH];
+        let max_ie = [0i16; SIMD_WIDTH];
 
         // SIMD constants (16-bit)
         let zero_vec = unsafe { _mm_setzero_si128() };
@@ -1293,10 +1274,7 @@ impl BandedPairWiseSW {
         // Main DP loop using SIMD (16-bit operations)
         unsafe {
             #[cfg(target_arch = "x86_64")]
-            log::trace!(
-                "[SIMD] Executing SSE2 intrinsics in DP loop (batch size: {})",
-                SIMD_WIDTH
-            );
+            log::trace!("[SIMD] Executing SSE2 intrinsics in DP loop (batch size: {SIMD_WIDTH})");
             #[cfg(target_arch = "aarch64")]
             log::trace!(
                 "[SIMD] Executing NEON intrinsics in DP loop (batch size: {})",
@@ -1683,7 +1661,7 @@ impl BandedPairWiseSW {
         use std::sync::atomic::{AtomicBool, Ordering};
         static LOGGED_8BIT_SIMD: AtomicBool = AtomicBool::new(false);
         if !LOGGED_8BIT_SIMD.swap(true, Ordering::Relaxed) {
-            log::info!("[SIMD] Vertical batch (8-bit): using {:?} engine", engine);
+            log::info!("[SIMD] Vertical batch (8-bit): using {engine:?} engine");
         }
 
         // Determine batch size based on SIMD engine
@@ -1934,7 +1912,7 @@ mod tests {
         let has_insertion = cigar.iter().any(|(op, _)| *op == b'I');
         if !has_insertion {
             // May also align as matches only if gap penalty is too high
-            println!("CIGAR: {:?}", cigar);
+            println!("CIGAR: {cigar:?}");
         }
     }
 
@@ -1954,7 +1932,7 @@ mod tests {
         // Check that CIGAR contains deletion operation
         let has_deletion = cigar.iter().any(|(op, _)| *op == b'D');
         if !has_deletion {
-            println!("CIGAR: {:?}", cigar);
+            println!("CIGAR: {cigar:?}");
         }
     }
 
@@ -2107,7 +2085,7 @@ mod tests {
         // CIGAR should be 100M (all matches)
         let total_match_ops: i32 = cigar
             .iter()
-            .filter(|(op, _)| *op == 'M' as u8)
+            .filter(|(op, _)| *op == b'M')
             .map(|(_, count)| count)
             .sum();
         assert_eq!(
@@ -2159,8 +2137,7 @@ mod tests {
             .sum();
         assert!(
             total_aligned >= 90,
-            "Should align at least 90 bases of the 100bp sequence. CIGAR: {:?}",
-            cigar
+            "Should align at least 90 bases of the 100bp sequence. CIGAR: {cigar:?}"
         );
 
         // NOTE: We no longer check for 'X' operations since bwa-mem2 uses M-only CIGARs
@@ -2196,11 +2173,10 @@ mod tests {
         assert!(out_score.score > 0, "Should find alignment with insertion");
 
         // CIGAR should contain 'I' for insertion
-        let has_insertion = cigar.iter().any(|(op, _)| *op == 'I' as u8);
+        let has_insertion = cigar.iter().any(|(op, _)| *op == b'I');
         assert!(
             has_insertion,
-            "CIGAR should contain I for insertion: {:?}",
-            cigar
+            "CIGAR should contain I for insertion: {cigar:?}"
         );
     }
 
@@ -2231,11 +2207,10 @@ mod tests {
         assert!(out_score.score > 0, "Should find alignment with deletion");
 
         // CIGAR should contain 'D' for deletion
-        let has_deletion = cigar.iter().any(|(op, _)| *op == 'D' as u8);
+        let has_deletion = cigar.iter().any(|(op, _)| *op == b'D');
         assert!(
             has_deletion,
-            "CIGAR should contain D for deletion: {:?}",
-            cigar
+            "CIGAR should contain D for deletion: {cigar:?}"
         );
     }
 
@@ -2272,23 +2247,17 @@ mod tests {
         );
 
         // CIGAR should contain multiple operation types
-        let has_match = cigar
-            .iter()
-            .any(|(op, _)| *op == 'M' as u8 || *op == 'X' as u8);
+        let has_match = cigar.iter().any(|(op, _)| *op == b'M' || *op == b'X');
         assert!(
             has_match,
-            "CIGAR should contain M or X for matches: {:?}",
-            cigar
+            "CIGAR should contain M or X for matches: {cigar:?}"
         );
 
         // At least one of insertion or deletion should be detected
-        let has_indel = cigar
-            .iter()
-            .any(|(op, _)| *op == 'I' as u8 || *op == 'D' as u8);
+        let has_indel = cigar.iter().any(|(op, _)| *op == b'I' || *op == b'D');
         assert!(
             has_indel,
-            "CIGAR should contain I or D for indels: {:?}",
-            cigar
+            "CIGAR should contain I or D for indels: {cigar:?}"
         );
     }
 
@@ -2337,8 +2306,7 @@ mod tests {
             .sum();
         assert!(
             total_aligned >= 40,
-            "Should align at least 40 bases despite 30% mismatch rate, found {}",
-            total_aligned
+            "Should align at least 40 bases despite 30% mismatch rate, found {total_aligned}"
         );
     }
 
@@ -2601,8 +2569,7 @@ mod tests {
             // Each result should have a non-empty CIGAR
             assert!(
                 !batch_results[i].cigar.is_empty(),
-                "CIGAR {} should not be empty",
-                i
+                "CIGAR {i} should not be empty"
             );
 
             // Verify against scalar
@@ -2611,13 +2578,11 @@ mod tests {
 
             assert_eq!(
                 batch_results[i].score.score, scalar_score.score,
-                "Score {} should match scalar",
-                i
+                "Score {i} should match scalar"
             );
             assert_eq!(
                 batch_results[i].cigar, scalar_cigar,
-                "CIGAR {} should match scalar",
-                i
+                "CIGAR {i} should match scalar"
             );
         }
 
@@ -2819,7 +2784,7 @@ mod tests {
         };
 
         let engine = detect_optimal_simd_engine();
-        println!("Detected optimal SIMD engine: {:?}", engine);
+        println!("Detected optimal SIMD engine: {engine:?}");
 
         let mat = bwa_fill_scmat(1, 4, -1);
         let bsw = BandedPairWiseSW::new(6, 1, 6, 1, 100, 5, 5, 5, mat, 1, 4);
@@ -3073,18 +3038,15 @@ mod tests {
         assert_eq!(
             cigar.len(),
             1,
-            "Perfect match should produce single CIGAR operation, got: {:?}",
-            cigar
+            "Perfect match should produce single CIGAR operation, got: {cigar:?}"
         );
         assert_eq!(
             cigar[0].0, b'M',
-            "Perfect match should be 'M' operation, got: {:?}",
-            cigar
+            "Perfect match should be 'M' operation, got: {cigar:?}"
         );
         assert_eq!(
             cigar[0].1, 12,
-            "Perfect match should be 12M, got: {:?}",
-            cigar
+            "Perfect match should be 12M, got: {cigar:?}"
         );
 
         // Validate alignment endpoints (qle/tle are end positions, may be 0-indexed or 1-indexed)
@@ -3141,7 +3103,7 @@ mod tests {
             0,
         );
 
-        println!("CIGAR for soft-clip test: {:?}", cigar);
+        println!("CIGAR for soft-clip test: {cigar:?}");
         println!(
             "Score: {}, query_end_pos: {}, target_end_pos: {}",
             result.score, result.query_end_pos, result.target_end_pos
@@ -3156,9 +3118,7 @@ mod tests {
 
         assert!(
             total_insertions < 10,
-            "Should not have excessive insertions (found {}). CIGAR: {:?}",
-            total_insertions,
-            cigar
+            "Should not have excessive insertions (found {total_insertions}). CIGAR: {cigar:?}"
         );
 
         // Check that we have a reasonable number of matches
@@ -3170,9 +3130,7 @@ mod tests {
 
         assert!(
             total_matches >= 40,
-            "Should have at least 40 matches (found {}). CIGAR: {:?}",
-            total_matches,
-            cigar
+            "Should have at least 40 matches (found {total_matches}). CIGAR: {cigar:?}"
         );
 
         // Should have soft-clipping at the end
@@ -3184,9 +3142,7 @@ mod tests {
 
         assert!(
             total_soft_clips > 90,
-            "Should have significant soft-clipping at end (found {}). CIGAR: {:?}",
-            total_soft_clips,
-            cigar
+            "Should have significant soft-clipping at end (found {total_soft_clips}). CIGAR: {cigar:?}"
         );
 
         println!("✅ Soft-clip pattern CIGAR test passed!");
@@ -3247,7 +3203,7 @@ mod tests {
             query.len(),
             target.len()
         );
-        println!("CIGAR: {:?}", cigar);
+        println!("CIGAR: {cigar:?}");
         println!(
             "Score: {}, query_end_pos: {}, target_end_pos: {}",
             result.score, result.query_end_pos, result.target_end_pos
@@ -3259,7 +3215,7 @@ mod tests {
             .map(|(op, count)| format!("{}{}", count, *op as char))
             .collect::<Vec<_>>()
             .join("");
-        println!("CIGAR string: {}", cigar_str);
+        println!("CIGAR string: {cigar_str}");
 
         // Count operations
         let total_insertions: i32 = cigar
@@ -3284,38 +3240,30 @@ mod tests {
             .sum();
 
         println!(
-            "Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
-            total_insertions, total_deletions, total_matches, total_soft_clips
+            "Insertions: {total_insertions}, Deletions: {total_deletions}, Matches: {total_matches}, Soft-clips: {total_soft_clips}"
         );
 
         // Check for pathological CIGAR (production bug)
         if total_insertions > 10 {
             panic!(
-                "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {}\nCIGAR: {}\nThis matches the production pathological pattern.",
-                total_insertions, cigar_str
+                "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {total_insertions}\nCIGAR: {cigar_str}\nThis matches the production pathological pattern."
             );
         }
 
         // Expected behavior: should align first ~49bp and soft-clip the rest
         assert!(
             total_insertions < 10,
-            "Should not have excessive insertions (found {}). CIGAR: {}",
-            total_insertions,
-            cigar_str
+            "Should not have excessive insertions (found {total_insertions}). CIGAR: {cigar_str}"
         );
 
         assert!(
             total_matches >= 40,
-            "Should have at least 40 matches (found {}). CIGAR: {}",
-            total_matches,
-            cigar_str
+            "Should have at least 40 matches (found {total_matches}). CIGAR: {cigar_str}"
         );
 
         assert!(
             total_soft_clips > 90,
-            "Should soft-clip the unmatched query end (found {}). CIGAR: {}",
-            total_soft_clips,
-            cigar_str
+            "Should soft-clip the unmatched query end (found {total_soft_clips}). CIGAR: {cigar_str}"
         );
 
         println!("✅ Production dimensions test passed! No pathological CIGAR.");
@@ -3375,7 +3323,7 @@ mod tests {
             query.len(),
             target.len()
         );
-        println!("CIGAR: {:?}", cigar);
+        println!("CIGAR: {cigar:?}");
         println!(
             "Score: {}, query_end_pos: {}, target_end_pos: {}",
             result.score, result.query_end_pos, result.target_end_pos
@@ -3386,7 +3334,7 @@ mod tests {
             .map(|(op, count)| format!("{}{}", count, *op as char))
             .collect::<Vec<_>>()
             .join("");
-        println!("CIGAR string: {}", cigar_str);
+        println!("CIGAR string: {cigar_str}");
 
         let total_insertions: i32 = cigar
             .iter()
@@ -3410,24 +3358,20 @@ mod tests {
             .sum();
 
         println!(
-            "Insertions: {}, Deletions: {}, Matches: {}, Soft-clips: {}",
-            total_insertions, total_deletions, total_matches, total_soft_clips
+            "Insertions: {total_insertions}, Deletions: {total_deletions}, Matches: {total_matches}, Soft-clips: {total_soft_clips}"
         );
 
         // Check for pathological CIGAR (production bug)
         if total_insertions > 10 {
             panic!(
-                "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {}\nCIGAR: {}\nThis matches the production pathological pattern.",
-                total_insertions, cigar_str
+                "⚠️  PRODUCTION BUG REPRODUCED! Excessive insertions: {total_insertions}\nCIGAR: {cigar_str}\nThis matches the production pathological pattern."
             );
         }
 
         // Should not have excessive insertions
         assert!(
             total_insertions < 10,
-            "Should not have excessive insertions (found {}). CIGAR: {}",
-            total_insertions,
-            cigar_str
+            "Should not have excessive insertions (found {total_insertions}). CIGAR: {cigar_str}"
         );
 
         println!("✅ Mismatched start test passed! No pathological CIGAR.");
@@ -3670,8 +3614,7 @@ mod tests {
             );
             assert_eq!(
                 *scalar, simd.score,
-                "Case {}: SIMD score should match scalar score",
-                i
+                "Case {i}: SIMD score should match scalar score"
             );
         }
     }
@@ -3737,7 +3680,7 @@ mod tests {
         // Seed was 19bp at query position 50, extending to query end (150bp)
         // Extension length = 150 - 50 - 19 = 81bp
         let extension_len = 81;
-        let mut query_ext: Vec<u8> = (0..extension_len).map(|i| (i % 4) as u8).collect();
+        let query_ext: Vec<u8> = (0..extension_len).map(|i| (i % 4) as u8).collect();
         let mut target_ext: Vec<u8> = query_ext.clone();
 
         // Add some mismatches to be realistic

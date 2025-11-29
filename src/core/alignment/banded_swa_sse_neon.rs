@@ -135,11 +135,11 @@ pub unsafe fn simd_banded_swa_batch16(
     let mut f_matrix = vec![0i8; MAX_SEQ_LEN * SIMD_WIDTH]; // F scores (insertion)
 
     // Initialize scores and tracking arrays
-    let mut max_scores = vec![0i8; SIMD_WIDTH];
-    let mut max_i = vec![0i8; SIMD_WIDTH];
-    let mut max_j = vec![0i8; SIMD_WIDTH];
-    let _gscores = vec![0i8; SIMD_WIDTH];
-    let _max_ie = vec![0i8; SIMD_WIDTH];
+    let mut max_scores = [0i8; SIMD_WIDTH];
+    let mut max_i = [0i8; SIMD_WIDTH];
+    let mut max_j = [0i8; SIMD_WIDTH];
+    let _gscores = [0i8; SIMD_WIDTH];
+    let _max_ie = [0i8; SIMD_WIDTH];
 
     // SIMD constants using SimdEngine128
     let zero_vec = Engine::setzero_epi8();
@@ -192,9 +192,9 @@ pub unsafe fn simd_banded_swa_batch16(
     // ==================================================================
 
     // Compute band boundaries for each lane
-    let mut beg = vec![0i8; SIMD_WIDTH]; // Current band start for each lane
-    let mut end = vec![0i8; SIMD_WIDTH]; // Current band end for each lane
-    let mut terminated = vec![false; SIMD_WIDTH]; // Track which lanes have terminated early via Z-drop
+    let mut beg = [0i8; SIMD_WIDTH]; // Current band start for each lane
+    let mut end = [0i8; SIMD_WIDTH]; // Current band end for each lane
+    let mut terminated = [false; SIMD_WIDTH]; // Track which lanes have terminated early via Z-drop
     let mut terminated_count = 0usize; // Running count of terminated lanes for early exit
 
     for lane in 0..SIMD_WIDTH {
@@ -400,13 +400,7 @@ pub unsafe fn simd_banded_swa_batch16(
     let percent_saved = (rows_saved as f64 / max_tlen as f64) * 100.0;
 
     log::debug!(
-        "SSE/NEON batch completion: {}/{} lanes terminated, exit_row={}/{} ({:.1}% saved), early_exit={}",
-        terminated_count,
-        batch_size,
-        final_row,
-        max_tlen,
-        percent_saved,
-        early_exit
+        "SSE/NEON batch completion: {terminated_count}/{batch_size} lanes terminated, exit_row={final_row}/{max_tlen} ({percent_saved:.1}% saved), early_exit={early_exit}"
     );
 
     // ==================================================================

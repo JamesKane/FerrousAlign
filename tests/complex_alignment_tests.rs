@@ -14,17 +14,14 @@ fn create_unique_test_dir(base_name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let thread_id = std::thread::current().id();
-    PathBuf::from(format!(
-        "target/{}_{:?}_{}",
-        base_name, thread_id, timestamp
-    ))
+    PathBuf::from(format!("target/{base_name}_{thread_id:?}_{timestamp}"))
 }
 
 // Helper to create test FASTA reference
 fn create_reference_fasta(path: &Path, name: &str, sequence: &str) -> std::io::Result<()> {
     let mut file = File::create(path)?;
-    writeln!(file, ">{}", name)?;
-    writeln!(file, "{}", sequence)?;
+    writeln!(file, ">{name}")?;
+    writeln!(file, "{sequence}")?;
     Ok(())
 }
 
@@ -32,8 +29,8 @@ fn create_reference_fasta(path: &Path, name: &str, sequence: &str) -> std::io::R
 fn create_query_fastq(path: &Path, sequences: &[(&str, &str)]) -> std::io::Result<()> {
     let mut file = File::create(path)?;
     for (name, seq) in sequences.iter() {
-        writeln!(file, "@{}", name)?;
-        writeln!(file, "{}", seq)?;
+        writeln!(file, "@{name}")?;
+        writeln!(file, "{seq}")?;
         writeln!(file, "+")?;
         writeln!(file, "{}", "#".repeat(seq.len()))?;
     }
@@ -44,7 +41,7 @@ fn create_query_fastq(path: &Path, sequences: &[(&str, &str)]) -> std::io::Resul
 fn run_alignment(ref_path: &Path, query_path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     // Build index using new CLI interface (Session 14)
     let index_output = Command::new("cargo")
-        .args(&["run", "--release", "--", "index"])
+        .args(["run", "--release", "--", "index"])
         .arg("--prefix")
         .arg(ref_path.with_extension(""))
         .arg(ref_path)
@@ -60,7 +57,7 @@ fn run_alignment(ref_path: &Path, query_path: &Path) -> Result<String, Box<dyn s
 
     // Run alignment using new CLI interface (Session 14)
     let align_output = Command::new("cargo")
-        .args(&["run", "--release", "--", "mem"])
+        .args(["run", "--release", "--", "mem"])
         .arg(ref_path.with_extension(""))
         .arg(query_path)
         .output()?;
@@ -92,7 +89,7 @@ fn test_alignment_100bp_exact_match() {
     }
 
     // Run alignment
-    let sam_output = run_alignment(&ref_path, &query_path).unwrap();
+    let sam_output = run_alignment(ref_path, query_path).unwrap();
 
     // Parse SAM output (filter out header lines)
     let sam_lines: Vec<&str> = sam_output
@@ -208,7 +205,7 @@ fn test_alignment_with_insertion() {
     }
 
     // Run alignment
-    let sam_output = run_alignment(&ref_path, &query_path).unwrap();
+    let sam_output = run_alignment(ref_path, query_path).unwrap();
 
     // Parse SAM output
     let sam_lines: Vec<&str> = sam_output
@@ -216,7 +213,7 @@ fn test_alignment_with_insertion() {
         .filter(|line| !line.starts_with('@'))
         .collect();
 
-    assert!(sam_lines.len() >= 1, "Should have at least 1 alignment");
+    assert!(!sam_lines.is_empty(), "Should have at least 1 alignment");
 
     let fields: Vec<&str> = sam_lines[0].split('\t').collect();
     let cigar = fields[5];
@@ -225,8 +222,7 @@ fn test_alignment_with_insertion() {
     // Current (FerrousAlign): 48S54M (BUG!)
     assert!(
         cigar.contains('I'),
-        "CIGAR should contain I for insertion: {} (currently produces S instead)",
-        cigar
+        "CIGAR should contain I for insertion: {cigar} (currently produces S instead)"
     );
 }
 
@@ -248,7 +244,7 @@ fn test_alignment_with_deletion() {
     }
 
     // Run alignment
-    let sam_output = run_alignment(&ref_path, &query_path).unwrap();
+    let sam_output = run_alignment(ref_path, query_path).unwrap();
 
     // Parse SAM output
     let sam_lines: Vec<&str> = sam_output
@@ -256,7 +252,7 @@ fn test_alignment_with_deletion() {
         .filter(|line| !line.starts_with('@'))
         .collect();
 
-    assert!(sam_lines.len() >= 1, "Should have at least 1 alignment");
+    assert!(!sam_lines.is_empty(), "Should have at least 1 alignment");
 
     let fields: Vec<&str> = sam_lines[0].split('\t').collect();
     let cigar = fields[5];
@@ -266,16 +262,14 @@ fn test_alignment_with_deletion() {
     // FerrousAlign: 56M4D40M (different position due to homopolymer sliding)
     assert!(
         cigar.contains('D'),
-        "CIGAR should contain D for deletion: {}",
-        cigar
+        "CIGAR should contain D for deletion: {cigar}"
     );
 
     // Verify deletion is 2-4bp (allowing for different interpretations)
     let d_count = count_cigar_operation(cigar, 'D');
     assert!(
-        d_count >= 2 && d_count <= 4,
-        "Should have 2-4bp deletion, found {}",
-        d_count
+        (2..=4).contains(&d_count),
+        "Should have 2-4bp deletion, found {d_count}"
     );
 }
 
@@ -329,7 +323,7 @@ fn test_alignment_complex_cigar() {
         .filter(|line| !line.starts_with('@'))
         .collect();
 
-    assert!(sam_lines.len() >= 1, "Should have at least 1 alignment");
+    assert!(!sam_lines.is_empty(), "Should have at least 1 alignment");
 
     let fields: Vec<&str> = sam_lines[0].split('\t').collect();
     let cigar = fields[5];
@@ -337,8 +331,7 @@ fn test_alignment_complex_cigar() {
     // CIGAR should use M-only format with D for deletion
     assert!(
         cigar.contains('M'),
-        "CIGAR should contain M for matches/mismatches: {}",
-        cigar
+        "CIGAR should contain M for matches/mismatches: {cigar}"
     );
 
     // We expect deletion to be detected (5T deleted from reference)
@@ -346,8 +339,7 @@ fn test_alignment_complex_cigar() {
     let has_deletion_or_clip = cigar.contains('D') || cigar.contains('S');
     assert!(
         has_deletion_or_clip,
-        "CIGAR should contain D or S for deletion: {}",
-        cigar
+        "CIGAR should contain D or S for deletion: {cigar}"
     );
 
     // Cleanup
@@ -398,7 +390,7 @@ fn test_alignment_low_quality() {
         .collect();
 
     assert!(
-        sam_lines.len() >= 1,
+        !sam_lines.is_empty(),
         "Should have at least 1 alignment even with 20% mismatches"
     );
 
@@ -418,8 +410,7 @@ fn test_alignment_low_quality() {
         // If mapped, CIGAR should use M-only format
         assert!(
             cigar.contains('M'),
-            "CIGAR should contain M for matches/mismatches: {}",
-            cigar
+            "CIGAR should contain M for matches/mismatches: {cigar}"
         );
 
         // Verify MD tag contains mismatches (Session 33)
@@ -435,9 +426,8 @@ fn test_alignment_low_quality() {
             .filter(|c| c.is_alphabetic() && *c != 'M' && *c != 'D' && *c != 'Z')
             .count();
         assert!(
-            mismatch_count >= 15 && mismatch_count <= 25,
-            "Should have ~20 mismatches in MD tag, found {}",
-            mismatch_count
+            (15..=25).contains(&mismatch_count),
+            "Should have ~20 mismatches in MD tag, found {mismatch_count}"
         );
     }
 
@@ -459,16 +449,14 @@ fn parse_cigar_length(cigar: &str) -> usize {
     for c in cigar.chars() {
         if c.is_numeric() {
             num.push(c);
-        } else {
-            if !num.is_empty() {
-                if let Ok(n) = num.parse::<usize>() {
-                    // M, X, I, S consume query bases
-                    if c == 'M' || c == 'X' || c == 'I' || c == 'S' {
-                        total += n;
-                    }
+        } else if !num.is_empty() {
+            if let Ok(n) = num.parse::<usize>() {
+                // M, X, I, S consume query bases
+                if c == 'M' || c == 'X' || c == 'I' || c == 'S' {
+                    total += n;
                 }
-                num.clear();
             }
+            num.clear();
         }
     }
 

@@ -67,11 +67,7 @@ pub fn find_seeds(
     let min_intv = 1u64;
 
     log::debug!(
-        "{}: Starting SMEM generation: min_seed_len={}, min_intv={}, query_len={}",
-        query_name,
-        min_seed_len,
-        min_intv,
-        query_len
+        "{query_name}: Starting SMEM generation: min_seed_len={min_seed_len}, min_intv={min_intv}, query_len={query_len}"
     );
 
     // PHASE 1 VALIDATION: Log SMEM generation parameters
@@ -115,11 +111,7 @@ pub fn find_seeds(
 
     // PHASE 1 VALIDATION: Log initial SMEMs
     let pass1_count = all_smems.len();
-    log::debug!(
-        "SMEM_VALIDATION {}: Pass 1 (initial) generated {} SMEMs",
-        query_name,
-        pass1_count
-    );
+    log::debug!("SMEM_VALIDATION {query_name}: Pass 1 (initial) generated {pass1_count} SMEMs");
     if log::log_enabled!(log::Level::Debug) {
         for (idx, smem) in all_smems.iter().enumerate().take(10) {
             log::debug!(
@@ -234,10 +226,7 @@ pub fn find_seeds(
             }
         }
     } else {
-        log::debug!(
-            "SMEM_VALIDATION {}: Pass 2 (re-seeding) added 0 new SMEMs",
-            query_name
-        );
+        log::debug!("SMEM_VALIDATION {query_name}: Pass 2 (re-seeding) added 0 new SMEMs");
     }
 
     // 3rd round seeding: Additional seeding pass with forward-only strategy
@@ -310,16 +299,10 @@ pub fn find_seeds(
                 }
             }
         } else {
-            log::debug!(
-                "SMEM_VALIDATION {}: Pass 3 (forward-only) added 0 new SMEMs",
-                query_name
-            );
+            log::debug!("SMEM_VALIDATION {query_name}: Pass 3 (forward-only) added 0 new SMEMs");
         }
     } else {
-        log::debug!(
-            "SMEM_VALIDATION {}: Pass 3 (forward-only) skipped (max_mem_intv=0)",
-            query_name
-        );
+        log::debug!("SMEM_VALIDATION {query_name}: Pass 3 (forward-only) skipped (max_mem_intv=0)");
     }
 
     // Filter SMEMs
@@ -522,9 +505,7 @@ pub fn find_seeds(
             // Hard limit on seeds per read to prevent memory explosion
             if seeds.len() >= SEEDS_PER_READ {
                 log::debug!(
-                    "{}: Hit SEEDS_PER_READ limit ({}), truncating",
-                    query_name,
-                    SEEDS_PER_READ
+                    "{query_name}: Hit SEEDS_PER_READ limit ({SEEDS_PER_READ}), truncating"
                 );
                 break;
             }
@@ -552,11 +533,7 @@ pub fn find_seeds(
         for &(idx, count, skipped) in seeds_per_smem_count.iter().take(10) {
             if count > 0 || skipped > 0 {
                 log::debug!(
-                    "SEED_CONVERSION {}:   SMEM[{}] → {} seeds ({} skipped at boundary)",
-                    query_name,
-                    idx,
-                    count,
-                    skipped
+                    "SEED_CONVERSION {query_name}:   SMEM[{idx}] → {count} seeds ({skipped} skipped at boundary)"
                 );
             }
         }
@@ -571,10 +548,7 @@ pub fn find_seeds(
 
     if max_smem_count > query_len {
         log::debug!(
-            "{}: SMEM buffer grew beyond initial capacity! max_smem_count={} > query_len={}",
-            query_name,
-            max_smem_count,
-            query_len
+            "{query_name}: SMEM buffer grew beyond initial capacity! max_smem_count={max_smem_count} > query_len={query_len}"
         );
     }
 
@@ -687,7 +661,7 @@ pub fn align_read_deferred(
     let (seeds, encoded_query, encoded_query_rc) = find_seeds(bwa_idx, query_name, query_seq, opt);
 
     if seeds.is_empty() {
-        log::debug!("{}: No seeds found, returning unmapped", query_name);
+        log::debug!("{query_name}: No seeds found, returning unmapped");
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -695,10 +669,7 @@ pub fn align_read_deferred(
     let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, query_seq.len(), query_name);
 
     if chains.is_empty() {
-        log::debug!(
-            "{}: No chains after filtering, returning unmapped",
-            query_name
-        );
+        log::debug!("{query_name}: No chains after filtering, returning unmapped");
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -728,21 +699,14 @@ pub fn align_read_deferred(
     );
 
     if extension_result.regions.is_empty() {
-        log::debug!(
-            "{}: No regions after extension, returning unmapped",
-            query_name
-        );
+        log::debug!("{query_name}: No regions after extension, returning unmapped");
         return vec![create_unmapped_alignment(query_name)];
     }
 
     // Log region scores before filtering
     if log::log_enabled!(log::Level::Debug) {
         let scores: Vec<i32> = extension_result.regions.iter().map(|r| r.score).collect();
-        log::debug!(
-            "{}: DEFERRED_CIGAR: region scores before filter: {:?}",
-            query_name,
-            scores
-        );
+        log::debug!("{query_name}: DEFERRED_CIGAR: region scores before filter: {scores:?}");
     }
 
     // Phase 4: Region filtering using scores
@@ -774,7 +738,7 @@ pub fn align_read_deferred(
     );
 
     if filtered_regions.is_empty() {
-        log::debug!("{}: All regions filtered, returning unmapped", query_name);
+        log::debug!("{query_name}: All regions filtered, returning unmapped");
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -826,8 +790,8 @@ pub fn align_read_deferred(
             qual: String::new(),
             tags: vec![
                 ("AS".to_string(), format!("i:{}", region.score)),
-                ("NM".to_string(), format!("i:{}", nm)),
-                ("MD".to_string(), format!("Z:{}", md_tag)),
+                ("NM".to_string(), format!("i:{nm}")),
+                ("MD".to_string(), format!("Z:{md_tag}")),
             ],
             query_start: region.qb,
             query_end: region.qe,
@@ -838,10 +802,7 @@ pub fn align_read_deferred(
     }
 
     if alignments.is_empty() {
-        log::debug!(
-            "{}: No valid alignments after CIGAR generation, returning unmapped",
-            query_name
-        );
+        log::debug!("{query_name}: No valid alignments after CIGAR generation, returning unmapped");
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -849,10 +810,7 @@ pub fn align_read_deferred(
     super::finalization::remove_redundant_alignments(&mut alignments, opt);
 
     if alignments.is_empty() {
-        log::debug!(
-            "{}: No alignments after redundancy removal, returning unmapped",
-            query_name
-        );
+        log::debug!("{query_name}: No alignments after redundancy removal, returning unmapped");
         return vec![create_unmapped_alignment(query_name)];
     }
 
@@ -1120,7 +1078,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_align_read_basic - could not load index");
@@ -1183,7 +1141,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_deferred_cigar_pipeline - could not load index");

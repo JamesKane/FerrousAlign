@@ -72,7 +72,7 @@ fn main() {
             log::info!("Index prefix: {}", idx_prefix.display());
 
             if let Err(e) = bwa_index::bwa_index(&fasta, &idx_prefix) {
-                log::error!("Index building failed: {}", e);
+                log::error!("Index building failed: {e}");
                 std::process::exit(1);
             }
 
@@ -80,7 +80,7 @@ fn main() {
         }
 
         Commands::Mem { options } => {
-            init_logging(options.verbosity as u8);
+            init_logging(options.verbosity);
 
             log::info!("Aligning reads to index: {}", options.index.display());
 

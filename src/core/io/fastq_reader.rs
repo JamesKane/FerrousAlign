@@ -24,6 +24,12 @@ pub struct ReadBatch {
     pub quals: Vec<String>, // Store as String for compatibility with existing code
 }
 
+impl Default for ReadBatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadBatch {
     /// Create an empty batch
     pub fn new() -> Self {
@@ -172,7 +178,7 @@ impl FastqReader {
                         .push(String::from_utf8_lossy(record.qual()).into_owned());
                 }
                 Some(Err(e)) => {
-                    return Err(io::Error::new(io::ErrorKind::Other, e));
+                    return Err(io::Error::other(e));
                 }
                 None => {
                     // EOF

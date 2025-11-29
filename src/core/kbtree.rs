@@ -136,7 +136,7 @@ where
         // Approximate: max_n = (size - off_key - ptr) / (entry + ptr)
         let usable = size.saturating_sub(off_key + ptr_size);
         let max_n = usable / (entry_size + ptr_size);
-        let t = ((max_n + 1) / 2).max(MIN_T);
+        let t = max_n.div_ceil(2).max(MIN_T);
         let n = 2 * t - 1;
 
         // Calculate pointer offset (after keys array, aligned)

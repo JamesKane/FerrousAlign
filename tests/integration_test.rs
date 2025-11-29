@@ -7,7 +7,7 @@ use std::process::Command;
 
 // Helper function to create a temporary directory for test files
 fn setup_test_dir(test_name: &str) -> io::Result<PathBuf> {
-    let temp_dir = PathBuf::from(format!("target/test_integration_{}", test_name));
+    let temp_dir = PathBuf::from(format!("target/test_integration_{test_name}"));
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir)?;
     }
@@ -66,8 +66,7 @@ AGCTAGCTAGCTAGCT
         .output()?;
     assert!(
         index_output.status.success(),
-        "Index command failed with: {:?}",
-        index_output
+        "Index command failed with: {index_output:?}"
     );
 
     // Verify index files are created
@@ -95,7 +94,7 @@ AGCTAGCTAGCTAGCTAGCTAGCT
         .output()?;
 
     // 5. Verify the output
-    assert!(output.status.success(), "Command failed with: {:?}", output);
+    assert!(output.status.success(), "Command failed with: {output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -153,17 +152,15 @@ AGCTAGCTAGCTAGCTAGCTAGCT
     // Position should be reasonable (1-16 for 16bp reference)
     let pos: i32 = fields[3].parse().expect("Position should be numeric");
     assert!(
-        pos >= 1 && pos <= 16,
-        "Position should be between 1-16, got {}",
-        pos
+        (1..=16).contains(&pos),
+        "Position should be between 1-16, got {pos}"
     );
 
     // CIGAR should use M-only format
     let cigar = fields[5];
     assert!(
         cigar.contains('M'),
-        "CIGAR should contain M operator: {}",
-        cigar
+        "CIGAR should contain M operator: {cigar}"
     );
 
     // Check stderr - allow informational messages from CLI

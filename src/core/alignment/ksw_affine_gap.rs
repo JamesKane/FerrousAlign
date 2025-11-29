@@ -166,7 +166,7 @@ pub unsafe fn ksw_qinit(size: i32, qlen: i32, query: &[u8], m: i32, mat: &[i8]) 
 pub unsafe fn ksw_qalloc(qlen: i32, m: i32, size: i32) -> *mut Kswq {
     let size = if size > 1 { 2 } else { 1 };
     let p = if size == 1 { 16 } else { 8 }; // # values per __m128i: 16 for u8, 8 for i16
-    let slen = (qlen as usize + p - 1) / p; // segmented length
+    let slen = (qlen as usize).div_ceil(p); // segmented length
 
     // Calculate total memory needed and layout
     // Kswq struct + alignment padding + slen * (m + 4) * 16 bytes for SIMD vectors
@@ -218,7 +218,7 @@ pub fn ksw_qfree(q_ptr: *mut Kswq) {
     let m = (q.h0 as usize - q.qp as usize) / q.slen as usize / 16; // Reconstruct m from pointer arithmetic
 
     let p = if size == 1 { 16 } else { 8 };
-    let slen = (qlen as usize + p - 1) / p;
+    let slen = (qlen as usize).div_ceil(p);
 
     let total_simd_bytes = (slen * (m + 4)) * 16; // Use the reconstructed m
     let kswq_layout = Layout::new::<Kswq>();
@@ -421,9 +421,7 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
         }
 
         // Swap H0 and H1 pointers for the next iteration (current H1 becomes next H0)
-        let temp_h0 = q.h0;
-        q.h0 = q.h1;
-        q.h1 = temp_h0;
+        std::mem::swap(&mut q.h0, &mut q.h1);
     }
 
     // Finalize result
@@ -668,9 +666,7 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
         }
 
         // Swap H0 and H1 pointers for the next iteration (current H1 becomes next H0)
-        let temp_h0 = q.h0;
-        q.h0 = q.h1;
-        q.h1 = temp_h0;
+        std::mem::swap(&mut q.h0, &mut q.h1);
     }
 
     // Finalize result
@@ -1099,7 +1095,7 @@ pub fn ksw_extend2(
             if t < 0 {
                 t = 0;
             }
-            f = f - e_ins;
+            f -= e_ins;
             if f < t {
                 f = t;
             }
@@ -1141,10 +1137,8 @@ pub fn ksw_extend2(
                 if max - m_row - (diff_i - diff_j) * e_del > zdrop {
                     break;
                 }
-            } else {
-                if max - m_row - (diff_j - diff_i) * e_ins > zdrop {
-                    break;
-                }
+            } else if max - m_row - (diff_j - diff_i) * e_ins > zdrop {
+                break;
             }
         }
 

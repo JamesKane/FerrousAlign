@@ -118,14 +118,14 @@ pub fn process_paired_end(
     let mut reader1 = match crate::io::fastq_reader::FastqReader::new(read1_file) {
         Ok(r) => r,
         Err(e) => {
-            log::error!("Error opening read1 file {}: {}", read1_file, e);
+            log::error!("Error opening read1 file {read1_file}: {e}");
             return;
         }
     };
     let mut reader2 = match crate::io::fastq_reader::FastqReader::new(read2_file) {
         Ok(r) => r,
         Err(e) => {
-            log::error!("Error opening read2 file {}: {}", read2_file, e);
+            log::error!("Error opening read2 file {read2_file}: {e}");
             return;
         }
     };
@@ -134,14 +134,14 @@ pub fn process_paired_end(
     let first_batch1 = match reader1.read_batch(BOOTSTRAP_BATCH_SIZE) {
         Ok(b) => b,
         Err(e) => {
-            log::error!("Error reading first batch from read1: {}", e);
+            log::error!("Error reading first batch from read1: {e}");
             return;
         }
     };
     let first_batch2 = match reader2.read_batch(BOOTSTRAP_BATCH_SIZE) {
         Ok(b) => b,
         Err(e) => {
-            log::error!("Error reading first batch from read2: {}", e);
+            log::error!("Error reading first batch from read2: {e}");
             return;
         }
     };
@@ -157,10 +157,7 @@ pub fn process_paired_end(
     total_reads += first_batch_size * 2;
     total_bases += first_batch_bp;
 
-    log::debug!(
-        "[Main] Batch 0: Received {} pairs from channel",
-        first_batch_size
-    );
+    log::debug!("[Main] Batch 0: Received {first_batch_size} pairs from channel");
     log::info!(
         "read_chunk: {}, work_chunk_size: {}, nseq: {}",
         BOOTSTRAP_BATCH_SIZE,
@@ -179,7 +176,7 @@ pub fn process_paired_end(
     let opt_clone = Arc::clone(&opt);
     let batch_start_id = pairs_processed; // Capture for closure
 
-    let compute_backend = compute_ctx.backend.clone();
+    let compute_backend = compute_ctx.backend;
 
     let mut first_batch_alignments: Vec<(Vec<Alignment>, Vec<Alignment>)> = (0..num_pairs)
         .into_par_iter()
@@ -195,8 +192,8 @@ pub fn process_paired_end(
                 &first_batch1.seqs[i],
                 &first_batch1.quals[i],
                 &opt_clone,
-                compute_backend.clone(),
-                (pair_id << 1) | 0,
+                compute_backend,
+                pair_id << 1,
                 true, // skip secondary marking - done after pairing
             );
             let a2 = align_read_deferred(
@@ -206,7 +203,7 @@ pub fn process_paired_end(
                 &first_batch2.seqs[i],
                 &first_batch2.quals[i],
                 &opt_clone,
-                compute_backend.clone(),
+                compute_backend,
                 (pair_id << 1) | 1,
                 true, // skip secondary marking - done after pairing
             );
@@ -276,13 +273,13 @@ pub fn process_paired_end(
         &mut first_batch_alignments,
         &first_batch_seqs1,
         &first_batch_seqs2,
-        &pac,
+        pac,
         &current_stats,
         &bwa_idx,
         opt.max_matesw as usize,
         simd_engine,
     );
-    log::info!("First batch: {} pairs rescued", rescued_first);
+    log::info!("First batch: {rescued_first} pairs rescued");
 
     // Prepare sequences for output (need owned versions)
     let first_batch_seqs1_owned: Vec<_> = first_batch1
@@ -313,7 +310,7 @@ pub fn process_paired_end(
         l_pac,
     )
     .unwrap_or_else(|e| {
-        log::error!("Error writing first batch: {}", e);
+        log::error!("Error writing first batch: {e}");
         0
     });
     // Log per-batch timing (matches BWA-MEM2 format)
@@ -341,21 +338,21 @@ pub fn process_paired_end(
         let batch1 = match reader1.read_batch(opt.batch_size) {
             Ok(b) => b,
             Err(e) => {
-                log::error!("Error reading batch {} from read1: {}", batch_num, e);
+                log::error!("Error reading batch {batch_num} from read1: {e}");
                 break;
             }
         };
         let batch2 = match reader2.read_batch(opt.batch_size) {
             Ok(b) => b,
             Err(e) => {
-                log::error!("Error reading batch {} from read2: {}", batch_num, e);
+                log::error!("Error reading batch {batch_num} from read2: {e}");
                 break;
             }
         };
 
         // Check for EOF
         if batch1.names.is_empty() {
-            log::debug!("[Main] EOF reached after {} batches", batch_num);
+            log::debug!("[Main] EOF reached after {batch_num} batches");
             break;
         }
 
@@ -368,10 +365,7 @@ pub fn process_paired_end(
         total_bases += batch_bp;
 
         log::debug!(
-            "[Main] Batch {}: Received {} pairs from channel (cumulative: {} reads)",
-            batch_num,
-            batch_size,
-            total_reads
+            "[Main] Batch {batch_num}: Received {batch_size} pairs from channel (cumulative: {total_reads} reads)"
         );
         log::info!(
             "read_chunk: {}, work_chunk_size: {}, nseq: {}",
@@ -407,8 +401,8 @@ pub fn process_paired_end(
                     &batch1.seqs[i],
                     &batch1.quals[i],
                     &opt_clone,
-                    compute_backend.clone(),
-                    (pair_id << 1) | 0,
+                    compute_backend,
+                    pair_id << 1,
                     true, // skip secondary marking - done after pairing
                 );
                 let a2 = align_read_deferred(
@@ -418,7 +412,7 @@ pub fn process_paired_end(
                     &batch2.seqs[i],
                     &batch2.quals[i],
                     &opt_clone,
-                    compute_backend.clone(),
+                    compute_backend,
                     (pair_id << 1) | 1,
                     true, // skip secondary marking - done after pairing
                 );
@@ -459,7 +453,7 @@ pub fn process_paired_end(
             &mut batch_alignments,
             &batch_seqs1,
             &batch_seqs2,
-            &pac,
+            pac,
             &current_stats,
             &bwa_idx,
             opt.max_matesw as usize,
@@ -499,7 +493,7 @@ pub fn process_paired_end(
             l_pac,
         )
         .unwrap_or_else(|e| {
-            log::error!("Error writing batch: {}", e);
+            log::error!("Error writing batch: {e}");
             0
         });
         let output_cpu = cputime() - output_start_cpu;
@@ -533,10 +527,7 @@ pub fn process_paired_end(
         // Log progress every 10 batches
         if batch_num % 10 == 0 {
             log::info!(
-                "Processed {} batches, {} records written, {} rescued",
-                batch_num,
-                total_records,
-                total_rescued
+                "Processed {batch_num} batches, {total_records} records written, {total_rescued} rescued"
             );
         }
 
@@ -636,13 +627,7 @@ fn mate_rescue_batch(
 
                 for j in 0..num_anchors {
                     let jobs = prepare_compact_jobs_for_anchor(
-                        bwa_idx,
-                        pac,
-                        stats,
-                        &alns1[j],
-                        mate_len,
-                        alns2,
-                        i,
+                        bwa_idx, pac, stats, &alns1[j], mate_len, alns2, i,
                         false, // rescuing read2
                     );
                     pair_jobs.extend(jobs);
@@ -656,13 +641,7 @@ fn mate_rescue_batch(
 
                 for j in 0..num_anchors {
                     let jobs = prepare_compact_jobs_for_anchor(
-                        bwa_idx,
-                        pac,
-                        stats,
-                        &alns2[j],
-                        mate_len,
-                        alns1,
-                        i,
+                        bwa_idx, pac, stats, &alns2[j], mate_len, alns1, i,
                         true, // rescuing read1
                     );
                     pair_jobs.extend(jobs);
@@ -719,29 +698,23 @@ fn mate_rescue_batch(
     // Parallel fold: each thread builds its own HashMap
     let merged_results: ResultMap = results
         .par_iter()
-        .fold(
-            || ResultMap::new(),
-            |mut acc, result| {
-                let job = &all_jobs[result.job_index];
+        .fold(ResultMap::new, |mut acc, result| {
+            let job = &all_jobs[result.job_index];
 
-                // Convert SW result to Alignment (expensive - CIGAR, MD, NM)
-                if let Some(alignment) = compact_result_to_alignment(job, &result.aln, &ctx) {
-                    let key = (job.pair_index as usize, job.rescuing_read1);
-                    acc.entry(key).or_default().push(alignment);
-                }
-                acc
-            },
-        )
-        .reduce(
-            || ResultMap::new(),
-            |mut a, b| {
-                // Merge maps: combine vectors for same keys
-                for (key, mut alignments) in b {
-                    a.entry(key).or_default().append(&mut alignments);
-                }
-                a
-            },
-        );
+            // Convert SW result to Alignment (expensive - CIGAR, MD, NM)
+            if let Some(alignment) = compact_result_to_alignment(job, &result.aln, &ctx) {
+                let key = (job.pair_index as usize, job.rescuing_read1);
+                acc.entry(key).or_default().push(alignment);
+            }
+            acc
+        })
+        .reduce(ResultMap::new, |mut a, b| {
+            // Merge maps: combine vectors for same keys
+            for (key, mut alignments) in b {
+                a.entry(key).or_default().append(&mut alignments);
+            }
+            a
+        });
 
     // Apply merged results to batch_pairs
     let mut pairs_rescued = vec![false; batch_pairs.len()];
@@ -786,10 +759,7 @@ fn filter_alignments_by_threshold(
     alignments.retain(|a| a.score >= threshold);
 
     if alignments.is_empty() {
-        log::debug!(
-            "{}: All alignments filtered by score threshold, creating unmapped",
-            name
-        );
+        log::debug!("{name}: All alignments filtered by score threshold, creating unmapped");
         alignments.push(create_unmapped_paired(name, seq, is_first_in_pair));
     }
 }
@@ -816,17 +786,14 @@ fn select_best_pair(
     let pair_result = mem_pair(stats, alignments1, alignments2, 2, pair_id, l_pac);
 
     if let Some((idx1, idx2, _pair_score, _sub_score)) = pair_result {
-        log::trace!("mem_pair selected best_idx1={}, best_idx2={}", idx1, idx2);
+        log::trace!("mem_pair selected best_idx1={idx1}, best_idx2={idx2}");
         (idx1, idx2, true)
     } else {
         // Fallback: even if mem_pair didn't find a valid pair, check if the top hits
         // from both reads constitute a proper pair based on same reference and insert size
         // (Matches bwa-mem2 logic in bwamem_pair.cpp lines 536-540)
         let is_proper = check_proper_pair_fallback(&alignments1[0], &alignments2[0], stats, l_pac);
-        log::trace!(
-            "No valid pair from mem_pair, fallback proper_pair={}",
-            is_proper
-        );
+        log::trace!("No valid pair from mem_pair, fallback proper_pair={is_proper}");
         (0, 0, is_proper)
     }
 }
@@ -893,7 +860,7 @@ fn check_proper_pair_fallback(
         return false;
     }
 
-    let dist = dist as i64;
+    let dist = dist;
 
     // Check if within bounds
     dist >= stats[orientation].low as i64 && dist <= stats[orientation].high as i64
@@ -1110,7 +1077,7 @@ fn output_batch_paired(
 
     // SEQUENTIAL WRITES: Just write pre-formatted strings (fast)
     for record in formatted_records {
-        writeln!(writer, "{}", record)?;
+        writeln!(writer, "{record}")?;
     }
 
     // Flush after each batch for incremental output

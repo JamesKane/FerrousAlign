@@ -18,7 +18,7 @@ fn generate_sequence_with_mutations(seq: &[u8], mutation_rate: f64, seed: u64) -
             rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
             let rand_val = (rng % 1000) as f64 / 1000.0;
             if rand_val < mutation_rate {
-                ((base + 1 + ((rng / 1000) % 3) as u8) % 4)
+                (base + 1 + ((rng / 1000) % 3) as u8) % 4
             } else {
                 base
             }
@@ -72,8 +72,8 @@ fn bench_simd_engine_comparison(c: &mut Criterion) {
     // Generate diverse set of alignments
     let alignments: Vec<(Vec<u8>, Vec<u8>)> = (0..num_alignments)
         .map(|i| {
-            let query = generate_random_sequence(seq_len, 42 + i as u64);
-            let target = generate_sequence_with_mutations(&query, 0.05, 123 + i as u64);
+            let query = generate_random_sequence(seq_len, 42 + i);
+            let target = generate_sequence_with_mutations(&query, 0.05, 123 + i);
             (query, target)
         })
         .collect();
@@ -101,7 +101,7 @@ fn bench_simd_engine_comparison(c: &mut Criterion) {
             for chunk_start in (0..num_alignments).step_by(16) {
                 let batch: Vec<_> = (0..16.min(num_alignments - chunk_start))
                     .map(|i| {
-                        let idx = chunk_start + i as u64;
+                        let idx = chunk_start + i;
                         let (query, target) = &alignments[idx as usize];
                         (
                             query.len() as i32,
@@ -148,8 +148,8 @@ fn bench_sequence_lengths(c: &mut Criterion) {
 
         let alignments: Vec<(Vec<u8>, Vec<u8>)> = (0..num_alignments)
             .map(|i| {
-                let query = generate_random_sequence(*seq_len, 42 + i as u64);
-                let target = generate_sequence_with_mutations(&query, 0.05, 123 + i as u64);
+                let query = generate_random_sequence(*seq_len, 42 + i);
+                let target = generate_sequence_with_mutations(&query, 0.05, 123 + i);
                 (query, target)
             })
             .collect();
@@ -180,7 +180,7 @@ fn bench_sequence_lengths(c: &mut Criterion) {
                     for chunk_start in (0..num_alignments).step_by(16) {
                         let batch: Vec<_> = (0..16.min(num_alignments - chunk_start))
                             .map(|i| {
-                                let idx = chunk_start + i as u64;
+                                let idx = chunk_start + i;
                                 let (query, target) = &alignments[idx as usize];
                                 (
                                     query.len() as i32,
@@ -230,9 +230,8 @@ fn bench_alignment_complexity(c: &mut Criterion) {
     for mutation_rate in [0.0, 0.05, 0.10, 0.20].iter() {
         let alignments: Vec<(Vec<u8>, Vec<u8>)> = (0..num_alignments)
             .map(|i| {
-                let query = generate_random_sequence(seq_len, 42 + i as u64);
-                let target =
-                    generate_sequence_with_mutations(&query, *mutation_rate, 123 + i as u64);
+                let query = generate_random_sequence(seq_len, 42 + i);
+                let target = generate_sequence_with_mutations(&query, *mutation_rate, 123 + i);
                 (query, target)
             })
             .collect();
@@ -269,7 +268,7 @@ fn bench_alignment_complexity(c: &mut Criterion) {
                     for chunk_start in (0..num_alignments).step_by(16) {
                         let batch: Vec<_> = (0..16.min(num_alignments - chunk_start))
                             .map(|i| {
-                                let idx = chunk_start + i as u64;
+                                let idx = chunk_start + i;
                                 let (query, target) = &alignments[idx as usize];
                                 (
                                     query.len() as i32,

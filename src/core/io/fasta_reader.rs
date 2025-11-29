@@ -97,7 +97,7 @@ impl FastaReader {
     pub fn read_record(&mut self) -> io::Result<Option<fasta::Record>> {
         match self.records.next() {
             Some(Ok(record)) => Ok(Some(record)),
-            Some(Err(e)) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Some(Err(e)) => Err(io::Error::other(e)),
             None => Ok(None),
         }
     }

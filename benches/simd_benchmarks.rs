@@ -20,7 +20,7 @@ fn generate_sequence_with_mutations(seq: &[u8], mutation_rate: f64, seed: u64) -
             let rand_val = (rng % 1000) as f64 / 1000.0;
             if rand_val < mutation_rate {
                 // Mutate to a different base
-                ((base + 1 + ((rng / 1000) % 3) as u8) % 4)
+                (base + 1 + ((rng / 1000) % 3) as u8) % 4
             } else {
                 base
             }

@@ -215,13 +215,11 @@ pub fn compute_nm_from_md(md_tag: &str, cigar: &[(u8, i32)]) -> i32 {
             in_deletion = true;
         } else if ch.is_ascii_digit() {
             in_deletion = false;
-        } else if ch.is_ascii_alphabetic() {
-            if !in_deletion {
-                // This is a mismatch (not a deleted base)
-                nm += 1;
-            }
-            // Deleted bases are counted from CIGAR, not here
+        } else if ch.is_ascii_alphabetic() && !in_deletion {
+            // This is a mismatch (not a deleted base)
+            nm += 1;
         }
+        // Deleted bases are counted from CIGAR, not here
     }
 
     // Count insertions and deletions from CIGAR
@@ -248,7 +246,7 @@ fn push_number(md: &mut String, n: u32) {
         md.push((b'0' + (n % 10) as u8) as char);
     } else {
         use std::fmt::Write;
-        write!(md, "{}", n).unwrap();
+        write!(md, "{n}").unwrap();
     }
 }
 

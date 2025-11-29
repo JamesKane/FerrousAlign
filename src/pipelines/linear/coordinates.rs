@@ -97,15 +97,7 @@ pub fn fm_to_chromosome_coords(bwa_idx: &BwaIndex, rb: u64, re: u64) -> Chromoso
         let chr_pos = (pos_f - offset).max(0) as u64;
 
         log::debug!(
-            "COORD_CONVERT: rb={} re={} l_pac={} is_rev={} depos_input={} pos_f={} rid={} chr_pos={}",
-            rb,
-            re,
-            l_pac,
-            is_rev,
-            depos_input,
-            pos_f,
-            rid,
-            chr_pos
+            "COORD_CONVERT: rb={rb} re={re} l_pac={l_pac} is_rev={is_rev} depos_input={depos_input} pos_f={pos_f} rid={rid} chr_pos={chr_pos}"
         );
 
         ChromosomeCoordinates {
@@ -115,13 +107,7 @@ pub fn fm_to_chromosome_coords(bwa_idx: &BwaIndex, rb: u64, re: u64) -> Chromoso
             is_rev: depos_is_rev,
         }
     } else {
-        log::debug!(
-            "COORD_CONVERT: rb={} re={} l_pac={} -> unmapped (rid={})",
-            rb,
-            re,
-            l_pac,
-            rid
-        );
+        log::debug!("COORD_CONVERT: rb={rb} re={re} l_pac={l_pac} -> unmapped (rid={rid})");
         ChromosomeCoordinates::default()
     }
 }

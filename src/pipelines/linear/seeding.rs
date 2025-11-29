@@ -108,10 +108,7 @@ pub fn generate_smems_for_strand<'a>(
             if a >= 4 {
                 if x == 0 && !is_reverse_complement && log::log_enabled!(log::Level::Debug) {
                     log::debug!(
-                        "{}: x={}, forward extension stopped at j={} due to N base",
-                        query_name,
-                        x,
-                        j
+                        "{query_name}: x={x}, forward extension stopped at j={j} due to N base"
                     );
                 }
                 next_x = j;
@@ -136,11 +133,9 @@ pub fn generate_smems_for_strand<'a>(
 
             // Debug logging (only for first few positions on forward strand)
             if x < 3 && !is_reverse_complement && new_smem.interval_size != smem.interval_size {
-                let s_from_lk = if smem.bwt_interval_end > smem.bwt_interval_start {
-                    smem.bwt_interval_end - smem.bwt_interval_start
-                } else {
-                    0
-                };
+                let s_from_lk = smem
+                    .bwt_interval_end
+                    .saturating_sub(smem.bwt_interval_start);
                 log::debug!(
                     "{}: x={}, j={}, pushing smem to prev_array_buf: s={}, l-k={}, match={}",
                     query_name,
@@ -220,11 +215,7 @@ pub fn generate_smems_for_strand<'a>(
             let a = encoded_query[j];
             if a >= 4 {
                 if !is_reverse_complement {
-                    log::debug!(
-                        "{}: [RUST Phase 2] Hit 'N' base at j={}, stopping",
-                        query_name,
-                        j
-                    );
+                    log::debug!("{query_name}: [RUST Phase 2] Hit 'N' base at j={j}, stopping");
                 }
                 break;
             }
@@ -234,13 +225,7 @@ pub fn generate_smems_for_strand<'a>(
             let num_prev = prev_array_buf.len();
 
             if !is_reverse_complement {
-                log::debug!(
-                    "{}: [RUST Phase 2] j={}, base={}, num_prev={}",
-                    query_name,
-                    j,
-                    a,
-                    num_prev
-                );
+                log::debug!("{query_name}: [RUST Phase 2] j={j}, base={a}, num_prev={num_prev}");
             }
 
             // First loop: process elements until we find one to output or keep
@@ -413,9 +398,7 @@ pub fn generate_smems_for_strand<'a>(
             if prev_array_buf.is_empty() {
                 if !is_reverse_complement {
                     log::debug!(
-                        "{}: [RUST Phase 2] prev_array_buf empty, breaking at j={}",
-                        query_name,
-                        j
+                        "{query_name}: [RUST Phase 2] prev_array_buf empty, breaking at j={j}"
                     );
                 }
                 break;
@@ -455,9 +438,7 @@ pub fn generate_smems_for_strand<'a>(
             }
         } else if !is_reverse_complement {
             log::debug!(
-                "{}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={}",
-                query_name,
-                x
+                "{query_name}: [RUST Phase 2] No remaining SMEMs at end of backward search for x={x}"
             );
         }
 
@@ -770,15 +751,9 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
         // Safety check: prevent infinite loops
         if count >= MAX_ITERATIONS {
             log::error!(
-                "get_sa_entry exceeded MAX_ITERATIONS ({}) - possible infinite loop!",
-                MAX_ITERATIONS
+                "get_sa_entry exceeded MAX_ITERATIONS ({MAX_ITERATIONS}) - possible infinite loop!"
             );
-            log::error!(
-                "  original_pos={}, current_pos={}, count={}",
-                original_pos,
-                pos,
-                count
-            );
+            log::error!("  original_pos={original_pos}, current_pos={pos}, count={count}");
             log::error!(
                 "  sa_intv={}, seq_len={}",
                 bwa_idx.bwt.sa_sample_interval,
@@ -818,11 +793,7 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
     let sentinel_pos = bwa_idx.bns.packed_sequence_length << 1;
     let adjusted_sa_val = if sa_val >= sentinel_pos {
         // SA points to or past sentinel - wrap to beginning (position 0)
-        log::debug!(
-            "SA value {} is at/past sentinel {} - wrapping to 0",
-            sa_val,
-            sentinel_pos
-        );
+        log::debug!("SA value {sa_val} is at/past sentinel {sentinel_pos} - wrapping to 0");
         0
     } else {
         sa_val
@@ -944,7 +915,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_backward_ext - could not load index");
@@ -971,7 +942,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_backward_ext_multiple_bases - could not load index");
@@ -1017,7 +988,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_backward_ext_chain - could not load index");
@@ -1033,7 +1004,7 @@ mod tests {
         };
 
         // Build a seed by extending with ACGT
-        let bases = vec![0u8, 1, 2, 3]; // ACGT
+        let bases = [0u8, 1, 2, 3]; // ACGT
         let mut prev_s = smem.interval_size;
 
         for (i, &base) in bases.iter().enumerate() {
@@ -1068,7 +1039,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_backward_ext_zero_range - could not load index");
@@ -1127,7 +1098,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_get_sa_entry_basic - could not load index");
@@ -1157,7 +1128,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_get_sa_entry_sampled_position - could not load index");
@@ -1185,7 +1156,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_get_sa_entry_multiple_positions - could not load index");
@@ -1206,8 +1177,7 @@ mod tests {
             // All SA entries should be valid (within sequence length)
             assert!(
                 sa_entry < bwa_idx.bwt.seq_len,
-                "SA entry for pos {} should be within sequence length",
-                pos
+                "SA entry for pos {pos} should be within sequence length"
             );
         }
     }
@@ -1222,7 +1192,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_get_sa_entry_consistency - could not load index");
@@ -1251,7 +1221,7 @@ mod tests {
             return;
         }
 
-        let bwa_idx = match BwaIndex::bwa_idx_load(&prefix) {
+        let bwa_idx = match BwaIndex::bwa_idx_load(prefix) {
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("Skipping test_get_bwt_basic - could not load index");

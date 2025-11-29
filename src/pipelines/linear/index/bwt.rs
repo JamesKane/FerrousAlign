@@ -106,7 +106,7 @@ impl Bwt {
 
     pub fn bwt_cal_sa(&mut self, sa_intv: i32, sa_temp: &[i32]) {
         self.sa_sample_interval = sa_intv;
-        self.sa_sample_count = (self.seq_len + sa_intv as u64 - 1) / sa_intv as u64;
+        self.sa_sample_count = self.seq_len.div_ceil(sa_intv as u64);
 
         self.sa_high_bytes.reserve(self.sa_sample_count as usize);
         self.sa_low_words.reserve(self.sa_sample_count as usize);
@@ -149,7 +149,7 @@ impl Bwt {
 
         let mut checkpoint_index = 0; // Track which checkpoint we're in
 
-        for (_byte_idx, &byte) in self.bwt_data.iter().enumerate() {
+        for &byte in self.bwt_data.iter() {
             for bit_offset in (0..8).step_by(2) {
                 // Iterate through 2-bit bases in the byte
                 if current_pos >= self.seq_len {

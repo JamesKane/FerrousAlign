@@ -128,11 +128,11 @@ pub unsafe fn simd_banded_swa_batch32(
     let mut f_matrix = vec![0i8; MAX_SEQ_LEN * SIMD_WIDTH]; // F scores (insertion)
 
     // Initialize scores and tracking arrays
-    let mut max_scores = vec![0i8; SIMD_WIDTH];
-    let mut max_i = vec![0i8; SIMD_WIDTH];
-    let mut max_j = vec![0i8; SIMD_WIDTH];
-    let _gscores = vec![0i8; SIMD_WIDTH];
-    let _max_ie = vec![0i8; SIMD_WIDTH];
+    let mut max_scores = [0i8; SIMD_WIDTH];
+    let mut max_i = [0i8; SIMD_WIDTH];
+    let mut max_j = [0i8; SIMD_WIDTH];
+    let _gscores = [0i8; SIMD_WIDTH];
+    let _max_ie = [0i8; SIMD_WIDTH];
 
     // SIMD constants using SimdEngine256
     let zero_vec = <Engine as crate::compute::simd_abstraction::SimdEngine>::setzero_epi8();
@@ -205,9 +205,9 @@ pub unsafe fn simd_banded_swa_batch32(
     // ==================================================================
 
     // Compute band boundaries for each lane
-    let mut beg = vec![0i8; SIMD_WIDTH]; // Current band start for each lane
-    let mut end = vec![0i8; SIMD_WIDTH]; // Current band end for each lane
-    let mut terminated = vec![false; SIMD_WIDTH]; // Track which lanes have terminated early via Z-drop
+    let mut beg = [0i8; SIMD_WIDTH]; // Current band start for each lane
+    let mut end = [0i8; SIMD_WIDTH]; // Current band end for each lane
+    let mut terminated = [false; SIMD_WIDTH]; // Track which lanes have terminated early via Z-drop
     let mut terminated_count = 0usize; // Running count of terminated lanes for early exit
 
     for lane in 0..SIMD_WIDTH {
@@ -543,13 +543,7 @@ pub unsafe fn simd_banded_swa_batch32(
     let percent_saved = (rows_saved as f64 / max_tlen as f64) * 100.0;
 
     log::debug!(
-        "AVX2 batch completion: {}/{} lanes terminated, exit_row={}/{} ({:.1}% saved), early_exit={}",
-        terminated_count,
-        batch_size,
-        final_row,
-        max_tlen,
-        percent_saved,
-        early_exit
+        "AVX2 batch completion: {terminated_count}/{batch_size} lanes terminated, exit_row={final_row}/{max_tlen} ({percent_saved:.1}% saved), early_exit={early_exit}"
     );
 
     // ==================================================================
@@ -700,8 +694,8 @@ pub unsafe fn simd_banded_swa_batch16_int16(
         let mut max_scores = vec![0i16; SIMD_WIDTH];
         let mut max_i = vec![-1i16; SIMD_WIDTH];
         let mut max_j = vec![-1i16; SIMD_WIDTH];
-        let gscores = vec![0i16; SIMD_WIDTH];
-        let max_ie = vec![0i16; SIMD_WIDTH];
+        let gscores = [0i16; SIMD_WIDTH];
+        let max_ie = [0i16; SIMD_WIDTH];
 
         // SIMD constants (16-bit) - using SimdEngine256 abstraction
         let zero_vec = Engine::setzero_epi16();
@@ -931,10 +925,12 @@ pub unsafe fn simd_banded_swa_batch16_int16(
 
                 // Check Z-drop condition for each lane (O(16) not O(16 × band))
                 for lane in 0..SIMD_WIDTH {
-                    if !terminated[lane] && i > 0 && i < tlen[lane] as usize {
-                        if max_score_vals[lane] - row_max_vals[lane] > zdrop as i16 {
-                            terminated[lane] = true;
-                        }
+                    if !terminated[lane]
+                        && i > 0
+                        && i < tlen[lane] as usize
+                        && max_score_vals[lane] - row_max_vals[lane] > zdrop as i16
+                    {
+                        terminated[lane] = true;
                     }
                 }
             }

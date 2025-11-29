@@ -80,6 +80,12 @@ pub struct BntSeq {
 
 use crate::io::fasta_reader::FastaReader;
 
+impl Default for BntSeq {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BntSeq {
     pub fn new() -> Self {
         BntSeq {

@@ -494,8 +494,8 @@ pub fn mem_matesw(
             qual: String::new(),
             tags: vec![
                 ("AS".to_string(), format!("i:{}", aln.score)),
-                ("NM".to_string(), format!("i:{}", nm)),
-                ("MD".to_string(), format!("Z:{}", md_tag)),
+                ("NM".to_string(), format!("i:{nm}")),
+                ("MD".to_string(), format!("Z:{md_tag}")),
             ],
             query_start,
             query_end,
@@ -1030,12 +1030,12 @@ pub fn result_to_alignment(
         qual: String::new(),
         tags: vec![
             ("AS".to_string(), format!("i:{}", aln.score)),
-            ("NM".to_string(), format!("i:{}", nm)),
-            ("MD".to_string(), format!("Z:{}", md_tag)),
+            ("NM".to_string(), format!("i:{nm}")),
+            ("MD".to_string(), format!("Z:{md_tag}")),
         ],
         query_start,
         query_end,
-        seed_coverage: (ref_aligned_len.min(query_aligned) >> 1) as i32,
+        seed_coverage: (ref_aligned_len.min(query_aligned) >> 1),
         hash: 0,
         frac_rep: 0.0,
     })
@@ -1132,16 +1132,13 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
     // Early exit if all orientations already have pairs
     if skip.iter().all(|&x| x) {
         if is_debug_read {
-            log::debug!(
-                "MATE_RESCUE_PREP {}: EARLY EXIT - all orientations have pairs",
-                mate_name
-            );
+            log::debug!("MATE_RESCUE_PREP {mate_name}: EARLY EXIT - all orientations have pairs");
         }
         return jobs;
     }
 
     if is_debug_read {
-        log::debug!("MATE_RESCUE_PREP {}: skip array = {:?}", mate_name, skip);
+        log::debug!("MATE_RESCUE_PREP {mate_name}: skip array = {skip:?}");
     }
 
     // Try each non-skipped orientation
@@ -1211,7 +1208,7 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
 
         if rb >= re {
             if is_debug_read {
-                log::debug!("MATE_RESCUE_PREP {}: SKIP r={} - rb >= re", mate_name, r);
+                log::debug!("MATE_RESCUE_PREP {mate_name}: SKIP r={r} - rb >= re");
             }
             continue;
         }
@@ -1248,7 +1245,7 @@ pub fn prepare_mate_rescue_jobs_for_anchor(
         }
 
         if is_debug_read {
-            log::debug!("MATE_RESCUE_PREP {}: CREATING JOB r={}", mate_name, r);
+            log::debug!("MATE_RESCUE_PREP {mate_name}: CREATING JOB r={r}");
         }
 
         jobs.push(MateRescueJob {
@@ -1511,7 +1508,7 @@ pub fn execute_compact_batch(
 
     // Process in chunks matching SIMD batch size
     // Use Rayon to parallelize across chunks
-    let num_chunks = (jobs.len() + simd_batch_size - 1) / simd_batch_size;
+    let num_chunks = jobs.len().div_ceil(simd_batch_size);
 
     (0..num_chunks)
         .into_par_iter()
@@ -1734,12 +1731,12 @@ pub fn compact_result_to_alignment(
         qual: String::new(),
         tags: vec![
             ("AS".to_string(), format!("i:{}", aln.score)),
-            ("NM".to_string(), format!("i:{}", nm)),
-            ("MD".to_string(), format!("Z:{}", md_tag)),
+            ("NM".to_string(), format!("i:{nm}")),
+            ("MD".to_string(), format!("Z:{md_tag}")),
         ],
         query_start,
         query_end,
-        seed_coverage: (ref_aligned_len.min(query_aligned) >> 1) as i32,
+        seed_coverage: (ref_aligned_len.min(query_aligned) >> 1),
         hash: 0,
         frac_rep: 0.0,
     })
@@ -1758,7 +1755,7 @@ mod tests {
     #[test]
     fn test_cigar_ref_length_calculation() {
         // Simple match
-        let cigar = vec![(b'M', 100)];
+        let cigar = [(b'M', 100)];
         let ref_len: i32 = cigar
             .iter()
             .filter_map(|&(op, len)| {
@@ -1772,7 +1769,7 @@ mod tests {
         assert_eq!(ref_len, 100);
 
         // Match with soft clips (S doesn't consume reference)
-        let cigar = vec![(b'S', 10), (b'M', 80), (b'S', 10)];
+        let cigar = [(b'S', 10), (b'M', 80), (b'S', 10)];
         let ref_len: i32 = cigar
             .iter()
             .filter_map(|&(op, len)| {
@@ -1786,7 +1783,7 @@ mod tests {
         assert_eq!(ref_len, 80);
 
         // Match with deletion (D consumes reference)
-        let cigar = vec![(b'M', 50), (b'D', 5), (b'M', 45)];
+        let cigar = [(b'M', 50), (b'D', 5), (b'M', 45)];
         let ref_len: i32 = cigar
             .iter()
             .filter_map(|&(op, len)| {
@@ -1800,7 +1797,7 @@ mod tests {
         assert_eq!(ref_len, 100); // 50 + 5 + 45
 
         // Match with insertion (I doesn't consume reference)
-        let cigar = vec![(b'M', 50), (b'I', 5), (b'M', 50)];
+        let cigar = [(b'M', 50), (b'I', 5), (b'M', 50)];
         let ref_len: i32 = cigar
             .iter()
             .filter_map(|&(op, len)| {
@@ -1814,7 +1811,7 @@ mod tests {
         assert_eq!(ref_len, 100); // 50 + 50, I doesn't count
 
         // Complex CIGAR with all operations
-        let cigar = vec![
+        let cigar = [
             (b'S', 10),
             (b'M', 30),
             (b'I', 2),

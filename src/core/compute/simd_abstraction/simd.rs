@@ -121,8 +121,8 @@ mod tests {
         let engine = detect_optimal_simd_engine();
         let description = simd_engine_description(engine);
 
-        println!("Detected SIMD engine: {:?}", engine);
-        println!("Description: {}", description);
+        println!("Detected SIMD engine: {engine:?}");
+        println!("Description: {description}");
 
         // Verify that we got a valid engine type
         #[cfg(target_arch = "x86_64")]

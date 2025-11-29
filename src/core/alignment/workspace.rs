@@ -27,7 +27,7 @@
 //! additional performance improvement on top of Priority 1 (workspace allocation).
 
 use crate::pipelines::linear::seeding::SMEM;
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
@@ -94,10 +94,8 @@ impl<T> Drop for AlignedVec<T> {
     fn drop(&mut self) {
         if self.capacity > 0 {
             unsafe {
-                let layout = Layout::from_size_align_unchecked(
-                    self.capacity * std::mem::size_of::<T>(),
-                    64,
-                );
+                let layout =
+                    Layout::from_size_align_unchecked(self.capacity * std::mem::size_of::<T>(), 64);
                 dealloc(self.ptr.as_ptr() as *mut u8, layout);
             }
         }
@@ -249,24 +247,42 @@ impl AlignmentWorkspace {
 
             // KSW kernel buffers for SSE/NEON (8-bit, 16 lanes) - ~33KB total
             // 64-byte aligned for aligned SIMD stores
-            ksw_h0_buf_sse_neon: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON),
-            ksw_h1_buf_sse_neon: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON),
-            ksw_f_buf_sse_neon: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON),
-            ksw_row_max_buf_sse_neon: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON),
+            ksw_h0_buf_sse_neon: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON,
+            ),
+            ksw_h1_buf_sse_neon: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON,
+            ),
+            ksw_f_buf_sse_neon: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON,
+            ),
+            ksw_row_max_buf_sse_neon: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_SSE_NEON,
+            ),
 
             // KSW kernel buffers for AVX2 (8-bit, 32 lanes) - ~66KB total
             // 64-byte aligned for aligned SIMD stores (_mm256_store_si256)
             ksw_h0_buf_avx2: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2),
             ksw_h1_buf_avx2: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2),
             ksw_f_buf_avx2: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2),
-            ksw_row_max_buf_avx2: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2),
+            ksw_row_max_buf_avx2: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX2,
+            ),
 
             // KSW kernel buffers for AVX-512 (8-bit, 64 lanes) - ~132KB total
             // 64-byte aligned for aligned SIMD stores (_mm512_store_si512)
-            ksw_h0_buf_avx512: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512),
-            ksw_h1_buf_avx512: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512),
-            ksw_f_buf_avx512: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512),
-            ksw_row_max_buf_avx512: AlignedVec::with_capacity((KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512),
+            ksw_h0_buf_avx512: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512,
+            ),
+            ksw_h1_buf_avx512: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512,
+            ),
+            ksw_f_buf_avx512: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512,
+            ),
+            ksw_row_max_buf_avx512: AlignedVec::with_capacity(
+                (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512,
+            ),
         }
     }
 

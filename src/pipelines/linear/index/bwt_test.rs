@@ -164,15 +164,12 @@ mod tests {
         let mut bwt = Bwt::new();
         bwt.seq_len = 100;
         let sa_intv = 10;
-        let sa_temp: Vec<i32> = (0..100).map(|x| x as i32).collect(); // Dummy SA
+        let sa_temp: Vec<i32> = (0..100).collect(); // Dummy SA
 
         bwt.bwt_cal_sa(sa_intv, &sa_temp);
 
         assert_eq!(bwt.sa_sample_interval, sa_intv);
-        assert_eq!(
-            bwt.sa_sample_count,
-            (bwt.seq_len + sa_intv as u64 - 1) / sa_intv as u64
-        );
+        assert_eq!(bwt.sa_sample_count, bwt.seq_len.div_ceil(sa_intv as u64));
         assert_eq!(bwt.sa_high_bytes.len(), bwt.sa_sample_count as usize);
         assert_eq!(bwt.sa_low_words.len(), bwt.sa_sample_count as usize);
 
@@ -254,7 +251,7 @@ mod tests {
         // Verify l2 counts
         let mut l2_counts = [0u64; 4];
         for &base in &bwt_output {
-            if base >= 0 && base < 4 {
+            if (0..4).contains(&base) {
                 l2_counts[base as usize] += 1;
             }
         }
@@ -331,8 +328,7 @@ mod tests {
         for &val in &sa_i32 {
             assert!(
                 seen.insert(val),
-                "SA should have no duplicates, found duplicate: {}",
-                val
+                "SA should have no duplicates, found duplicate: {val}"
             );
         }
     }
@@ -345,7 +341,7 @@ mod tests {
         let sa_intv = 8;
 
         // Create a valid SA (permutation of 0..100)
-        let mut sa_temp: Vec<i32> = (0..100).collect();
+        let sa_temp: Vec<i32> = (0..100).collect();
         // Shuffle to make it more realistic (in real SA, positions are reordered)
         // For testing, just use sequential - real SA construction handles correctness
 
@@ -482,14 +478,13 @@ mod tests {
             let bit_set = (cp_occ[0].bwt_encoding_bits[base] >> bit_pos) & 1;
             assert_eq!(
                 bit_set, 0,
-                "Sentinel position should not set bit for base {} in cp_occ bitmask",
-                base
+                "Sentinel position should not set bit for base {base} in cp_occ bitmask"
             );
         }
 
         // But other positions should have bits set
         // Position 0 has T(3), so one_hot_bwt_str[3] should have bit 63 set
-        let bit_pos_0 = 63 - 0;
+        let bit_pos_0 = 63;
         let t_bit = (cp_occ[0].bwt_encoding_bits[3] >> bit_pos_0) & 1;
         assert_eq!(
             t_bit, 1,

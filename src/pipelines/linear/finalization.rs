@@ -66,7 +66,7 @@ impl Alignment {
                     } else {
                         op as char
                     };
-                    format!("{}{}", len, op_char)
+                    format!("{len}{op_char}")
                 })
                 .collect()
         }
@@ -155,13 +155,7 @@ impl Alignment {
             let start = leading_clip.min(seq_len);
             let end = seq_len.saturating_sub(trailing_clip);
             log::debug!(
-                "Clip trim: is_supp={}, leading={}, trailing={}, seq_len={}, start={}, end={}",
-                is_supplementary,
-                leading_clip,
-                trailing_clip,
-                seq_len,
-                start,
-                end
+                "Clip trim: is_supp={is_supplementary}, leading={leading_clip}, trailing={trailing_clip}, seq_len={seq_len}, start={start}, end={end}"
             );
             if start < end {
                 output_seq = output_seq[start..end].to_string();
@@ -267,7 +261,7 @@ impl Alignment {
 
         // Estimate mismatches from score difference
         let query_len = self.query_length();
-        let perfect_score = query_len * 1; // Match score = 1
+        let perfect_score = query_len; // Match score = 1
         let score_diff = (perfect_score - self.score).max(0); // Clamp to non-negative
         let estimated_mismatches = (score_diff / 5).max(0); // Match(1) + Mismatch(4) = 5 penalty
 
@@ -715,10 +709,8 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                     let max_ref_len = (p_ref_end - p_ref_start).max(q_ref_end - q_ref_start);
                     let ref_distance = if p_ref_start > q_ref_end {
                         p_ref_start - q_ref_end
-                    } else if q_ref_start > p_ref_end {
-                        q_ref_start - p_ref_end
                     } else {
-                        0 // Overlapping
+                        q_ref_start.saturating_sub(p_ref_end)
                     };
                     let regions_close = ref_distance <= max_ref_len;
 
@@ -731,7 +723,7 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
                     // For a read of length L, if one alignment covers [a, b) on forward,
                     // and another covers [c, d) on reverse, they're the same if:
                     // [c, d) = [L - b, L - a) (approximately)
-                    let query_len = (p_qe.max(q_qe)).max(148) as i32; // Estimate query length
+                    let query_len = (p_qe.max(q_qe)).max(148); // Estimate query length
 
                     // Transform reverse strand coordinates to forward
                     let (p_fwd_start, p_fwd_end) = if p_is_reverse {
@@ -910,11 +902,7 @@ fn find_primary_alignments(
                 // Mark as secondary
                 alignments[i].flag |= sam_flags::SECONDARY;
                 is_secondary = true;
-                log::debug!(
-                    "  -> Marked alignment[{}] as SECONDARY (overlaps with [{}])",
-                    i,
-                    j
-                );
+                log::debug!("  -> Marked alignment[{i}] as SECONDARY (overlaps with [{j}])");
                 break;
             }
         }
@@ -1133,13 +1121,7 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
 
     if e_min <= b_max {
         log::debug!(
-            "alignments_overlap: NO OVERLAP - a1[{},{}), a2[{},{}), b_max={}, e_min={}",
-            a1_qb,
-            a1_qe,
-            a2_qb,
-            a2_qe,
-            b_max,
-            e_min
+            "alignments_overlap: NO OVERLAP - a1[{a1_qb},{a1_qe}), a2[{a2_qb},{a2_qe}), b_max={b_max}, e_min={e_min}"
         );
         return false; // No overlap
     }
@@ -1150,15 +1132,7 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
     let result = overlap >= threshold;
 
     log::debug!(
-        "alignments_overlap: a1[{},{}), a2[{},{}), overlap={}, min_len={}, threshold={}, result={}",
-        a1_qb,
-        a1_qe,
-        a2_qb,
-        a2_qe,
-        overlap,
-        min_len,
-        threshold,
-        result
+        "alignments_overlap: a1[{a1_qb},{a1_qe}), a2[{a2_qb},{a2_qe}), overlap={overlap}, min_len={min_len}, threshold={threshold}, result={result}"
     );
 
     result
@@ -1283,10 +1257,7 @@ pub fn generate_xa_tags(
     // Group alignments by query name
     let mut by_read: HashMap<String, Vec<&Alignment>> = HashMap::new();
     for aln in alignments {
-        by_read
-            .entry(aln.query_name.clone())
-            .or_insert_with(Vec::new)
-            .push(aln);
+        by_read.entry(aln.query_name.clone()).or_default().push(aln);
     }
 
     // For each read, generate XA tag from secondary alignments
@@ -1370,7 +1341,7 @@ pub fn generate_sa_tags(alignments: &[Alignment]) -> std::collections::HashMap<S
     for aln in alignments {
         alignments_by_read
             .entry(aln.query_name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(aln);
     }
 
@@ -1576,7 +1547,7 @@ mod tests {
             query_start,
             query_end,
             seed_coverage: score,
-            hash: (pos * 1000 + score as u64) as u64, // Unique hash
+            hash: (pos * 1000 + score as u64), // Unique hash
             frac_rep: 0.0,
         }
     }

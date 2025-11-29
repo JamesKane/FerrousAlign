@@ -31,7 +31,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     let compute_backend = detect_optimal_backend();
     let compute_ctx = ComputeContext::with_backend(compute_backend);
     let backend_desc = backend_description(compute_backend);
-    log::info!("Using compute backend: {}", backend_desc);
+    log::info!("Using compute backend: {backend_desc}");
 
     // Extract common options
     let verbosity = opts.verbosity;
@@ -57,25 +57,25 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
 
     // Parse gap penalties
     let (o_del, o_ins) =
-        MemOpt::parse_gap_penalties(&opts.gap_open).map_err(|e| anyhow::anyhow!("{}", e))?;
+        MemOpt::parse_gap_penalties(&opts.gap_open).map_err(|e| anyhow::anyhow!("{e}"))?;
     opt.o_del = o_del;
     opt.o_ins = o_ins;
 
     let (e_del, e_ins) =
-        MemOpt::parse_gap_penalties(&opts.gap_extend).map_err(|e| anyhow::anyhow!("{}", e))?;
+        MemOpt::parse_gap_penalties(&opts.gap_extend).map_err(|e| anyhow::anyhow!("{e}"))?;
     opt.e_del = e_del;
     opt.e_ins = e_ins;
 
     // Parse clipping penalties
-    let (pen_clip5, pen_clip3) = MemOpt::parse_clip_penalties(&opts.clipping_penalty)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (pen_clip5, pen_clip3) =
+        MemOpt::parse_clip_penalties(&opts.clipping_penalty).map_err(|e| anyhow::anyhow!("{e}"))?;
     opt.pen_clip5 = pen_clip5;
     opt.pen_clip3 = pen_clip3;
 
     // Output options
     opt.t = opts.min_score;
     let (max_xa_hits, max_xa_hits_alt) = super::mem_opt::parse_xa_hits(&opts.max_xa_hits) // Corrected path
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     opt.max_xa_hits = max_xa_hits;
     opt.max_xa_hits_alt = max_xa_hits_alt;
 
@@ -90,11 +90,11 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // Configure rayon thread pool
     // Match C++ bwa-mem2 validation: n_threads = n_threads > 1 ? n_threads : 1
     // Default to number of CPU cores if not specified
-    let mut num_threads = opts.threads.unwrap_or_else(|| num_cpus::get());
+    let mut num_threads = opts.threads.unwrap_or_else(num_cpus::get);
 
     // Sanity checks (matching C++ fastmap.cpp:674 and :810)
     if num_threads < 1 {
-        log::warn!("Invalid thread count {}, using 1 thread", num_threads);
+        log::warn!("Invalid thread count {num_threads}, using 1 thread");
         num_threads = 1;
     }
 
@@ -102,10 +102,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     let max_threads = num_cpus::get() * 2;
     if num_threads > max_threads {
         log::warn!(
-            "Thread count {} exceeds recommended maximum {}, capping at {}",
-            num_threads,
-            max_threads,
-            max_threads
+            "Thread count {num_threads} exceeds recommended maximum {max_threads}, capping at {max_threads}"
         );
         num_threads = max_threads;
     }
@@ -117,32 +114,19 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
         .build_global()
     {
         Ok(_) => {
-            log::debug!(
-                "Successfully built global Rayon thread pool with {} threads",
-                num_threads
-            );
+            log::debug!("Successfully built global Rayon thread pool with {num_threads} threads");
         }
         Err(e) => {
-            log::warn!(
-                "Failed to configure thread pool: {} (may already be initialized)",
-                e
-            );
+            log::warn!("Failed to configure thread pool: {e} (may already be initialized)");
         }
     }
 
     // Verify actual thread pool size
     let actual_threads = rayon::current_num_threads();
     if actual_threads != num_threads {
-        log::warn!(
-            "Rayon thread pool has {} threads but requested {}",
-            actual_threads,
-            num_threads
-        );
+        log::warn!("Rayon thread pool has {actual_threads} threads but requested {num_threads}");
     } else {
-        log::debug!(
-            "Rayon thread pool verified: {} threads active",
-            actual_threads
-        );
+        log::debug!("Rayon thread pool verified: {actual_threads} threads active");
     }
 
     // Output formatting options (Phase 6)
@@ -152,14 +136,14 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // Parse custom header lines if provided
     if let Some(ref header_str) = opts.header {
         opt.header_lines =
-            MemOpt::parse_header_input(header_str).map_err(|e| anyhow::anyhow!("{}", e))?;
+            MemOpt::parse_header_input(header_str).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     // Phase 7: Advanced options
     // Parse insert size override if provided
     if let Some(ref insert_str) = opts.insert_size {
         opt.insert_size_override =
-            Some(MemOpt::parse_insert_size(insert_str).map_err(|e| anyhow::anyhow!("{}", e))?);
+            Some(MemOpt::parse_insert_size(insert_str).map_err(|e| anyhow::anyhow!("{e}"))?);
     }
 
     // Set verbosity level
@@ -173,7 +157,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
 
     // Load the BWA index
     let bwa_idx = BwaIndex::bwa_idx_load(&opts.index)
-        .map_err(|e| anyhow::anyhow!("Error loading BWA index: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Error loading BWA index: {e}"))?;
 
     // Determine base output writer (synchronous) for headers
     let mut base_writer: Box<dyn Write + Send> = match opts.output {
@@ -185,7 +169,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
 
     // Write SAM header
     writeln!(base_writer, "@HD\tVN:1.0\tSO:unsorted")
-        .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Error writing SAM header: {e}"))?;
 
     // Write @SQ lines for reference sequences
     for ann in &bwa_idx.bns.annotations {
@@ -194,7 +178,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
             "@SQ\tSN:{}\tLN:{}",
             ann.name, ann.sequence_length
         )
-        .map_err(|e| anyhow::anyhow!("Error writing SAM header: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Error writing SAM header: {e}"))?;
     }
 
     // Write @PG (program) line
@@ -212,7 +196,7 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
         PKG_VERSION,
         std::env::args().collect::<Vec<_>>().join(" ")
     )
-    .map_err(|e| anyhow::anyhow!("Error writing @PG header: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("Error writing @PG header: {e}"))?;
 
     // Write read group header if provided (-R option)
     if let Some(ref rg_line) = opt.read_group {
@@ -220,17 +204,17 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
         let formatted_rg = if rg_line.starts_with("@RG") {
             rg_line.clone()
         } else {
-            format!("@RG\t{}", rg_line)
+            format!("@RG\t{rg_line}")
         };
 
-        writeln!(base_writer, "{}", formatted_rg)
-            .map_err(|e| anyhow::anyhow!("Error writing read group header: {}", e))?;
+        writeln!(base_writer, "{formatted_rg}")
+            .map_err(|e| anyhow::anyhow!("Error writing read group header: {e}"))?;
     }
 
     // Write custom header lines if provided (-H option)
     for header_line in &opt.header_lines {
-        writeln!(base_writer, "{}", header_line)
-            .map_err(|e| anyhow::anyhow!("Error writing custom header: {}", e))?;
+        writeln!(base_writer, "{header_line}")
+            .map_err(|e| anyhow::anyhow!("Error writing custom header: {e}"))?;
     }
 
     // Switch to asynchronous writer for records to overlap I/O with computation

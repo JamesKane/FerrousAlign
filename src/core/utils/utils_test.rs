@@ -122,8 +122,7 @@ mod tests {
         // Should have significant bit differences (typically > 20 for a good hash)
         assert!(
             diff > 15,
-            "Poor avalanche: only {} bits differ between hash_64(0) and hash_64(1)",
-            diff
+            "Poor avalanche: only {diff} bits differ between hash_64(0) and hash_64(1)"
         );
     }
 

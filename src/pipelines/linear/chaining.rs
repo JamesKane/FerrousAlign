@@ -187,10 +187,7 @@ pub fn chain_seeds_with_l_pac(
                 if test_and_merge(chain, seed_idx, seed, opt, l_pac) {
                     merged = true;
                     log::trace!(
-                        "  Seed {} merged into chain {} (pos={})",
-                        seed_idx,
-                        chain_idx,
-                        chain_pos
+                        "  Seed {seed_idx} merged into chain {chain_idx} (pos={chain_pos})"
                     );
                 }
             }
@@ -235,12 +232,7 @@ pub fn chain_seeds_with_l_pac(
             // KBTree handles duplicates internally (unlike BTreeMap)
             tree.insert(seed_rpos, new_chain_idx);
 
-            log::trace!(
-                "  Seed {} created new chain {} (pos={})",
-                seed_idx,
-                new_chain_idx,
-                seed_rpos
-            );
+            log::trace!("  Seed {seed_idx} created new chain {new_chain_idx} (pos={seed_rpos})");
         }
     }
 
@@ -408,9 +400,7 @@ pub fn filter_chains(
                         break;
                     } else {
                         log::debug!(
-                            "      Chain {} is shadowed by kept chain {} but NOT dropped by drop_ratio.",
-                            i,
-                            kept_idx
+                            "      Chain {i} is shadowed by kept chain {kept_idx} but NOT dropped by drop_ratio."
                         );
                     }
                     break;
@@ -423,11 +413,7 @@ pub fn filter_chains(
                     );
                 }
             } else {
-                log::debug!(
-                    "    No query overlap for Chain {} vs Kept Chain {}",
-                    i,
-                    kept_idx
-                );
+                log::debug!("    No query overlap for Chain {i} vs Kept Chain {kept_idx}");
             }
         }
 
@@ -544,8 +530,8 @@ pub fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i
 /// Matches C++ bwamem.cpp:66 cal_max_gap()
 #[inline]
 pub fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
-    let l_del = ((qlen * opt.a as i32 - opt.o_del as i32) as f64 / opt.e_del as f64 + 1.0) as i32;
-    let l_ins = ((qlen * opt.a as i32 - opt.o_ins as i32) as f64 / opt.e_ins as f64 + 1.0) as i32;
+    let l_del = ((qlen * opt.a - opt.o_del) as f64 / opt.e_del as f64 + 1.0) as i32;
+    let l_ins = ((qlen * opt.a - opt.o_ins) as f64 / opt.e_ins as f64 + 1.0) as i32;
 
     let l = if l_del > l_ins { l_del } else { l_ins };
     let l = if l > 1 { l } else { 1 };

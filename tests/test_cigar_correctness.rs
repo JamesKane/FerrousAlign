@@ -32,14 +32,12 @@ fn test_cigar_length_matches_query() {
         if should_match {
             assert_eq!(
                 cigar_len, query_len,
-                "CIGAR length {} should match query length {} for {:?}",
-                cigar_len, query_len, cigar
+                "CIGAR length {cigar_len} should match query length {query_len} for {cigar:?}"
             );
         } else {
             assert_ne!(
                 cigar_len, query_len,
-                "CIGAR length {} should NOT match query length {} for {:?}",
-                cigar_len, query_len, cigar
+                "CIGAR length {cigar_len} should NOT match query length {query_len} for {cigar:?}"
             );
         }
     }
@@ -112,8 +110,7 @@ fn test_seed_length_calculation() {
 
         assert_eq!(
             len, expected_len,
-            "Seed length from [{}, {}) should be {} (exclusive end)",
-            start, end, expected_len
+            "Seed length from [{start}, {end}) should be {expected_len} (exclusive end)"
         );
     }
 }
