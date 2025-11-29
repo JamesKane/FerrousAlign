@@ -71,11 +71,6 @@ impl KBNodeHeader {
     fn inc_n(&mut self) {
         self.flags_and_n += 2; // Add 2 because n is stored in bits 1-31
     }
-
-    #[inline(always)]
-    fn dec_n(&mut self) {
-        self.flags_and_n -= 2;
-    }
 }
 
 /// High-performance B-tree optimized for interval queries.
@@ -448,20 +443,20 @@ where
         self.n_keys += 1;
 
         unsafe {
-            let root_header_ptr = unsafe { self.header(self.root) };
-            let root_header = unsafe { &mut *root_header_ptr };
+            let root_header_ptr = self.header(self.root);
+            let root_header = &mut *root_header_ptr;
             if root_header.n() == self.n {
                 // Root is full, create new root
-                let new_root = unsafe { self.alloc_node(true) };
-                let children = unsafe { self.children(new_root) };
+                let new_root = self.alloc_node(true);
+                let children = self.children(new_root);
                 *children = self.root;
 
-                unsafe { self.split_child(new_root, 0, self.root) };
+                self.split_child(new_root, 0, self.root);
                 self.root = new_root;
 
-                unsafe { self.insert_nonfull(new_root, key, value) };
+                self.insert_nonfull(new_root, key, value);
             } else {
-                unsafe { self.insert_nonfull(self.root, key, value) };
+                self.insert_nonfull(self.root, key, value);
             }
         }
     }
@@ -476,9 +471,7 @@ where
             return;
         }
 
-        unsafe {
-            unsafe { self.traverse_node(self.root, &mut f) };
-        }
+        unsafe { self.traverse_node(self.root, &mut f) };
     }
 
     /// Traverse a node and its children in-order

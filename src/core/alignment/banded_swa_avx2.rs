@@ -634,7 +634,7 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     }
 
     // Clamp to MAX_SEQ_LEN
-    max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
+    max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);  // TODO: Orphaned code?  Not read after assignment
     max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
     // ==================================================================
