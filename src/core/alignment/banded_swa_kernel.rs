@@ -133,7 +133,6 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     // DP buffers
     let mut h_matrix = vec![0i8; qmax * lanes];
     let mut e_matrix = vec![0i8; qmax * lanes];
-    let mut f_matrix = vec![0i8; qmax * lanes];
     
     // Initialize first row
     let h0_vec = E::loadu_epi8(params.h0.as_ptr());
@@ -145,9 +144,10 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
 
     let mut h_prev = h1_vec;
     for j in 2..qmax {
-        h_prev = E::subs_epi8(h_prev, e_ins_vec);
-        h_prev = E::max_epi8(h_prev, zero);
-        E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_prev);
+        let h_curr = E::subs_epi8(h_prev, e_ins_vec);
+        let h_curr = E::max_epi8(h_curr, zero);
+        E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_curr);
+        h_prev = h_curr;
     }
     
     // Track maxima per lane
@@ -157,6 +157,8 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     
     let mut beg = [0i8; W];
     let mut end = [0i8; W];
+    let mut terminated = [false; W];
+    let mut terminated_count = 0;
     for lane in 0..W {
         end[lane] = params.qlen[lane];
     }
@@ -164,10 +166,15 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     let qlen_vec = E::loadu_epi8(params.qlen.as_ptr());
 
     // Main DP loop
+    let mut final_row = tmax;
     for i in 0..tmax {
+        if terminated_count > params.batch.len() / 2 {
+            final_row = i;
+            break;
+        }
+
         let mut f_vec = zero;
-        let mut h_diag_curr = vec![0i8; lanes];
-        E::storeu_epi8(h_diag_curr.as_mut_ptr(), E::loadu_epi8(h_matrix.as_ptr()));
+        let mut h_diag = E::loadu_epi8(h_matrix.as_ptr());
 
         let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * lanes) as *const i8);
         
@@ -182,13 +189,18 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
         let one_vec = E::set1_epi8(1);
         let i_plus_w = E::adds_epi8(i_vec, w_vec);
         let i_plus_w_plus_1 = E::adds_epi8(i_plus_w, one_vec);
-        let current_end_vec = E::min_epu8(end_vec, i_plus_w_plus_1);
-        let current_end_vec = E::min_epu8(current_end_vec, qlen_vec);
+        let mut current_end_vec = E::min_epu8(end_vec, i_plus_w_plus_1);
+        current_end_vec = E::min_epu8(current_end_vec, qlen_vec);
 
-        let mut term_mask_vals = [-1i8; W];
+        let mut current_beg = [0i8; W];
+        let mut current_end = [0i8; W];
+        E::storeu_epi8(current_beg.as_mut_ptr(), current_beg_vec);
+        E::storeu_epi8(current_end.as_mut_ptr(), current_end_vec);
+
+        let mut term_mask_vals = [0i8; W];
         for lane in 0..W {
-            if i >= params.tlen[lane] as usize {
-                term_mask_vals[lane] = 0;
+            if !terminated[lane] && i < params.tlen[lane] as usize {
+                term_mask_vals[lane] = -1i8;
             }
         }
         let term_mask = E::loadu_epi8(term_mask_vals.as_ptr());
@@ -196,22 +208,28 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
         for j in 0..qmax {
             let h_top = E::loadu_epi8(h_matrix.as_ptr().add(j * lanes));
             let e_prev = E::loadu_epi8(e_matrix.as_ptr().add(j * lanes));
-            let h_diag_vec = E::loadu_epi8(h_diag_curr.as_ptr());
-
-            E::storeu_epi8(h_diag_curr.as_mut_ptr(), h_top);
+            
+            let h_diag_curr = h_diag;
+            h_diag = h_top;
 
             let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * lanes) as *const i8);
             let eq_mask = E::cmpeq_epi8(s1, s2);
             let score_vec = E::blendv_epi8(mismatch_vec, match_vec, eq_mask);
             
             let or_bases = E::or_si128(s1, s2);
-            let m_vec = E::adds_epi8(h_diag_vec, score_vec);
-            let m_vec = E::blendv_epi8(m_vec, zero, or_bases);
-            let m_vec = E::max_epi8(m_vec, zero);
+            let mut m_vec = E::adds_epi8(h_diag_curr, score_vec);
+            m_vec = E::blendv_epi8(m_vec, zero, or_bases);
+            m_vec = E::max_epi8(m_vec, zero);
 
-            let e_val = E::max_epi8(E::subs_epi8(m_vec, oe_del_vec), E::subs_epi8(e_prev, e_del_vec));
+            let e_open = E::subs_epi8(m_vec, oe_del_vec);
+            let e_open = E::max_epi8(e_open, zero);
+            let e_extend = E::subs_epi8(e_prev, e_del_vec);
+            let e_val = E::max_epi8(e_open, e_extend);
             
-            f_vec = E::max_epi8(E::subs_epi8(m_vec, oe_ins_vec), E::subs_epi8(f_vec, e_ins_vec));
+            let f_open = E::subs_epi8(m_vec, oe_ins_vec);
+            let f_open = E::max_epi8(f_open, zero);
+            let f_extend = E::subs_epi8(f_vec, e_ins_vec);
+            f_vec = E::max_epi8(f_open, f_extend);
             
             let mut h_val = E::max_epi8(m_vec, e_val);
             h_val = E::max_epi8(h_val, f_vec);
@@ -224,33 +242,47 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
             let combined_mask = E::and_si128(in_band_mask, term_mask);
             h_val = E::and_si128(h_val, combined_mask);
             let e_val_masked = E::and_si128(e_val, combined_mask);
-            let f_vec_masked = E::and_si128(f_vec, combined_mask);
 
             E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_val);
             E::storeu_epi8(e_matrix.as_mut_ptr().add(j * lanes), e_val_masked);
-            E::storeu_epi8(f_matrix.as_mut_ptr().add(j * lanes), f_vec_masked);
             
             let is_greater = E::cmpgt_epi8(h_val, max_scores_vec);
             max_scores_vec = E::max_epi8(h_val, max_scores_vec);
 
-            let mut h_vals = [0i8; W];
-            let mut is_greater_vals = [0i8; W];
-            E::storeu_epi8(h_vals.as_mut_ptr(), h_val);
-            E::storeu_epi8(is_greater_vals.as_mut_ptr(), is_greater);
+            max_i_vec = E::blendv_epi8(max_i_vec, i_vec, is_greater);
+            max_j_vec = E::blendv_epi8(max_j_vec, j_vec, is_greater);
+        }
 
-            let mut max_i_vals = [0i8; W];
-            let mut max_j_vals = [0i8; W];
-            E::storeu_epi8(max_i_vals.as_mut_ptr(), max_i_vec);
-            E::storeu_epi8(max_j_vals.as_mut_ptr(), max_j_vec);
+        let mut max_score_vals = [0i8; W];
+        E::storeu_epi8(max_score_vals.as_mut_ptr(), max_scores_vec);
 
+        if params.zdrop > 0 {
             for lane in 0..W {
-                if is_greater_vals[lane] as u8 == 0xFF {
-                    max_i_vals[lane] = i as i8;
-                    max_j_vals[lane] = j as i8;
+                if !terminated[lane] && i > 0 && i < params.tlen[lane] as usize {
+                    let mut row_max = 0i8;
+                    let row_beg = current_beg[lane] as usize;
+                    let row_end = current_end[lane] as usize;
+
+                    for j in row_beg..row_end {
+                        let h_val = h_matrix[j * lanes + lane];
+                        row_max = row_max.max(h_val);
+                    }
+
+                    if row_max == 0 {
+                        terminated[lane] = true;
+                        terminated_count += 1;
+                        continue;
+                    }
+
+                    let global_max = max_score_vals[lane];
+                    let score_drop = (global_max as i32) - (row_max as i32);
+
+                    if score_drop > params.zdrop {
+                        terminated[lane] = true;
+                        terminated_count += 1;
+                    }
                 }
             }
-            max_i_vec = E::loadu_epi8(max_i_vals.as_ptr());
-            max_j_vec = E::loadu_epi8(max_j_vals.as_ptr());
         }
     }
 
