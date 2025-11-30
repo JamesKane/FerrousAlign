@@ -160,5 +160,3 @@ Phase 4 — Portable SIMD exploration and optional adoption
 - All correctness tests green; golden outputs unchanged.
 - Perf within ±2% per ISA on agreed workloads; pipeline throughput +5–15% from SoA adoption with reduced per‑batch overhead.
 - ADR committed; CI gates and review checklist in place.
-
-If you approve, I can draft ADR-001 and stage Phase 1 as two small PRs to de-risk the change and immediately reduce the largest modules. 

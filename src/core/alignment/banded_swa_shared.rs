@@ -108,8 +108,10 @@ macro_rules! generate_swa_entry {
         width = $W:expr,
         engine = $E:ty,
         cfg = $cfg:meta,
+        target_feature = $tf:literal,
     ) => {
         #[$cfg]
+        #[target_feature(enable = $tf)]
         #[allow(unsafe_op_in_unsafe_fn)]
         pub unsafe fn $name(
             batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
@@ -132,7 +134,7 @@ macro_rules! generate_swa_entry {
             let params = $crate::alignment::banded_swa_kernel::KernelParams {
                 batch,
                 query_soa: &query_soa,
-                target_oa: &target_soa,
+                target_soa: &target_soa,
                 qlen: &qlen,
                 tlen: &tlen,
                 h0: &h0,
