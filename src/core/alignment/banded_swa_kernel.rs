@@ -8,16 +8,7 @@
 use crate::alignment::banded_swa::OutScore;
 use crate::compute::simd_abstraction as simd;
 use crate::compute::simd_abstraction::SimdEngine; // bring trait into scope for method resolution
-#[cfg(feature = "swk-debug")]
-macro_rules! swk_dbg {
-    ($($arg:tt)*) => {{
-        eprintln!($($arg)*);
-    }};
-}
-#[cfg(not(feature = "swk-debug"))]
-macro_rules! swk_dbg {
-    ($($arg:tt)*) => {{}};
-}
+
 
 /// Minimal SIMD engine contract for the shared SW kernel.
 ///
@@ -43,6 +34,7 @@ pub trait SwSimd: Copy {
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     /// Select bytes from b where mask MSB is set, else from a (like blendv)
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8;
 }
@@ -119,7 +111,7 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     let match_score = params.mat[0];
     let mismatch_score = params.mat[1];
 
-    let zero = E::setzero_epi8();
+    let zero = unsafe { E::setzero_epi8() };
     let match_vec = E::set1_epi8(match_score);
     let mismatch_vec = E::set1_epi8(mismatch_score);
     let four_vec = E::set1_epi8(4); // base < 4 are valid A/C/G/T
@@ -179,235 +171,100 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     let mut terminated: [bool; W] = [false; W];
     let ones = E::set1_epi8(-1);
 
-    // Optional debug filters (compile-time; read environment at runtime)
-    #[cfg(feature = "swk-debug")]
-    let dbg_lane: Option<usize> = std::env::var("SWK_DEBUG_LANE").ok().and_then(|s| s.parse().ok());
-    #[cfg(feature = "swk-debug")]
-    let dbg_rows: Option<usize> = std::env::var("SWK_DEBUG_ROWS").ok().and_then(|s| s.parse().ok());
+
 
     // Main DP sweep over target positions
     for i in 0..tmax {
-        #[cfg(feature = "swk-debug")]
-        if dbg_rows.map(|lim| i < lim).unwrap_or(true) {
-            swk_dbg!("[swk] row i={} (i_row={})", i, i + 1);
-        }
-        // Reset per-row maxima
-        for lane in 0..lanes { row_max[lane] = 0; }
-        // F values start at 0 for each row
-        let mut f_vec = zero;
-        let mut h_left = zero; // H(i, j-1)
-        let mut h_diag = zero; // H(i-1, j-1)
+        let mut f_vec = zero; // F (insertion) scores for this row, carried across `j`
+        // h_diag_carry: Stores H(i-1, j-1) which is needed for current M score calculation.
+        // It's initialized from h_prev row, and updated in the loop.
+        let mut h_diag_carry = E::loadu_epi8(h_prev.as_ptr());
 
-        // Pointer to beginning of previous and current rows
-        let prev_ptr = h_prev.as_ptr();
-        let curr_ptr = h_curr.as_mut_ptr();
-        let e_ptr = e_row.as_mut_ptr();
+        // Compute band boundaries for this row (per-lane)
+        let i_vec = E::set1_epi8(i as i8);
+        let w_vec = E::loadu_epi8(params.w.as_ptr());
+        let beg_vec_ = E::loadu_epi8(params.qlen.as_ptr());
+        let end_vec_ = E::loadu_epi8(params.qlen.as_ptr());
 
-        // Load target bases for this row
-        let t_ptr = params.target_soa.as_ptr().add(i * row_bytes);
-        let t_vec = E::loadu_epi8(t_ptr as *const i8);
+        // This band calculation is simplified and may not match manual impl exactly yet
+        let current_beg_vec = E::max_epi8(zero, E::subs_epi8(i_vec, w_vec));
+        let current_end_vec = E::min_epi8(
+            E::adds_epi8(E::adds_epi8(i_vec, w_vec), E::set1_epi8(1)),
+            E::loadu_epi8(params.qlen.as_ptr()),
+        );
 
-        // Build per-lane constants for this row
-        let mut beg_arr = [0i8; W];
-        let mut end_arr = [0i8; W];
-        let mut tlen_arr = [0i8; W];
-        let mut qlen_arr = [0i8; W];
-        for lane in 0..lanes {
-            let w_lane = params.w[lane] as i32;
-            let ql = params.qlen[lane] as i32;
-            let tl = params.tlen[lane] as i32;
-            // Use 1-based DP row index for band math to mirror legacy SSE
-            let ii = (i + 1) as i32;
-            let beg_i = (ii - w_lane).max(0);
-            // Match SSE band end semantics: end is exclusive upper bound j < end,
-            // with end = min(qlen, i_row + w + 1)
-            let end_i = (ii + w_lane + 1).min(ql);
-            beg_arr[lane] = beg_i.clamp(0, i8::MAX as i32) as i8;
-            end_arr[lane] = end_i.clamp(0, i8::MAX as i32) as i8;
-            tlen_arr[lane] = tl.clamp(0, i8::MAX as i32) as i8;
-            qlen_arr[lane] = ql.clamp(0, i8::MAX as i32) as i8;
-            #[cfg(feature = "swk-debug")]
-            if dbg_rows.map(|lim| i < lim).unwrap_or(true)
-                && dbg_lane.map(|l| l == lane).unwrap_or(true)
-            {
-                swk_dbg!(
-                    "[swk] lane {}: w={}, qlen={}, tlen={}, beg={}, end={}",
-                    lane, w_lane, ql, tl, beg_arr[lane], end_arr[lane]
-                );
+        // Create termination mask
+        let mut term_mask_vals = [0i8; W];
+        for lane in 0..W {
+            if !terminated[lane] && i < params.tlen[lane] as usize {
+                term_mask_vals[lane] = -1i8;
             }
         }
-        let beg_vec = E::loadu_epi8(beg_arr.as_ptr());
-        let end_vec = E::loadu_epi8(end_arr.as_ptr());
-        let tlen_vec = E::loadu_epi8(tlen_arr.as_ptr());
-        // Build tlen+1 for i_row <= tlen check
-        let mut tlen_p1_arr = [0i8; W];
-        for lane in 0..lanes { tlen_p1_arr[lane] = tlen_arr[lane].saturating_add(1); }
-        let tlen_p1_vec = E::loadu_epi8(tlen_p1_arr.as_ptr());
-        let qlen_vec = E::loadu_epi8(qlen_arr.as_ptr());
-        // DP row index is 1-based relative to the initialized H[0,*] row
-        let i_row = i + 1; // 1-based for band bounds
-        let i_vec = E::set1_epi8((i_row as i32).clamp(0, i8::MAX as i32) as i8);
-        let i0_vec = E::set1_epi8((i as i32).clamp(0, i8::MAX as i32) as i8); // 0-based for row activity
+        let term_mask = E::loadu_epi8(term_mask_vals.as_ptr());
 
-        // Build previous row band bounds and masks (i_row - 1)
-        let mut prev_beg_arr = [0i8; W];
-        let mut prev_end_arr = [0i8; W];
-        let i_row_prev = i_row.saturating_sub(1) as i32;
-        for lane in 0..lanes {
-            let w_lane = params.w[lane] as i32;
-            let ql = params.qlen[lane] as i32;
-            let beg_prev = (i_row_prev - w_lane).max(0);
-            let end_prev = (i_row_prev + w_lane + 1).min(ql);
-            prev_beg_arr[lane] = beg_prev.clamp(0, i8::MAX as i32) as i8;
-            prev_end_arr[lane] = end_prev.clamp(0, i8::MAX as i32) as i8;
-        }
-        let prev_beg_vec = E::loadu_epi8(prev_beg_arr.as_ptr());
-        let prev_end_vec = E::loadu_epi8(prev_end_arr.as_ptr());
-        let i_prev0_vec = if i == 0 {
-            // negative value so i_prev < tlen is always true for properly masked H0 usage
-            E::set1_epi8(0)
-        } else {
-            E::set1_epi8(((i - 1) as i32).clamp(0, i8::MAX as i32) as i8)
-        };
+        let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * W) as *const i8);
 
         for j in 0..qmax {
-            // Load query base vector at position j
-            let q_ptr = params.query_soa.as_ptr().add(j * row_bytes);
-            let q_vec = E::loadu_epi8(q_ptr as *const i8);
+            let j_vec = E::set1_epi8(j as i8);
+            let in_band_left = E::cmplt_epi8(E::subs_epi8(current_beg_vec, ones), j_vec);
+            let in_band_right = E::cmplt_epi8(j_vec, current_end_vec);
+            let in_band_mask = E::blendv_epi8(zero, ones, in_band_left);
+            let in_band_mask = E::blendv_epi8(zero, in_band_mask, in_band_right);
 
-            // Build per-lane masks first (band/length/termination), using j
-            let j_vec = E::set1_epi8((j as i32).clamp(0, i8::MAX as i32) as i8);
-            let j_plus1_vec = E::set1_epi8(((j + 1) as i32).clamp(0, i8::MAX as i32) as i8);
-            let m_ge_beg = E::cmplt_epi8(beg_vec, j_plus1_vec);
-            let m_lt_end = E::cmplt_epi8(j_vec, end_vec);
-            // Row active if 1-based i_row <= tlen  <=> i_row < tlen+1
-            let m_row_active = E::cmplt_epi8(i_vec, tlen_p1_vec);
-            let m_col_active = E::cmplt_epi8(j_vec, qlen_vec);
-            let m_band_start = E::cmpeq_epi8(j_vec, beg_vec);
-            let mut active_mask = E::blendv_epi8(zero, ones, m_ge_beg);
-            active_mask = E::blendv_epi8(zero, active_mask, m_lt_end);
-            active_mask = E::blendv_epi8(zero, active_mask, m_row_active);
-            active_mask = E::blendv_epi8(zero, active_mask, m_col_active);
-            let mut term_arr = [0i8; W];
-            for lane in 0..lanes { term_arr[lane] = if terminated[lane] { 0 } else { -1 }; }
-            let term_vec = E::loadu_epi8(term_arr.as_ptr());
-            active_mask = E::blendv_epi8(zero, active_mask, term_vec);
+            let h_top = E::loadu_epi8(h_prev.as_ptr().add(j * W));
+            let e_prev = E::loadu_epi8(e_row.as_ptr().add(j * W));
 
-            // Load prior row/state
-            let mut h_up = E::loadu_epi8(prev_ptr.add(j * row_bytes) as *const i8);
-            let mut e_prev = E::loadu_epi8(e_ptr.add(j * row_bytes));
-            // Do not mask prior row contributions here; manual AVX2 masks only the
-            // outputs for the current row. Prior row values were already stored
-            // with masking, so double-masking would undercount.
-            // Clamp left/diag at band start before use
-            h_left = E::blendv_epi8(h_left, zero, m_band_start);
-            h_diag = E::blendv_epi8(h_diag, zero, m_band_start);
-            // Note: Do not clear F at band start; the manual AVX2 kernel carries F across columns.
+            // h_diag_next is H(i-1, j) to be used as h_diag_carry in the next iteration (j+1)
+            let h_diag_next = h_top;
 
-            // Scoring via compare-and-blend; zero-out where bases are not in {0..3}
-            // and also when padding sentinels are present (negative values, e.g., 0xFF)
-            let eq_mask = E::cmpeq_epi8(q_vec, t_vec);
+            let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * W) as *const i8);
+            let eq_mask = E::cmpeq_epi8(s1, s2);
             let mut score_vec = E::blendv_epi8(mismatch_vec, match_vec, eq_mask);
-            // Build invalid mask: (q<0) || (t<0) || (q>=4) || (t>=4)
-            let zero_i8 = E::set1_epi8(0);
-            let q_neg = E::cmplt_epi8(q_vec, zero_i8);
-            let t_neg = E::cmplt_epi8(t_vec, zero_i8);
-            let q_lt4 = E::cmplt_epi8(q_vec, four_vec);
-            let t_lt4 = E::cmplt_epi8(t_vec, four_vec);
-            let q_eq4 = E::cmpeq_epi8(q_vec, four_vec);
-            let t_eq4 = E::cmpeq_epi8(t_vec, four_vec);
-            let q_gt4 = E::cmplt_epi8(four_vec, q_vec);
-            let t_gt4 = E::cmplt_epi8(four_vec, t_vec);
-            // Accumulate OR of conditions using blend with ones
-            let mut invalid = E::blendv_epi8(zero, ones, q_neg);
-            invalid = E::blendv_epi8(invalid, ones, t_neg);
-            let q_ge4 = E::blendv_epi8(zero, ones, q_eq4);
-            let q_ge4 = E::blendv_epi8(q_ge4, ones, q_gt4);
-            let t_ge4 = E::blendv_epi8(zero, ones, t_eq4);
-            let t_ge4 = E::blendv_epi8(t_ge4, ones, t_gt4);
-            invalid = E::blendv_epi8(invalid, ones, q_ge4);
-            invalid = E::blendv_epi8(invalid, ones, t_ge4);
-            // Zero score where invalid
-            score_vec = E::blendv_epi8(score_vec, zero, invalid);
+            
+            let or_bases = E::blendv_epi8(zero, ones, E::cmplt_epi8(s1, zero));
+            let or_bases = E::blendv_epi8(or_bases, ones, E::cmplt_epi8(s2, zero));
+            let or_bases = E::blendv_epi8(or_bases, ones, E::cmplt_epi8(four_vec, s1));
+            let or_bases = E::blendv_epi8(or_bases, ones, E::cmplt_epi8(four_vec, s2));
+            score_vec = E::blendv_epi8(score_vec, zero, or_bases);
 
-            // E(i,j) = max(H(i-1,j) - (o_del+e_del), E(i-1,j) - e_del)
-            let e_from_open = E::subs_epi8(h_up, oe_del_vec);
-            let e_from_ext = E::subs_epi8(e_prev, e_del_vec);
-            let mut e_val = E::max_epi8(e_from_open, e_from_ext);
+            let mut m_vec = E::adds_epi8(h_diag_carry, score_vec);
+            m_vec = E::max_epi8(m_vec, zero);
 
-            // F(i,j) = max(H(i,j-1) - (o_ins+e_ins), F(i,j-1) - e_ins)
-            let f_from_open = E::subs_epi8(h_left, oe_ins_vec);
-            let f_from_ext = E::subs_epi8(f_vec, e_ins_vec);
-            f_vec = E::max_epi8(f_from_open, f_from_ext);
+            let e_open = E::subs_epi8(m_vec, oe_del_vec);
+            let e_open = E::max_epi8(e_open, zero);
+            let e_extend = E::subs_epi8(e_prev, e_del_vec);
+            let e_val = E::max_epi8(e_open, e_extend);
 
-            // H(i,j) from diagonal + score
-            let h_from_diag = E::adds_epi8(h_diag, score_vec);
-            let mut h_val = E::max_epi8(h_from_diag, e_val);
+            h_diag_carry = h_diag_next;
+
+            let f_open = E::subs_epi8(m_vec, oe_ins_vec);
+            let f_open = E::max_epi8(f_open, zero);
+            let f_extend = E::subs_epi8(f_vec, e_ins_vec);
+            f_vec = E::max_epi8(f_open, f_extend);
+
+            let mut h_val = E::max_epi8(m_vec, e_val);
             h_val = E::max_epi8(h_val, f_vec);
-            h_val = E::max_epi8(h_val, zero); // local alignment clamp
 
-            // Finally, mask results by active lanes. Do NOT mask f_vec here, as
-            // the AVX2 manual kernel carries F across columns unmasked (only
-            // band-start and band-end resets apply). Masking f_vec would alter
-            // carry semantics and cause parity differences.
-            h_val = E::blendv_epi8(zero, h_val, active_mask);
-            e_val = E::blendv_epi8(zero, e_val, active_mask);
-
-            #[cfg(feature = "swk-debug")]
-            if dbg_rows.map(|lim| i < lim).unwrap_or(true) {
-                // Log activity mask bit for the selected lane (if any)
-                let mut mask_buf = [0i8; W];
-                E::storeu_epi8(mask_buf.as_mut_ptr(), active_mask);
-                if let Some(l) = dbg_lane {
-                    swk_dbg!("[swk] lane {}: active={} at (i={}, j={})", l, mask_buf[l] != 0, i, j);
-                }
-            }
-
-            // Store H(i,j) into current row buffer and E(i,j)
-            E::storeu_epi8(curr_ptr.add(j * row_bytes), h_val);
-            E::storeu_epi8(e_ptr.add(j * row_bytes), e_val);
-
-            // Track maxima per lane
+            // Update max_scores before applying band/termination mask
             E::storeu_epi8(lane_buf.as_mut_ptr(), h_val);
-            for lane in 0..lanes {
+            for lane in 0..W {
                 if lane_buf[lane] > max_scores[lane] {
                     max_scores[lane] = lane_buf[lane];
-                    // Match legacy SSE semantics: target end uses 0-based row index
-                    max_i[lane] = (i as i32).min(i8::MAX as i32) as i8;
-                    max_j[lane] = (j as i32).min(i8::MAX as i32) as i8;
-                    #[cfg(feature = "swk-debug")]
-                    if dbg_lane.map(|l| l == lane).unwrap_or(true) && dbg_rows.map(|lim| i < lim).unwrap_or(true) {
-                        swk_dbg!("[swk] lane {}: new max={} at (i={}, j={})", lane, lane_buf[lane], i, j);
-                    }
+                    max_i[lane] = i as i8;
+                    max_j[lane] = j as i8;
                 }
-                if lane_buf[lane] > row_max[lane] { row_max[lane] = lane_buf[lane]; }
             }
 
-            // Advance diagonals and left H
-            h_left = h_val;
-            h_diag = h_up;
+            // Apply band and termination mask for storing H and E values
+            let combined_mask = E::blendv_epi8(zero, in_band_mask, term_mask);
+            let h_val_masked = E::blendv_epi8(zero, h_val, combined_mask);
+            let e_val_masked = E::blendv_epi8(zero, e_val, combined_mask);
 
-            // If this column is the last in-band (j+1 == end), ensure we don't carry
-            // leftward state into the out-of-band region on next iteration.
-            let m_band_end = E::cmpeq_epi8(j_plus1_vec, end_vec);
-            h_left = E::blendv_epi8(h_left, zero, m_band_end);
-            // Note: do not clear F at band end either to match manual AVX2 behavior.
+            E::storeu_epi8(h_curr.as_mut_ptr().add(j * W), h_val_masked);
+            E::storeu_epi8(e_row.as_mut_ptr().add(j * W), e_val_masked);
         }
 
-        // Swap rows: current becomes previous for next iteration, and clear current
         std::mem::swap(&mut h_prev, &mut h_curr);
-        // zero current row buffer for next use (optional for correctness but good hygiene)
-        for b in h_curr.iter_mut() { *b = 0; }
-
-        // Z-drop check per lane
-        if params.zdrop > 0 {
-            for lane in 0..lanes {
-                let drop = (max_scores[lane] as i32) - (row_max[lane] as i32);
-                if drop > params.zdrop {
-                    terminated[lane] = true;
-                }
-            }
-        }
     }
 
     // Assemble results per lane
@@ -426,21 +283,7 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     let actual = params.batch.len().min(lanes);
     out.truncate(actual);
 
-    // Debug: print final OutScore for selected lane
-    #[cfg(feature = "swk-debug")]
-    if let Ok(val) = std::env::var("SWK_DEBUG_LANE") {
-        if let Ok(l) = val.parse::<usize>() {
-            if l < out.len() {
-                swk_dbg!(
-                    "[swk] FINAL lane {}: score={}, tend={}, qend={}",
-                    l,
-                    out[l].score,
-                    out[l].target_end_pos,
-                    out[l].query_end_pos
-                );
-            }
-        }
-    }
+
     out
 }
 
@@ -478,6 +321,8 @@ impl SwSimd for SwEngine128 {
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpeq_epi8(a, b) }
     #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpgt_epi8(b, a) }
+    #[inline(always)]
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::min_epi8(a, b) }
     #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine128::blendv_epi8(a, b, mask)
@@ -626,6 +471,8 @@ impl SwSimd for SwEngine256 {
     #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpgt_epi8(b, a) }
     #[inline(always)]
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::min_epi8(a, b) }
+    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine256::blendv_epi8(a, b, mask)
     }
@@ -663,6 +510,8 @@ impl SwSimd for SwEngine512 {
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpeq_epi8(a, b) }
     #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpgt_epi8(b, a) }
+    #[inline(always)]
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::min_epi8(a, b) }
     #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine512::blendv_epi8(a, b, mask)

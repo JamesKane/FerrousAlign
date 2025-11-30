@@ -320,6 +320,12 @@ impl SimdEngine for SimdEngine512 {
 
     #[inline]
     #[target_feature(enable = "avx512bw")]
+    unsafe fn min_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm512_min_epi8(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
     unsafe fn add_epi16(a: Self::Vec16, b: Self::Vec16) -> Self::Vec16 {
         simd_arch::_mm512_add_epi16(a, b)
     }

@@ -293,6 +293,12 @@ impl SimdEngine for SimdEngine256 {
         simd_arch::_mm256_min_epu8(a, b)
     }
 
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn min_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        simd_arch::_mm256_min_epi8(a, b)
+    }
+
     // ===== 16-bit Integer Arithmetic =====
 
     #[inline]

@@ -16,14 +16,7 @@ use crate::compute::simd_abstraction::SimdEngine256 as Engine;
 use crate::generate_swa_entry;
 
 // Optional debug printing for manual AVX2 kernel, mirrors swk-debug in shared kernel
-#[cfg(feature = "swk-debug")]
-macro_rules! avx2_dbg {
-    ($($arg:tt)*) => {{ eprintln!($($arg)*); }}
-}
-#[cfg(not(feature = "swk-debug"))]
-macro_rules! avx2_dbg {
-    ($($arg:tt)*) => {{}}
-}
+
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 32 alignments
 ///

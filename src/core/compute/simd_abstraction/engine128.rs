@@ -21,6 +21,7 @@
 //! - Pointer arguments to loads/stores must be valid for the accessed size and
 //!   (for the aligned variants) appropriately aligned.
 
+use std::arch::x86_64::_mm_min_epi8;
 use super::portable_intrinsics::_mm_storeu_si128;
 use super::portable_intrinsics::*;
 
@@ -266,6 +267,11 @@ impl SimdEngine for SimdEngine128 {
     #[inline]
     unsafe fn min_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
         unsafe { _mm_min_epu8(a, b) }
+    }
+
+    #[inline]
+    unsafe fn min_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { _mm_min_epi8(a, b) }
     }
 
     // ===== 16-bit Integer Arithmetic =====
