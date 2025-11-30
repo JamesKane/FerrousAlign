@@ -9,9 +9,21 @@
 #![cfg(target_arch = "x86_64")]
 
 use crate::alignment::banded_swa::OutScore;
+use crate::alignment::banded_swa_kernel::SwEngine256;
 use crate::alignment::banded_swa_shared::{pad_batch, soa_transform, pack_outscores};
 use crate::alignment::workspace::with_workspace;
 use crate::compute::simd_abstraction::SimdEngine256 as Engine;
+use crate::generate_swa_entry;
+
+// Optional debug printing for manual AVX2 kernel, mirrors swk-debug in shared kernel
+#[cfg(feature = "swk-debug")]
+macro_rules! avx2_dbg {
+    ($($arg:tt)*) => {{ eprintln!($($arg)*); }}
+}
+#[cfg(not(feature = "swk-debug"))]
+macro_rules! avx2_dbg {
+    ($($arg:tt)*) => {{}}
+}
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 32 alignments
 ///
@@ -511,6 +523,18 @@ pub unsafe fn simd_banded_swa_batch32(
     pack_outscores::<SIMD_WIDTH>(scores32, qend32, tend32, gscore32, gtend32, maxoff32, batch_size)
 }
 
+// -----------------------------------------------------------------------------
+// Macro-generated wrapper calling the shared kernel (for parity/comparison)
+// -----------------------------------------------------------------------------
+// Note: single declaration only; used for side-by-side parity testing
+generate_swa_entry!(
+    name = simd_banded_swa_batch32_2,
+    width = 32,
+    engine = SwEngine256,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "avx2",
+);
+
 /// AVX2-optimized banded Smith-Waterman for batches of up to 16 alignments (16-bit scores)
 ///
 /// **SIMD Width**: 16 lanes (256-bit / 16-bit)
@@ -913,6 +937,8 @@ pub unsafe fn simd_banded_swa_batch16_int16(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng};
+    use rand::rngs::StdRng;
 
     #[test]
     fn test_simd_banded_swa_batch16_int16_basic() {
@@ -958,5 +984,105 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         // TODO: Add proper assertions once implementation is complete
+    }
+
+    #[test]
+    fn test_avx2_manual_vs_shared_kernel_parity_small() {
+        // Compare the original manual AVX2 kernel vs macro/shared-kernel version on small random cases
+        // Generate random 2-bit encoded sequences (0..=3) with fixed seed for reproducibility.
+        let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
+
+        // Scoring: match=1 on diagonal, mismatch=0
+        let mut mat = [0i8; 25];
+        for i in 0..4 { mat[i * 5 + i] = 1; }
+
+        // Build a batch up to 16 jobs (keep small to run fast in tests)
+        let jobs = 16usize;
+        let mut batch: Vec<(i32, Vec<u8>, i32, Vec<u8>, i32, i32)> = Vec::with_capacity(jobs);
+        for _ in 0..jobs {
+            let qlen = rng.gen_range(4..=20) as i32;
+            let tlen = rng.gen_range(4..=20) as i32;
+            let w = rng.gen_range(4..=10) as i32;
+            let h0 = 0i32;
+            let mut q = vec![0u8; qlen as usize];
+            let mut t = vec![0u8; tlen as usize];
+            for x in &mut q { *x = rng.gen_range(0..4) as u8; }
+            for x in &mut t { *x = rng.gen_range(0..4) as u8; }
+            batch.push((qlen, q, tlen, t, w, h0));
+        }
+
+        // Convert to slice batch for both calls
+        let batch_slices: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch
+            .iter()
+            .map(|(ql, q, tl, t, w, h)| (*ql, q.as_slice(), *tl, t.as_slice(), *w, *h))
+            .collect();
+
+        let manual = unsafe {
+            simd_banded_swa_batch32(
+                &batch_slices,
+                6, // o_del
+                1, // e_del
+                6, // o_ins
+                1, // e_ins
+                100, // zdrop
+                &mat,
+                5,
+            )
+        };
+
+        let shared = unsafe {
+            simd_banded_swa_batch32_2(
+                &batch_slices,
+                6, // o_del
+                1, // e_del
+                6, // o_ins
+                1, // e_ins
+                100, // zdrop
+                &mat,
+                5,
+            )
+        };
+
+        assert_eq!(manual.len(), shared.len(), "result length mismatch");
+        for (i, (a, b)) in manual.iter().zip(shared.iter()).enumerate() {
+            assert_eq!(a.score, b.score, "score mismatch at lane {}: {} vs {}", i, a.score, b.score);
+            assert_eq!(a.target_end_pos, b.target_end_pos, "tend mismatch at lane {}: {} vs {}", i, a.target_end_pos, b.target_end_pos);
+            assert_eq!(a.query_end_pos, b.query_end_pos, "qend mismatch at lane {}: {} vs {}", i, a.query_end_pos, b.query_end_pos);
+        }
+    }
+
+    #[test]
+    fn test_avx2_manual_vs_shared_kernel_parity_deterministic() {
+        // Deterministic parity test with hand-crafted cases stressing band edges and length masks
+        let mut mat = [0i8; 25];
+        for i in 0..4 { mat[i * 5 + i] = 1; }
+
+        // Helper to push encoded sequences
+        let mut batch: Vec<(i32, Vec<u8>, i32, Vec<u8>, i32, i32)> = Vec::new();
+        // Case 1: perfect match short
+        batch.push((4, vec![0,1,2,3], 4, vec![0,1,2,3], 10, 0));
+        // Case 2: mismatches only
+        batch.push((8, vec![0,0,0,0,1,1,1,1], 8, vec![3,3,3,3,2,2,2,2], 6, 0));
+        // Case 3: different lengths, narrow band
+        batch.push((12, vec![0,1,0,1,2,3,2,3,0,1,2,3], 9, vec![0,1,2,0,1,2,0,1,2], 3, 0));
+        // Case 4: tiny sequences, band=1
+        batch.push((3, vec![0,2,1], 3, vec![0,2,1], 1, 0));
+        // Case 5: introduce Ns (4) which should be treated as invalid and zero score
+        batch.push((6, vec![0,4,1,4,2,4], 6, vec![0,4,1,4,2,4], 5, 0));
+
+        let batch_slices: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch
+            .iter()
+            .map(|(ql, q, tl, t, w, h)| (*ql, q.as_slice(), *tl, t.as_slice(), *w, *h))
+            .collect();
+
+        let manual = unsafe { simd_banded_swa_batch32(&batch_slices, 6, 1, 6, 1, 100, &mat, 5) };
+        let shared = unsafe { simd_banded_swa_batch32_2(&batch_slices, 6, 1, 6, 1, 100, &mat, 5) };
+
+        assert_eq!(manual.len(), shared.len(), "result length mismatch");
+        for (i, (a, b)) in manual.iter().zip(shared.iter()).enumerate() {
+            assert_eq!(a.score, b.score, "score mismatch at lane {}: {} vs {}", i, a.score, b.score);
+            assert_eq!(a.target_end_pos, b.target_end_pos, "tend mismatch at lane {}: {} vs {}", i, a.target_end_pos, b.target_end_pos);
+            assert_eq!(a.query_end_pos, b.query_end_pos, "qend mismatch at lane {}: {} vs {}", i, a.query_end_pos, b.query_end_pos);
+        }
     }
 }
