@@ -38,6 +38,9 @@ avx512 = []
 debug-logging = []
 # Use jemalloc allocator for better memory behavior (reduced fragmentation)
 jemalloc = ["tikv-jemallocator"]
+# Temporarily disable problematic bench unless explicitly enabled
+# Enable with: `--features engine-comp-bench`
+engine-comp-bench = []
 
 [dev-dependencies]
 tempfile = "3.23.0"
@@ -51,6 +54,7 @@ harness = false
 [[bench]]
 name = "simd_engine_comparison"
 harness = false
+required-features = ["engine-comp-bench"]
 
 
 
