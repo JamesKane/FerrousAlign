@@ -9,6 +9,20 @@ This unifies the refactor plan with your existing docs (`DOD_ANALYSIS.md`, `docu
 - Preserve or improve performance (±2% of baseline per ISA) and correctness (no golden diffs).
 - Establish sustained practices (DoD, reviews, CI checks) to prevent duplication/size/SoA regressions.
 
+### Current status (as of 2025‑11‑30)
+- Core SIMD kernel (int8) unified and adopted:
+  - AVX2 path now calls the shared `sw_kernel::<32, SwEngine256>` via thin wrapper; parity tests green; no perf regressions observed.
+  - SSE/NEON path now calls the shared `sw_kernel::<16, SwEngine128>`; tests green on x86_64 and aarch64; no perf regressions observed.
+  - Deterministic and randomized parity tests added and kept to guard future changes.
+- CI/tooling:
+  - Quality workflow with rustfmt, clippy (deny warnings), and size‑guard (≤500 LOC in hot modules) is active.
+  - Perf workflow runs Criterion benches and stores artifacts; problematic engine comparison bench is gated behind an opt‑in feature.
+- Documentation: this strategy doc reflects the SoA‑first plan; portable‑SIMD remains exploratory.
+
+Pending/Planned:
+- AVX‑512 migration (int8, then int16) to the shared kernel — postponed until after SoA‑first work.
+- SoA‑first in pipelines to remove per‑call transposes and improve throughput (next feature).
+
 ### Scope and priorities
 1. Core SW alignment: `src/core/alignment/banded_swa_{sse_neon,avx2,avx512}.rs` and `banded_swa.rs`.
 2. Pipelines: `src/pipelines/linear/batch_extension.rs`.
@@ -62,8 +76,9 @@ Phase 1 — Foundations and quick wins
 Phase 2 — Generic kernel + macroized wrappers
 - Add trait surface for the kernel over existing `simd_abstraction` (minimal ops the DP needs).
 - Implement `kernel.rs` with `sw_kernel<const W: usize, E: SwSimd>`.
-- Add `generate_swa_entry!` macro; refactor `sse_neon` wrappers to call the kernel.
-- Mirror for AVX2; then AVX-512 (including int16 variants).
+- Add `generate_swa_entry!` macro; refactor `sse_neon` wrappers to call the kernel. ✓
+- Mirror for AVX2. ✓
+- AVX-512 (including int16 variants). (postponed)
 - DoD:
   - Numerical identity: SIMD vs scalar tests and inter-ISA crosschecks green.
   - Benchmarks within ±2% vs baseline (100/150/250bp, typical bands; z-drop on).
@@ -82,6 +97,11 @@ Phase 2b — SoA‑first layout across kernels and pipelines (hot paths)
   - Measurable reduction in per‑batch overhead (>80% drop in transform time); overall throughput +5–15% on pipeline microbenchmarks.
   - L1D miss rate reduced on representative workloads (perf counters), or equivalent throughput gain.
   - No file > 500 LOC in modified modules.
+
+Next actions for Phase 2b (to execute next):
+- Pipelines: introduce SoA storage in `ExtensionJobBatch`, plus views per job sized to active SIMD width.
+- Core/shared: make `soa_transform` a no‑op when provided SoA; ensure `sw_kernel` consumes SoA directly (already true); keep scalar fallback path compatible.
+- Bench/CI: add a microbench metric that records AoS→SoA transform time; perf CI should fail if transform time exceeds threshold once SoA‑first lands.
 
 Phase 3 — Core module split and pipeline consolidation
 - Split `banded_swa.rs` into `scalar.rs` and `dispatch.rs`; keep a small umbrella re-export file for compatibility.
@@ -148,10 +168,9 @@ Phase 4 — Portable SIMD exploration and optional adoption
 - API drift: retain re-export shims until a deprecation window passes.
 
 ### Timeline (indicative)
-- Week 1: Phase 1 PRs (types.rs, shared.rs, sse_neon switch, pipeline split start).
-- Week 2: Phase 2 for SSE/NEON kernel + macro; perf/asm validation.
-- Week 3: Phase 2 for AVX2; begin Phase 2b (SoA‑first) in pipelines (introduce SoA buffers, views, and conversions at ingest).
-- Week 4: Phase 2 for AVX‑512 (incl. int16); Phase 2b complete (kernels consume SoA directly; remove transposes).
+- Week 1–2: Phase 1 PRs (types.rs, shared.rs, initial SSE helper adoption), then Phase 2 kernel + SSE/AVX2 migration. ✓
+- Week 3: Start Phase 2b (SoA‑first) in pipelines (introduce SoA buffers, views, conversions at ingest). *
+- Week 4: Continue Phase 2b; remove per‑call transposes in ISA wrappers when SoA is provided; defer AVX‑512 until after SoA‑first.
 - Week 5: Phase 3 module split of core `banded_swa.rs` plus test relocation; pipeline dispatch consolidation.
 - Week 6+: Phase 4 portable-simd prototype behind feature flag; decide adopt/park.
 
@@ -160,3 +179,10 @@ Phase 4 — Portable SIMD exploration and optional adoption
 - All correctness tests green; golden outputs unchanged.
 - Perf within ±2% per ISA on agreed workloads; pipeline throughput +5–15% from SoA adoption with reduced per‑batch overhead.
 - ADR committed; CI gates and review checklist in place.
+
+### Status checklist (quick)
+- [x] AVX2 uses shared kernel (int8), parity and perf OK.
+- [x] SSE/NEON uses shared kernel (int8), parity and perf OK.
+- [ ] AVX‑512 (int8, int16) migrated to shared kernel (post‑SoA).
+- [ ] Pipelines SoA‑first adoption; transforms removed on hot paths.
+- [ ] Core/pipelines module splits finalized; size guard enforced across new files.

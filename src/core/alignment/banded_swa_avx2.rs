@@ -475,3 +475,13 @@ mod tests {
         // TODO: Add proper assertions once implementation is complete
     }
 }
+
+use crate::generate_swa_entry_soa;
+
+generate_swa_entry_soa!(
+    name = simd_banded_swa_batch32_soa,
+    width = 32,
+    engine = SwEngine256,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "avx2",
+);

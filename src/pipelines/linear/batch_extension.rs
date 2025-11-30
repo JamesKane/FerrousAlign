@@ -20,6 +20,96 @@ use crate::compute::simd_abstraction::simd::SimdEngineType;
 use std::cell::RefCell;
 use std::sync::Arc;
 
+/// Build SoA (Structure-of-Arrays) interleaved buffers for the entire batch.
+///
+/// This transforms the AoS (Array-of-Structures) sequence data into a
+/// SIMD-friendly SoA layout, where data for each lane is contiguous within
+/// chunks of size W.
+///
+/// # Arguments
+/// * `W` - SIMD width (e.g., 16 for AVX2, 32 for AVX-512)
+fn make_batch_soa<const W: usize>(
+    jobs: &[BatchedExtensionJob],
+    query_seqs: &[u8],
+    ref_seqs: &[u8],
+) -> (Vec<u8>, Vec<u8>, Vec<usize>) {
+    if jobs.is_empty() {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+
+    let mut query_soa = Vec::new();
+    let mut target_soa = Vec::new();
+    let mut pos_offsets = Vec::new();
+
+    // Process jobs in chunks of W
+    for jobs_chunk in jobs.chunks(W) {
+        let chunk_base_offset_q = query_soa.len();
+        let chunk_base_offset_t = target_soa.len();
+
+        // Determine max lengths for this chunk, capped for i8 kernels
+        let max_qlen = jobs_chunk
+            .iter()
+            .map(|j| j.query_len)
+            .max()
+            .unwrap_or(0)
+            .min(128) as usize;
+        let max_tlen = jobs_chunk
+            .iter()
+            .map(|j| j.ref_len)
+            .max()
+            .unwrap_or(0)
+            .min(128) as usize;
+
+        // Store metadata for this chunk
+        pos_offsets.push(chunk_base_offset_q);
+        pos_offsets.push(chunk_base_offset_t);
+        pos_offsets.push(max_qlen);
+        pos_offsets.push(max_tlen);
+
+        // Resize SoA buffers for the new chunk
+        query_soa.resize(chunk_base_offset_q + max_qlen * W, 0xFF);
+        target_soa.resize(chunk_base_offset_t + max_tlen * W, 0xFF);
+
+        for (lane, job) in jobs_chunk.iter().enumerate() {
+            let q_seq = &query_seqs[job.query_offset..job.query_offset + job.query_len as usize];
+            let t_seq = &ref_seqs[job.ref_offset..job.ref_offset + job.ref_len as usize];
+
+            // Interleave query sequence
+            let q_len = (job.query_len as usize).min(max_qlen);
+            for i in 0..q_len {
+                query_soa[chunk_base_offset_q + i * W + lane] = q_seq[i];
+            }
+
+            // Interleave target sequence
+            let t_len = (job.ref_len as usize).min(max_tlen);
+            for i in 0..t_len {
+                target_soa[chunk_base_offset_t + i * W + lane] = t_seq[i];
+            }
+        }
+    }
+    (query_soa, target_soa, pos_offsets)
+}
+
+/// Get SoA views for a specific job in the batch.
+///
+/// NOTE: This is a diagnostic helper and is not performant. It constructs
+/// temporary vectors to represent the strided data for a single job.
+/// For kernel execution, the entire SoA buffer should be used directly.
+///
+/// # Arguments
+/// * `job_idx` - The index of the job to get views for.
+///
+/// # Returns
+/// This implementation is a placeholder, as returning a true strided slice
+/// is not directly possible. It will return empty slices.
+pub fn soa_views_for_job(batch: &ExtensionJobBatch, job_idx: usize) -> (&[u8], i32, &[u8], i32) {
+    // This is a diagnostic function. For now, we return empty slices as it's not
+    // trivial to return a strided view as a standard slice. The core logic
+    // will pass the entire SoA buffer to the kernels.
+    let _ = (batch, job_idx);
+    (&[], 0, &[], 0)
+}
+
 thread_local! {
     static REVERSE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
 }
@@ -97,6 +187,15 @@ pub struct ExtensionJobBatch {
     /// Contiguous buffer of all reference sequences (2-bit encoded)
     pub ref_seqs: Vec<u8>,
 
+    /// SoA interleaved query buffer
+    pub query_soa: Vec<u8>,
+    /// SoA interleaved target buffer
+    pub target_soa: Vec<u8>,
+    /// Number of active SIMD lanes for SoA
+    pub lanes: usize,
+    /// Per-job start offsets in SoA buffers (packed metadata)
+    pub pos_offsets: Vec<usize>,
+
     /// Running offset for next query sequence
     query_offset: usize,
 
@@ -111,6 +210,10 @@ impl ExtensionJobBatch {
             jobs: Vec::with_capacity(job_capacity),
             query_seqs: Vec::with_capacity(seq_capacity),
             ref_seqs: Vec::with_capacity(seq_capacity),
+            query_soa: Vec::with_capacity(seq_capacity), // Estimate capacity
+            target_soa: Vec::with_capacity(seq_capacity),
+            lanes: 0,
+            pos_offsets: Vec::with_capacity(job_capacity * 4), // 4 elements per chunk
             query_offset: 0,
             ref_offset: 0,
         }
@@ -190,6 +293,12 @@ impl ExtensionJobBatch {
         self.ref_seqs.clear();
         self.query_offset = 0;
         self.ref_offset = 0;
+
+        // Clear SoA data
+        self.query_soa.clear();
+        self.target_soa.clear();
+        self.lanes = 0;
+        self.pos_offsets.clear();
     }
 }
 
@@ -227,13 +336,96 @@ pub struct ChainExtensionScores {
 
 /// Execute batched SIMD scoring for extension jobs
 ///
+/// This function is the main entry point for scoring a batch. It dynamically
+/// chooses between two paths:
+/// - **SoA (Structure-of-Arrays) Path**: For reads up to 128bp, it uses an i8
+///   kernel with an interleaved memory layout for maximum SIMD throughput.
+/// - **AoS (Array-of-Structures) Path**: For longer reads, it falls back to the
+///   original i16 kernel, which operates on chunked, non-interleaved data.
+pub fn execute_batch_simd_scoring(
+    sw_params: &BandedPairWiseSW,
+    batch: &mut ExtensionJobBatch, // Now mutable
+    engine: SimdEngineType,
+) -> Vec<BatchExtensionResult> {
+    if batch.is_empty() {
+        return Vec::new();
+    }
+
+    // Decide execution strategy based on sequence lengths.
+    // The SoA path uses i8 kernels, which are efficient for lengths <= 128.
+    let max_len = batch
+        .jobs
+        .iter()
+        .map(|j| j.query_len.max(j.ref_len))
+        .max()
+        .unwrap_or(0);
+    let use_soa_path = max_len <= 128;
+
+    if use_soa_path {
+        // SoA Path (i8 kernels)
+        match engine {
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+            SimdEngineType::Engine512 => {
+                let (q, t, p) = make_batch_soa::<64>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 64;
+            }
+            #[cfg(target_arch = "x86_64")]
+            SimdEngineType::Engine256 => {
+                let (q, t, p) = make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 32;
+            }
+            SimdEngineType::Engine128 => {
+                let (q, t, p) = make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 16;
+            }
+            _ => { /* Scalar path doesn't need pre-transformation; handled in dispatch */ }
+        }
+
+        let scores = dispatch_simd_scoring_soa(sw_params, batch, engine);
+
+        // Map scores back to results
+        let mut results = Vec::with_capacity(batch.len());
+        for (job, score) in batch.jobs.iter().zip(scores.iter()) {
+            results.push(BatchExtensionResult {
+                read_idx: job.read_idx,
+                chain_idx: job.chain_idx,
+                seed_idx: job.seed_idx,
+                direction: job.direction,
+                score: score.score,
+                query_end: score.query_end_pos,
+                ref_end: score.target_end_pos,
+                gscore: score.global_score,
+                gref_end: score.gtarget_end_pos,
+                max_off: score.max_offset,
+            });
+        }
+        results
+    } else {
+        // AoS Path (i16 kernels for long reads)
+        execute_batch_simd_scoring_aos(sw_params, batch, engine)
+    }
+}
+
+/// AoS (Array-of-Structures) path for batched SIMD scoring.
+///
 /// Processes jobs in chunks matching the SIMD width for maximum lane utilization.
+/// This path is used as a fallback for reads longer than 128bp, where the i16
+/// kernel is required.
 ///
 /// # NEON Optimization (Session 32)
 /// On 128-bit engines (NEON/SSE), we use "double-pump" batching: process 16 jobs
 /// at a time using 2x batch8 calls. This amortizes job collection and result
 /// distribution overhead, reducing pipeline overhead from ~44% to ~35%.
-pub fn execute_batch_simd_scoring(
+pub fn execute_batch_simd_scoring_aos(
     sw_params: &BandedPairWiseSW,
     batch: &ExtensionJobBatch,
     engine: SimdEngineType,
@@ -309,6 +501,42 @@ pub fn execute_batch_simd_scoring(
     }
 
     results
+}
+
+/// Dispatch to the appropriate SoA SIMD kernel based on engine type.
+fn dispatch_simd_scoring_soa(
+    sw_params: &BandedPairWiseSW,
+    batch: &ExtensionJobBatch,
+    engine: SimdEngineType,
+) -> Vec<OutScore> {
+    // These dispatch functions will be implemented in Step 4. They are expected
+    // to exist on BandedPairWiseSW and accept an ExtensionJobBatch directly.
+    // The generic const `W` corresponds to the i8 SIMD width.
+    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+    {
+        match engine {
+            SimdEngineType::Engine512 => sw_params.simd_banded_swa_dispatch_soa::<64>(batch),
+            SimdEngineType::Engine256 => sw_params.simd_banded_swa_dispatch_soa::<32>(batch),
+            SimdEngineType::Engine128 => sw_params.simd_banded_swa_dispatch_soa::<16>(batch),
+        }
+    }
+
+    #[cfg(all(target_arch = "x86_64", not(feature = "avx512")))]
+    {
+        match engine {
+            SimdEngineType::Engine256 => sw_params.simd_banded_swa_dispatch_soa::<32>(batch),
+            SimdEngineType::Engine128 => sw_params.simd_banded_swa_dispatch_soa::<16>(batch),
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // aarch64 (NEON) or scalar fallback
+        match engine {
+            SimdEngineType::Engine128 => sw_params.simd_banded_swa_dispatch_soa::<16>(batch),
+            _ => sw_params.scalar_dispatch_from_soa(batch), // Should not happen if engine is selected correctly
+        }
+    }
 }
 
 /// Dispatch to the appropriate SIMD kernel based on engine type
@@ -810,8 +1038,7 @@ pub fn process_batch_cross_read(
         }
     }
 
-    // Collect jobs
-    let (left_batch, right_batch, mappings) =
+    let (mut left_batch, mut right_batch, mappings) =
         collect_extension_jobs_batch(bwa_idx, opt, &mut read_contexts);
 
     let phase2_time = phase2_start.elapsed();
@@ -841,8 +1068,8 @@ pub fn process_batch_cross_read(
         -(opt.b as i8),
     );
 
-    let left_results = execute_batch_simd_scoring(&sw_params, &left_batch, engine);
-    let right_results = execute_batch_simd_scoring(&sw_params, &right_batch, engine);
+    let left_results = execute_batch_simd_scoring(&sw_params, &mut left_batch, engine);
+    let right_results = execute_batch_simd_scoring(&sw_params, &mut right_batch, engine);
 
     let phase3_time = phase3_start.elapsed();
     log::debug!(
@@ -1199,7 +1426,7 @@ fn process_sub_batch_internal(
     }
 
     // Phase 2: Collect extension jobs
-    let (left_batch, right_batch, mappings) =
+    let (mut left_batch, mut right_batch, mappings) =
         collect_extension_jobs_batch(bwa_idx, opt, &mut read_contexts);
 
     // Phase 3: Execute SIMD scoring
@@ -1217,8 +1444,8 @@ fn process_sub_batch_internal(
         -(opt.b as i8),
     );
 
-    let left_results = execute_batch_simd_scoring(&sw_params, &left_batch, engine);
-    let right_results = execute_batch_simd_scoring(&sw_params, &right_batch, engine);
+    let left_results = execute_batch_simd_scoring(&sw_params, &mut left_batch, engine);
+    let right_results = execute_batch_simd_scoring(&sw_params, &mut right_batch, engine);
 
     // Phase 4: Distribute results
     let per_read_left_scores =
@@ -1459,5 +1686,79 @@ mod tests {
         // Check read 1, chain 0
         assert_eq!(all_chain_scores[1][0].left_score, Some(50));
         assert_eq!(all_chain_scores[1][0].right_score, None);
+    }
+
+    #[test]
+    fn test_make_batch_soa() {
+        let mut batch = ExtensionJobBatch::new();
+        let q1 = vec![0, 1, 2, 3];
+        let r1 = vec![0, 1, 2, 3, 0];
+        let q2 = vec![1, 2, 3];
+        let r2 = vec![1, 2, 3, 1, 2];
+
+        batch.add_job(0, 0, 0, ExtensionDirection::Left, &q1, &r1, 0, 0);
+        batch.add_job(1, 0, 0, ExtensionDirection::Left, &q2, &r2, 0, 0);
+
+        const W: usize = 16;
+        let (query_soa, target_soa, pos_offsets) = make_batch_soa::<W>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+        
+        batch.query_soa = query_soa;
+        batch.target_soa = target_soa;
+        batch.pos_offsets = pos_offsets;
+        batch.lanes = W;
+
+        assert_eq!(batch.lanes, W);
+
+        // pos_offsets stores [q_off, t_off, max_q, max_t]
+        assert_eq!(batch.pos_offsets.len(), 4);
+        assert_eq!(batch.pos_offsets[0], 0); // q_offset
+        assert_eq!(batch.pos_offsets[1], 0); // t_offset
+        let max_q = batch.pos_offsets[2];
+        let max_t = batch.pos_offsets[3];
+        assert_eq!(max_q, 4); // q1 is longer
+        assert_eq!(max_t, 5); // r1 and r2 have same length
+
+        let q_soa_len = max_q * W;
+        let t_soa_len = max_t * W;
+        assert_eq!(batch.query_soa.len(), q_soa_len);
+        assert_eq!(batch.target_soa.len(), t_soa_len);
+
+        // Check lane 0 (job 0)
+        for pos in 0..q1.len() {
+            assert_eq!(batch.query_soa[pos * W + 0], q1[pos]);
+        }
+        for pos in q1.len()..max_q {
+            assert_eq!(batch.query_soa[pos * W + 0], 0xFF);
+        }
+        for pos in 0..r1.len() {
+            assert_eq!(batch.target_soa[pos * W + 0], r1[pos]);
+        }
+        for pos in r1.len()..max_t {
+            assert_eq!(batch.target_soa[pos * W + 0], 0xFF);
+        }
+
+        // Check lane 1 (job 1)
+        for pos in 0..q2.len() {
+            assert_eq!(batch.query_soa[pos * W + 1], q2[pos]);
+        }
+        for pos in q2.len()..max_q {
+            assert_eq!(batch.query_soa[pos * W + 1], 0xFF);
+        }
+        for pos in 0..r2.len() {
+            assert_eq!(batch.target_soa[pos * W + 1], r2[pos]);
+        }
+        for pos in r2.len()..max_t {
+            assert_eq!(batch.target_soa[pos * W + 1], 0xFF);
+        }
+
+        // Check other lanes are padded
+        for lane in 2..W {
+            for pos in 0..max_q {
+                assert_eq!(batch.query_soa[pos * W + lane], 0xFF);
+            }
+            for pos in 0..max_t {
+                assert_eq!(batch.target_soa[pos * W + lane], 0xFF);
+            }
+        }
     }
 }

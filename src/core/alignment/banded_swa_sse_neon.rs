@@ -134,3 +134,23 @@ mod tests {
         );
     }
 }
+
+use crate::generate_swa_entry_soa;
+
+#[cfg(target_arch = "x86_64")]
+generate_swa_entry_soa!(
+    name = simd_banded_swa_batch16_soa,
+    width = 16,
+    engine = SwEngine128,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "sse2",
+);
+
+#[cfg(target_arch = "aarch64")]
+generate_swa_entry_soa!(
+    name = simd_banded_swa_batch16_soa,
+    width = 16,
+    engine = SwEngine128,
+    cfg = cfg(target_arch = "aarch64"),
+    target_feature = "neon",
+);

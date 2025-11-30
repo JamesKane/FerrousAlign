@@ -5,6 +5,22 @@
 
 use crate::alignment::banded_swa::OutScore;
 
+/// Carrier for pre-formatted Structure-of-Arrays (SoA) data.
+///
+/// This is used for the SoA-first path where data transformation is skipped.
+#[derive(Debug)]
+pub struct SoAInputs<'a> {
+    pub query_soa: &'a [u8],
+    pub target_soa: &'a [u8],
+    pub qlen: &'a [i8],
+    pub tlen: &'a [i8],
+    pub w: &'a [i8],
+    pub h0: &'a [i8],
+    pub lanes: usize,
+    pub max_qlen: i32,
+    pub max_tlen: i32,
+}
+
 /// Pad a batch of jobs to a fixed SIMD width and extract lane-wise parameters.
 #[inline(always)]
 #[allow(dead_code)]
@@ -78,6 +94,16 @@ pub fn soa_transform<'a, const W: usize, const MAX: usize>(
             target_soa[j * W + i] = 0xFF;
         }
     }
+    (query_soa, target_soa)
+}
+
+/// No-op transform for data that is already in SoA format.
+#[inline(always)]
+#[allow(dead_code)]
+pub fn soa_transform_pre_soa<'a>(
+    query_soa: &'a [u8],
+    target_soa: &'a [u8],
+) -> (&'a [u8], &'a [u8]) {
     (query_soa, target_soa)
 }
 
@@ -170,6 +196,60 @@ macro_rules! generate_swa_entry {
             };
 
             // Placeholder call; returns empty Vec until the shared kernel is implemented.
+            $crate::alignment::banded_swa_kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! generate_swa_entry_soa {
+    (
+        name = $name:ident,
+        width = $W:expr,
+        engine = $E:ty,
+        cfg = $cfg:meta,
+        target_feature = $tf:literal,
+    ) => {
+        #[$cfg]
+        #[target_feature(enable = $tf)]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        pub unsafe fn $name(
+            inputs: &$crate::alignment::banded_swa_shared::SoAInputs,
+            num_jobs: usize,
+            o_del: i32,
+            e_del: i32,
+            o_ins: i32,
+            e_ins: i32,
+            zdrop: i32,
+            mat: &[i8; 25],
+            m: i32,
+        ) -> Vec<$crate::alignment::banded_swa::OutScore> {
+            const SIMD_WIDTH: usize = $W;
+
+            // The kernel expects an AoS batch slice for length info.
+            // We create a dummy one since we're on the SoA path.
+            let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); SIMD_WIDTH];
+            let dummy_batch = &dummy_batch_arr[0..num_jobs];
+
+            let params = $crate::alignment::banded_swa_kernel::KernelParams {
+                batch: dummy_batch,
+                query_soa: inputs.query_soa,
+                target_soa: inputs.target_soa,
+                qlen: inputs.qlen,
+                tlen: inputs.tlen,
+                h0: inputs.h0,
+                w: inputs.w,
+                max_qlen: inputs.max_qlen,
+                max_tlen: inputs.max_tlen,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                zdrop,
+                mat,
+                m,
+            };
+
             $crate::alignment::banded_swa_kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
         }
     };
