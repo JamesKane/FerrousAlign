@@ -7,6 +7,7 @@
 // Works on both x86_64 (SSE2+) and aarch64 (NEON)
 
 use crate::alignment::banded_swa::OutScore;
+use crate::alignment::banded_swa_shared::{pad_batch, soa_transform, pack_outscores};
 use crate::compute::simd_abstraction::SimdEngine;
 use crate::compute::simd_abstraction::SimdEngine128 as Engine;
 
@@ -53,77 +54,19 @@ pub unsafe fn simd_banded_swa_batch16(
     let batch_size = batch.len().min(SIMD_WIDTH);
 
     // ==================================================================
-    // Step 1: Batch Padding and Parameter Extraction
+    // Step 1: Batch Padding and Parameter Extraction (shared helper)
     // ==================================================================
-
-    // Pad batch to SIMD_WIDTH with dummy entries if needed
-    let mut padded_batch = Vec::with_capacity(SIMD_WIDTH);
-    for i in 0..SIMD_WIDTH {
-        if i < batch.len() {
-            padded_batch.push(batch[i]);
-        } else {
-            // Dummy alignment (will be ignored in results)
-            padded_batch.push((0, &[][..], 0, &[][..], 0, 0));
-        }
-    }
-
-    // Extract batch parameters (16 lanes)
-    let mut qlen = [0i8; SIMD_WIDTH];
-    let mut tlen = [0i8; SIMD_WIDTH];
-    let mut h0 = [0i8; SIMD_WIDTH];
-    let mut w_arr = [0i8; SIMD_WIDTH];
-    let mut max_qlen = 0i32;
-    let mut max_tlen = 0i32;
-
-    for i in 0..SIMD_WIDTH {
-        let (q, _, t, _, wi, h) = padded_batch[i];
-        qlen[i] = q.min(127) as i8;
-        tlen[i] = t.min(127) as i8;
-        h0[i] = h as i8;
-        w_arr[i] = wi as i8;
-        if q > max_qlen {
-            max_qlen = q;
-        }
-        if t > max_tlen {
-            max_tlen = t;
-        }
-    }
+    let (mut qlen, mut tlen, mut h0, mut w_arr, mut max_qlen, mut max_tlen, padded) =
+        pad_batch::<SIMD_WIDTH>(batch);
 
     // Clamp to MAX_SEQ_LEN
     max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);
     max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
     // ==================================================================
-    // Step 2: Structure-of-Arrays (SoA) Layout Transformation
+    // Step 2: Structure-of-Arrays (SoA) Layout Transformation (shared helper)
     // ==================================================================
-
-    // Allocate SoA buffers for SIMD-friendly access
-    // Layout: seq[position][lane] - all 16 lane values for position 0, then position 1, etc.
-    let mut query_soa = vec![0u8; MAX_SEQ_LEN * SIMD_WIDTH];
-    let mut target_soa = vec![0u8; MAX_SEQ_LEN * SIMD_WIDTH];
-
-    // Transform query and target sequences to SoA layout
-    for i in 0..SIMD_WIDTH {
-        let (q_len, query, t_len, target, _, _) = padded_batch[i];
-
-        // Copy query (interleaved: q0[0], q1[0], ..., q15[0], q0[1], q1[1], ...)
-        for j in 0..(q_len as usize).min(MAX_SEQ_LEN) {
-            query_soa[j * SIMD_WIDTH + i] = query[j];
-        }
-        // Pad with dummy value
-        for j in (q_len as usize)..MAX_SEQ_LEN {
-            query_soa[j * SIMD_WIDTH + i] = 0xFF;
-        }
-
-        // Copy target (interleaved)
-        for j in 0..(t_len as usize).min(MAX_SEQ_LEN) {
-            target_soa[j * SIMD_WIDTH + i] = target[j];
-        }
-        // Pad with dummy value
-        for j in (t_len as usize)..MAX_SEQ_LEN {
-            target_soa[j * SIMD_WIDTH + i] = 0xFF;
-        }
-    }
+    let (mut query_soa, mut target_soa) = soa_transform::<SIMD_WIDTH, MAX_SEQ_LEN>(&padded);
 
     // ==================================================================
     // Step 3: SIMD Constants and DP Matrices Allocation
@@ -407,19 +350,22 @@ pub unsafe fn simd_banded_swa_batch16(
     // Step 7: Result Extraction
     // ==================================================================
 
-    let mut results = Vec::with_capacity(batch_size);
-    for lane in 0..batch_size {
-        results.push(OutScore {
-            score: max_scores[lane] as i32,
-            target_end_pos: max_i[lane] as i32,
-            query_end_pos: max_j[lane] as i32,
-            gtarget_end_pos: max_i[lane] as i32,
-            global_score: max_scores[lane] as i32,
-            max_offset: 0,
-        });
+    // Use shared packer to assemble lane-wise OutScores
+    let mut scores32 = [0i32; SIMD_WIDTH];
+    let mut qend32 = [0i32; SIMD_WIDTH];
+    let mut tend32 = [0i32; SIMD_WIDTH];
+    let mut gscore32 = [0i32; SIMD_WIDTH];
+    let mut gtend32 = [0i32; SIMD_WIDTH];
+    let mut maxoff32 = [0i32; SIMD_WIDTH];
+    for i in 0..SIMD_WIDTH {
+        scores32[i] = max_scores[i] as i32;
+        qend32[i] = max_j[i] as i32;
+        tend32[i] = max_i[i] as i32;
+        gscore32[i] = max_scores[i] as i32;
+        gtend32[i] = max_i[i] as i32;
+        maxoff32[i] = 0;
     }
-
-    results
+    pack_outscores::<SIMD_WIDTH>(scores32, qend32, tend32, gscore32, gtend32, maxoff32, batch_size)
 }
 
 #[cfg(test)]
