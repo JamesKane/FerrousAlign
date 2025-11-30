@@ -15,7 +15,7 @@ use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::region::{ChainExtensionMapping, SeedExtensionMapping};
 use super::seeding::Seed;
-use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
+use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -387,7 +387,6 @@ pub fn execute_batch_simd_scoring(
                 batch.pos_offsets = p;
                 batch.lanes = 16;
             }
-            _ => { /* Scalar path doesn't need pre-transformation; handled in dispatch */ }
         }
 
         let scores = dispatch_simd_scoring_soa(sw_params, batch, engine);
@@ -411,7 +410,7 @@ pub fn execute_batch_simd_scoring(
         results
     } else {
         // AoS Path (i16 kernels for long reads)
-        execute_batch_simd_scoring_aos(sw_params, batch, engine)
+        unsafe { execute_batch_simd_scoring_aos(sw_params, batch, engine) }
     }
 }
 
@@ -425,7 +424,7 @@ pub fn execute_batch_simd_scoring(
 /// On 128-bit engines (NEON/SSE), we use "double-pump" batching: process 16 jobs
 /// at a time using 2x batch8 calls. This amortizes job collection and result
 /// distribution overhead, reducing pipeline overhead from ~44% to ~35%.
-pub fn execute_batch_simd_scoring_aos(
+pub unsafe fn execute_batch_simd_scoring_aos(
     sw_params: &BandedPairWiseSW,
     batch: &ExtensionJobBatch,
     engine: SimdEngineType,
@@ -475,12 +474,12 @@ pub fn execute_batch_simd_scoring_aos(
         // For 128-bit engines with >8 jobs, use double-pump (2x batch8)
         let scores: Vec<OutScore> = if simd_width == 8 && simd_batch.len() > 8 {
             let (first_half, second_half) = simd_batch.split_at(8);
-            let mut scores1 = sw_params.simd_banded_swa_batch8_int16(first_half);
-            let scores2 = sw_params.simd_banded_swa_batch8_int16(second_half);
+            let mut scores1 = unsafe { crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(first_half, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(), sw_params.scoring_matrix(), sw_params.alphabet_size()) };
+            let scores2 = unsafe { crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(second_half, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(), sw_params.scoring_matrix(), sw_params.alphabet_size()) };
             scores1.extend(scores2);
             scores1
         } else {
-            dispatch_simd_scoring(sw_params, &simd_batch, engine)
+            crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch(sw_params, &simd_batch)
         };
 
         // Map scores back to results with job metadata (single pass for all jobs)
@@ -515,17 +514,17 @@ fn dispatch_simd_scoring_soa(
     #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
     {
         match engine {
-            SimdEngineType::Engine512 => sw_params.simd_banded_swa_dispatch_soa::<64>(batch),
-            SimdEngineType::Engine256 => sw_params.simd_banded_swa_dispatch_soa::<32>(batch),
-            SimdEngineType::Engine128 => sw_params.simd_banded_swa_dispatch_soa::<16>(batch),
+            SimdEngineType::Engine512 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<64>(sw_params, batch),
+            SimdEngineType::Engine256 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<32>(sw_params, batch),
+            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<16>(sw_params, batch),
         }
     }
 
     #[cfg(all(target_arch = "x86_64", not(feature = "avx512")))]
     {
         match engine {
-            SimdEngineType::Engine256 => sw_params.simd_banded_swa_dispatch_soa::<32>(batch),
-            SimdEngineType::Engine128 => sw_params.simd_banded_swa_dispatch_soa::<16>(batch),
+            SimdEngineType::Engine256 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<32>(sw_params, batch),
+            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<16>(sw_params, batch),
         }
     }
 
@@ -533,74 +532,13 @@ fn dispatch_simd_scoring_soa(
     {
         // aarch64 (NEON) or scalar fallback
         match engine {
-            SimdEngineType::Engine128 => sw_params.simd_banded_swa_dispatch_soa::<16>(batch),
-            _ => sw_params.scalar_dispatch_from_soa(batch), // Should not happen if engine is selected correctly
+            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<16>(sw_params, batch),
+            _ => crate::core::alignment::banded_swa::dispatch::scalar_dispatch_from_soa(sw_params, batch), // Should not happen if engine is selected correctly
         }
     }
 }
 
-/// Dispatch to the appropriate SIMD kernel based on engine type
-fn dispatch_simd_scoring(
-    sw_params: &BandedPairWiseSW,
-    batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
-    engine: SimdEngineType,
-) -> Vec<OutScore> {
-    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-    {
-        match engine {
-            SimdEngineType::Engine512 => unsafe {
-                crate::alignment::banded_swa_avx512::simd_banded_swa_batch32_int16(
-                    batch,
-                    sw_params.o_del(),
-                    sw_params.e_del(),
-                    sw_params.o_ins(),
-                    sw_params.e_ins(),
-                    sw_params.zdrop(),
-                    sw_params.scoring_matrix(),
-                    5,
-                )
-            },
-            SimdEngineType::Engine256 => unsafe {
-                crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
-                    batch,
-                    sw_params.o_del(),
-                    sw_params.e_del(),
-                    sw_params.o_ins(),
-                    sw_params.e_ins(),
-                    sw_params.zdrop(),
-                    sw_params.scoring_matrix(),
-                    5,
-                )
-            },
-            SimdEngineType::Engine128 => sw_params.simd_banded_swa_batch8_int16(batch),
-        }
-    }
 
-    #[cfg(all(target_arch = "x86_64", not(feature = "avx512")))]
-    {
-        match engine {
-            SimdEngineType::Engine256 => unsafe {
-                crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
-                    batch,
-                    sw_params.o_del(),
-                    sw_params.e_del(),
-                    sw_params.o_ins(),
-                    sw_params.e_ins(),
-                    sw_params.zdrop(),
-                    sw_params.scoring_matrix(),
-                    5,
-                )
-            },
-            SimdEngineType::Engine128 => sw_params.simd_banded_swa_batch8_int16(batch),
-        }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let _ = engine;
-        sw_params.simd_banded_swa_batch8_int16(batch)
-    }
-}
 
 /// Distribute extension results back to per-read chain scores
 pub fn distribute_extension_results(

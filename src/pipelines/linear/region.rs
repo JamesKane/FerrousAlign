@@ -25,7 +25,7 @@ use super::chaining::{Chain, cal_max_gap};
 use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
-use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
+use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore};
 use crate::alignment::edit_distance;
 use crate::compute::ComputeBackend;
 
@@ -720,7 +720,7 @@ fn execute_simd_scoring(
             SimdEngineType::Engine512 => {
                 // AVX-512: 32-wide batch with vectorized scoring
                 unsafe {
-                    crate::alignment::banded_swa_avx512::simd_banded_swa_batch32_int16(
+                    crate::core::alignment::banded_swa::isa_avx512::simd_banded_swa_batch32_int16(
                         &batch,
                         sw_params.o_del(),
                         sw_params.e_del(),
@@ -733,9 +733,9 @@ fn execute_simd_scoring(
                 }
             }
             SimdEngineType::Engine256 => {
-                // AVX2: 16-wide batch with vectorized scoring
+                // AVX2 16-bit path: 16 lanes
                 unsafe {
-                    crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
+                    crate::core::alignment::banded_swa::isa_avx2::simd_banded_swa_batch16_int16(
                         &batch,
                         sw_params.o_del(),
                         sw_params.e_del(),
@@ -747,9 +747,17 @@ fn execute_simd_scoring(
                     )
                 }
             }
-            SimdEngineType::Engine128 => {
-                // SSE/NEON: Use 8-wide batch function
-                sw_params.simd_banded_swa_batch8_int16(&batch)
+            SimdEngineType::Engine128 => unsafe {
+                crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(
+                    &batch,
+                    sw_params.o_del(),
+                    sw_params.e_del(),
+                    sw_params.o_ins(),
+                    sw_params.e_ins(),
+                    sw_params.zdrop(),
+                    sw_params.scoring_matrix(),
+                    sw_params.alphabet_size(),
+                )
             }
         }
     }
@@ -775,7 +783,7 @@ fn execute_simd_scoring(
                 if can_use_8bit {
                     // AVX2 8-bit path: 32 lanes (2x parallelism)
                     unsafe {
-                        crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
+                        crate::core::alignment::banded_swa::isa_avx2::simd_banded_swa_batch32(
                             &batch,
                             sw_params.o_del(),
                             sw_params.e_del(),
@@ -789,7 +797,7 @@ fn execute_simd_scoring(
                 } else {
                     // AVX2 16-bit path: 16 lanes
                     unsafe {
-                        crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
+                        crate::core::alignment::banded_swa::isa_avx2::simd_banded_swa_batch16_int16(
                             &batch,
                             sw_params.o_del(),
                             sw_params.e_del(),
@@ -802,9 +810,17 @@ fn execute_simd_scoring(
                     }
                 }
             }
-            SimdEngineType::Engine128 => {
-                // SSE/NEON: Use 8-wide batch function
-                sw_params.simd_banded_swa_batch8_int16(&batch)
+            SimdEngineType::Engine128 => unsafe {
+                crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(
+                    &batch,
+                    sw_params.o_del(),
+                    sw_params.e_del(),
+                    sw_params.o_ins(),
+                    sw_params.e_ins(),
+                    sw_params.zdrop(),
+                    sw_params.scoring_matrix(),
+                    sw_params.alphabet_size(),
+                )
             }
         }
     }
@@ -813,7 +829,18 @@ fn execute_simd_scoring(
     {
         // Non-x86: Use 8-wide batch function
         let _ = engine;
-        sw_params.simd_banded_swa_batch8_int16(&batch)
+        unsafe {
+            crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(
+                &batch,
+                sw_params.o_del(),
+                sw_params.e_del(),
+                sw_params.o_ins(),
+                sw_params.e_ins(),
+                sw_params.zdrop(),
+                sw_params.scoring_matrix(),
+                sw_params.alphabet_size(),
+            )
+        }
     }
 }
 

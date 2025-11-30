@@ -3,7 +3,7 @@
 //! These functions are extracted from per-ISA implementations to reduce
 //! duplication. They are designed to be aggressively inlined and cheap.
 
-use crate::alignment::banded_swa::OutScore;
+use super::types::OutScore;
 
 /// Carrier for pre-formatted Structure-of-Arrays (SoA) data.
 ///
@@ -170,13 +170,13 @@ macro_rules! generate_swa_entry {
             const MAX_SEQ_LEN: usize = 128;
 
             let (qlen, tlen, h0, w_arr, max_qlen, max_tlen, padded) =
-                $crate::alignment::banded_swa_shared::pad_batch::<SIMD_WIDTH>(batch);
-            let (query_soa, target_soa) = $crate::alignment::banded_swa_shared::soa_transform::<
+                crate::core::alignment::banded_swa::shared::pad_batch::<SIMD_WIDTH>(batch);
+            let (query_soa, target_soa) = crate::core::alignment::banded_swa::shared::soa_transform::<
                 SIMD_WIDTH,
                 MAX_SEQ_LEN,
             >(&padded);
 
-            let params = $crate::alignment::banded_swa_kernel::KernelParams {
+            let params = crate::core::alignment::banded_swa::kernel::KernelParams {
                 batch,
                 query_soa: &query_soa,
                 target_soa: &target_soa,
@@ -196,7 +196,7 @@ macro_rules! generate_swa_entry {
             };
 
             // Placeholder call; returns empty Vec until the shared kernel is implemented.
-            $crate::alignment::banded_swa_kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
         }
     };
 }
@@ -214,7 +214,7 @@ macro_rules! generate_swa_entry_soa {
         #[target_feature(enable = $tf)]
         #[allow(unsafe_op_in_unsafe_fn)]
         pub unsafe fn $name(
-            inputs: &$crate::alignment::banded_swa_shared::SoAInputs,
+            inputs: &crate::core::alignment::banded_swa::shared::SoAInputs,
             num_jobs: usize,
             o_del: i32,
             e_del: i32,
@@ -231,7 +231,7 @@ macro_rules! generate_swa_entry_soa {
             let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); SIMD_WIDTH];
             let dummy_batch = &dummy_batch_arr[0..num_jobs];
 
-            let params = $crate::alignment::banded_swa_kernel::KernelParams {
+            let params = crate::core::alignment::banded_swa::kernel::KernelParams {
                 batch: dummy_batch,
                 query_soa: inputs.query_soa,
                 target_soa: inputs.target_soa,
@@ -250,7 +250,7 @@ macro_rules! generate_swa_entry_soa {
                 m,
             };
 
-            $crate::alignment::banded_swa_kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
         }
     };
 }

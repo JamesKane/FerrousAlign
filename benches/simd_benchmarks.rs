@@ -87,7 +87,7 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("batched_simd", seq_len),
             seq_len,
-            |b, &_size| b.iter(|| bsw.simd_banded_swa_dispatch(black_box(&batch))),
+            |b, &_size| b.iter(|| ferrous_align::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch(black_box(&bsw), black_box(&batch))),
         );
     }
 
@@ -178,7 +178,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
                     ));
                 }
 
-                black_box(bsw.simd_banded_swa_dispatch(&padded_batch));
+                black_box(ferrous_align::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch(black_box(&bsw), &padded_batch));
             }
         })
     });
@@ -217,7 +217,7 @@ fn bench_batch_sizes(c: &mut Criterion) {
                     ));
                 }
 
-                black_box(bsw.simd_banded_swa_batch16(&padded_batch));
+                black_box(ferrous_align::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch(black_box(&bsw), &padded_batch));
             }
         })
     });
@@ -286,7 +286,7 @@ fn bench_mutation_rates(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("batched_simd", format!("{:.0}%", mutation_rate * 100.0)),
             mutation_rate,
-            |b, &_rate| b.iter(|| bsw.simd_banded_swa_dispatch(black_box(&batch))),
+            |b, &_rate| b.iter(|| ferrous_align::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch(black_box(&bsw), black_box(&batch))),
         );
     }
 
@@ -346,7 +346,7 @@ fn bench_hybrid_with_cigar(c: &mut Criterion) {
 
     // Benchmark: Hybrid batched with CIGAR
     group.bench_function("hybrid_batch16_with_cigar", |b| {
-        b.iter(|| bsw.simd_banded_swa_batch16_with_cigar(black_box(&batch_data)));
+        b.iter(|| ferrous_align::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_with_cigar(black_box(&bsw), black_box(&batch_data)));
     });
 
     group.finish();

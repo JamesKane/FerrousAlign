@@ -14,7 +14,7 @@
 // ============================================================================
 
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
-#![feature(stdarch_x86_avx512)]
+
 
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
 

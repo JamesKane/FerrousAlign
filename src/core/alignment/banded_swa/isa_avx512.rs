@@ -8,27 +8,11 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::alignment::banded_swa::OutScore;
+use super::types::OutScore; // Updated path
 use crate::alignment::workspace::with_workspace;
-use crate::compute::simd_abstraction::SimdEngine512 as Engine;
-use crate::generate_swa_entry;
 
-/// AVX-512-optimized banded Smith-Waterman for batches of up to 32 alignments
-///
-/// **SIMD Width**: 32 lanes (4x SSE/NEON)
-/// **Parallelism**: Processes 32 alignments simultaneously
-/// **Performance**: Expected 1.8-2.2x speedup over SSE (memory-bound)
-///
-/// **Algorithm**:
-/// - Uses Structure-of-Arrays (SoA) layout for SIMD-friendly access
-/// - Implements standard Smith-Waterman DP recurrence
-/// - Adaptive banding: Only compute cells within [i-w, i+w+1]
-/// - Z-drop early termination: Stop lanes when score drops > zdrop
-///
-/// **Memory Layout**:
-/// - Query/target sequences: `seq[position][lane]` (interleaved)
-/// - DP matrices (H, E, F): `matrix[position * 32 + lane]`
-/// - Query profiles: `profile[target_base][query_pos * 32 + lane]`
+use crate::generate_swa_entry; // This macro is exported at crate root by shared module
+
 generate_swa_entry!(
     name = simd_banded_swa_batch64,
     width = 64,
@@ -327,7 +311,7 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                 // This maintains the wavefront pattern for the next row
                 _mm512_storeu_si512(
                     h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m512i,
-                    h1_vec,
+                    h11_vec,
                 );
 
                 // Compute E(i+1, j) = max(M - oe_del, E - e_del)
@@ -348,16 +332,16 @@ pub unsafe fn simd_banded_swa_batch32_int16(
 
                 // VECTORIZED max score tracking (replaces scalar loop - critical for AVX-512 perf)
                 // Load current_beg and current_end as SIMD vectors
-                let beg_vec = _mm512_loadu_si512(current_beg.as_ptr() as *const __m512i);
-                let end_vec = _mm512_loadu_si512(current_end.as_ptr() as *const __m512i);
-                let j_vec = _mm512_set1_epi16(j as i16);
-                let i_vec = _mm512_set1_epi16(i as i16);
+                let beg_vec_512 = _mm512_loadu_si512(current_beg.as_ptr() as *const __m512i);
+                let end_vec_512 = _mm512_loadu_si512(current_end.as_ptr() as *const __m512i);
+                let j_vec_512 = _mm512_set1_epi16(j as i16);
+                let i_vec_512 = _mm512_set1_epi16(i as i16);
 
                 // Create masks for in-bounds check using AVX-512 comparison intrinsics
                 // j >= current_beg: true where j is at or past band start
-                let in_bounds_low: __mmask32 = _mm512_cmpge_epi16_mask(j_vec, beg_vec);
+                let in_bounds_low: __mmask32 = _mm512_cmpge_epi16_mask(j_vec_512, beg_vec_512);
                 // j < current_end: true where j is before band end
-                let in_bounds_high: __mmask32 = _mm512_cmplt_epi16_mask(j_vec, end_vec);
+                let in_bounds_high: __mmask32 = _mm512_cmplt_epi16_mask(j_vec_512, end_vec_512);
                 // h11 > max_score: true where this cell beats the current best
                 let better_score: __mmask32 = _mm512_cmpgt_epi16_mask(h11_vec, max_score_vec);
 
@@ -368,8 +352,8 @@ pub unsafe fn simd_banded_swa_batch32_int16(
 
                 // Conditionally update max_score_vec, max_i_vec, max_j_vec using blend
                 max_score_vec = _mm512_mask_blend_epi16(update_mask, max_score_vec, h11_vec);
-                max_i_vec = _mm512_mask_blend_epi16(update_mask, max_i_vec, i_vec);
-                max_j_vec = _mm512_mask_blend_epi16(update_mask, max_j_vec, j_vec);
+                max_i_vec = _mm512_mask_blend_epi16(update_mask, max_i_vec, i_vec_512);
+                max_j_vec = _mm512_mask_blend_epi16(update_mask, max_j_vec, j_vec_512);
 
                 // h1_vec = H(i, j) for the next column
                 h1_vec = h11_vec;
@@ -420,8 +404,8 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                 score: max_scores[lane].max(h0[lane]) as i32,
                 target_end_pos: max_i[lane] as i32,
                 query_end_pos: max_j[lane] as i32,
-                gtarget_end_pos: max_ie[lane] as i32,
-                global_score: gscores[lane] as i32,
+                gtarget_end_pos: gscores[lane] as i32,
+                global_score: max_ie[lane] as i32,
                 max_offset: 0,
             });
         }
@@ -529,7 +513,7 @@ mod tests {
 
         // Run AVX2
         let results_256 = unsafe {
-            crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
+            crate::core::alignment::banded_swa::isa_avx2::simd_banded_swa_batch32(
                 &batch, 6, 1, 6, 1, 100, &mat, 5,
             )
         };
@@ -563,8 +547,8 @@ mod tests {
     }
 }
 
-use crate::alignment::banded_swa_kernel::SwEngine512;
-use crate::generate_swa_entry_soa;
+use super::kernel::SwEngine512; // Updated path
+use crate::generate_swa_entry_soa; // This macro is exported at crate root by shared module
 
 generate_swa_entry_soa!(
     name = simd_banded_swa_batch64_soa,

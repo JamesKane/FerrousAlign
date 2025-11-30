@@ -1922,8 +1922,7 @@ mod tests {
         let anchor_rb = 1800i64; // In reverse region
         let mate_rb = 200i64; // Forward strand, p2 = 1799 < 1800
 
-        let (dir, _dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
-        assert_eq!(dir, 2); // RF orientation (different strands, mate projected behind anchor)
+                    let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);        assert_eq!(dir, 2); // RF orientation (different strands, mate projected behind anchor)
     }
 
     #[test]

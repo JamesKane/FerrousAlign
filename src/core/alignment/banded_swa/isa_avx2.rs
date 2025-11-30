@@ -8,8 +8,8 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::alignment::banded_swa::OutScore;
-use crate::alignment::banded_swa_kernel::SwEngine256;
+use super::types::OutScore; // Updated path
+use super::kernel::SwEngine256; // Updated path
 use crate::alignment::workspace::with_workspace;
 use crate::compute::simd_abstraction::SimdEngine256 as Engine;
 use crate::generate_swa_entry;
@@ -95,7 +95,6 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     }
 
     // Clamp to MAX_SEQ_LEN
-    max_qlen = max_qlen.min(MAX_SEQ_LEN as i32); // TODO: Orphaned code?  Not read after assignment
     max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
     // ==================================================================
@@ -415,8 +414,8 @@ pub unsafe fn simd_banded_swa_batch16_int16(
                 score: max_scores[lane].max(h0[lane]) as i32,
                 target_end_pos: max_i[lane] as i32,
                 query_end_pos: max_j[lane] as i32,
-                gtarget_end_pos: max_ie[lane] as i32,
-                global_score: gscores[lane] as i32,
+                gtarget_end_pos: gscores[lane] as i32,
+                global_score: max_ie[lane] as i32,
                 max_offset: 0,
             });
         }

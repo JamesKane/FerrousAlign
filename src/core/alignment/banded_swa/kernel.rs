@@ -5,7 +5,7 @@
 //! function is a stub to allow incremental adoption by per‑ISA wrappers without
 //! changing behavior yet.
 
-use crate::alignment::banded_swa::OutScore;
+use super::types::OutScore; // Changed from `crate::alignment::banded_swa::OutScore;`
 use crate::compute::simd_abstraction as simd;
 use crate::compute::simd_abstraction::SimdEngine; // bring trait into scope for method resolution
 
@@ -168,10 +168,10 @@ where
     let qlen_vec = E::loadu_epi8(params.qlen.as_ptr());
 
     // Main DP loop
-    let mut final_row = tmax;
+    let mut _final_row = tmax;
     for i in 0..tmax {
         if terminated_count > params.batch.len() / 2 {
-            final_row = i;
+            _final_row = i;
             break;
         }
 
@@ -391,8 +391,8 @@ impl SwSimd for SwEngine128 {
 // -------------------------------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    use crate::core::alignment::banded_swa::{pad_batch, soa_transform, simd_banded_swa_batch32};
     use super::*;
-    use crate::alignment::banded_swa_shared::{pad_batch, soa_transform};
 
     // Only meaningful on x86_64 where AVX2 path exists
     #[cfg(target_arch = "x86_64")]
@@ -409,9 +409,8 @@ mod tests {
             mat[i * 5 + i] = 1;
         }
 
-        // Call AVX2 reference path (existing implementation)
         let avx2_out = unsafe {
-            crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
+            simd_banded_swa_batch32(
                 &batch, 6, 1, 6, 1, 100, &mat, 5,
             )
         };
@@ -467,7 +466,7 @@ mod tests {
         }
 
         let avx2_out = unsafe {
-            crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
+            simd_banded_swa_batch32(
                 &batch, 6, 1, 6, 1, 100, &mat, 5,
             )
         };
@@ -591,62 +590,52 @@ impl SwSimd for SwEngine512 {
 
     #[inline(always)]
     unsafe fn setzero_epi8() -> Self::V8 {
-        simd::SimdEngine512::setzero_epi8()
+        unsafe { simd::SimdEngine512::setzero_epi8() }
     }
     #[inline(always)]
     unsafe fn set1_epi8(x: i8) -> Self::V8 {
-        simd::SimdEngine512::set1_epi8(x)
+        unsafe { simd::SimdEngine512::set1_epi8(x) }
     }
     #[inline(always)]
     unsafe fn loadu_epi8(ptr: *const i8) -> Self::V8 {
-        simd::SimdEngine512::loadu_si128(ptr as *const _)
+        unsafe { simd::SimdEngine512::loadu_si128(ptr as *const _) }
     }
     #[inline(always)]
     unsafe fn storeu_epi8(ptr: *mut i8, v: Self::V8) {
-        simd::SimdEngine512::storeu_si128(ptr as *mut _, v)
+        unsafe { simd::SimdEngine512::storeu_si128(ptr as *mut _, v) }
     }
     #[inline(always)]
     unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::adds_epi8(a, b)
+        unsafe { simd::SimdEngine512::adds_epi8(a, b) }
     }
     #[inline(always)]
     unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::subs_epi8(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::subs_epi8(a, b) }
+    }    #[inline(always)]
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::max_epi8(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::max_epi8(a, b) }
+    }    #[inline(always)]
     unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::min_epi8(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::min_epi8(a, b) }
+    }    #[inline(always)]
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::cmpeq_epi8(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::cmpeq_epi8(a, b) }
+    }    #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::cmpgt_epi8(b, a)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::cmpgt_epi8(b, a) }
+    }    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::blendv_epi8(a, b, mask)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::blendv_epi8(a, b, mask) }
+    }    #[inline(always)]
     unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::and_si128(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::and_si128(a, b) }
+    }    #[inline(always)]
     unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::or_si128(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::or_si128(a, b) }
+    }    #[inline(always)]
     unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::cmpgt_epi8(a, b)
-    }
-    #[inline(always)]
+        unsafe { simd::SimdEngine512::cmpgt_epi8(a, b) }
+    }    #[inline(always)]
     unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        simd::SimdEngine512::min_epu8(a, b)
-    }
-}
+        unsafe { simd::SimdEngine512::min_epu8(a, b) }
+    }}
