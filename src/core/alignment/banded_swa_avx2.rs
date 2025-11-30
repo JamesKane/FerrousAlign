@@ -1045,6 +1045,49 @@ mod tests {
     }
 
     #[test]
+    fn test_avx2_manual_vs_shared_kernel_parity_failing_case() {
+        let mut mat = [0i8; 25];
+        for i in 0..4 { mat[i * 5 + i] = 1; }
+
+        let q = vec![1, 1, 1, 2, 0];
+        let t = vec![3, 3, 1, 1, 1];
+        let batch = vec![(5, q.as_slice(), 5, t.as_slice(), 9, 0)];
+
+        let manual = unsafe {
+            simd_banded_swa_batch32(
+                &batch,
+                6, // o_del
+                1, // e_del
+                6, // o_ins
+                1, // e_ins
+                100, // zdrop
+                &mat,
+                5,
+            )
+        };
+
+        let shared = unsafe {
+            simd_banded_swa_batch32_2(
+                &batch,
+                6, // o_del
+                1, // e_del
+                6, // o_ins
+                1, // e_ins
+                100, // zdrop
+                &mat,
+                5,
+            )
+        };
+
+        assert_eq!(manual.len(), shared.len(), "result length mismatch");
+        for (i, (a, b)) in manual.iter().zip(shared.iter()).enumerate() {
+            assert_eq!(a.score, b.score, "score mismatch at lane {}: {} vs {}", i, a.score, b.score);
+            assert_eq!(a.target_end_pos, b.target_end_pos, "tend mismatch at lane {}: {} vs {}", i, a.target_end_pos, b.target_end_pos);
+            assert_eq!(a.query_end_pos, b.query_end_pos, "qend mismatch at lane {}: {} vs {}", i, a.query_end_pos, b.query_end_pos);
+        }
+    }
+
+    #[test]
     fn test_avx2_manual_vs_shared_kernel_parity_deterministic() {
         // Deterministic parity test with hand-crafted cases stressing band edges and length masks
         let mut mat = [0i8; 25];

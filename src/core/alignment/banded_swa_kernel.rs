@@ -32,11 +32,15 @@ pub trait SwSimd: Copy {
     unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8; // saturating add
     unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8; // saturating sub
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
-    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     /// Select bytes from b where mask MSB is set, else from a (like blendv)
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8;
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8;
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8;
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8;
 }
 
 /// Input parameters for the shared SW kernel.
@@ -96,7 +100,8 @@ pub struct KernelParams<'a> {
 /// out as SoA with length at least `max_len * E::LANES`, padded to avoid
 /// out‑of‑bounds loads, and that `qlen/tlen/h0/w` slices have length `W`.
 #[inline]
-pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) -> Vec<OutScore> {
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) -> Vec<OutScore> where <E as SwSimd>::V8: std::fmt::Debug {
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
 
     let lanes = W;
@@ -111,10 +116,9 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     let match_score = params.mat[0];
     let mismatch_score = params.mat[1];
 
-    let zero = unsafe { E::setzero_epi8() };
+    let zero = E::setzero_epi8();
     let match_vec = E::set1_epi8(match_score);
     let mismatch_vec = E::set1_epi8(mismatch_score);
-    let four_vec = E::set1_epi8(4); // base < 4 are valid A/C/G/T
 
     // Gap penalties (saturating 8-bit arithmetic)
     let oe_del = (params.o_del + params.e_del) as i8;
@@ -126,165 +130,152 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     let e_del_vec = E::set1_epi8(e_del);
     let e_ins_vec = E::set1_epi8(e_ins);
 
-    // DP buffers (SoA, per position vectors stored in byte arrays)
-    let row_bytes = lanes; // bytes per vector row chunk
-    let mut h_prev: Vec<i8> = vec![0; qmax * row_bytes];
-    let mut h_curr: Vec<i8> = vec![0; qmax * row_bytes];
-    let mut e_row: Vec<i8> = vec![0; qmax * row_bytes];
+    // DP buffers
+    let mut h_matrix = vec![0i8; qmax * lanes];
+    let mut e_matrix = vec![0i8; qmax * lanes];
+    let mut f_matrix = vec![0i8; qmax * lanes];
+    
+    // Initialize first row
+    let h0_vec = E::loadu_epi8(params.h0.as_ptr());
+    E::storeu_epi8(h_matrix.as_mut_ptr(), h0_vec);
+    
+    let h1_vec = E::subs_epi8(h0_vec, oe_ins_vec);
+    let h1_vec = E::max_epi8(h1_vec, zero);
+    E::storeu_epi8(h_matrix.as_mut_ptr().add(lanes), h1_vec);
 
-    // Initialize first row from h0 where j==0; propagate insertion penalties along row
-    // H[0][0] = h0; H[0][j>0] = max(0, H[0][j-1] - e_ins) with initial open at j==1.
-    // Build vector for j==0 from per-lane h0
-    // Load h0 into a stack buffer then store to h_prev[0]
-    {
-        // Build a temporary lane array and store via E::storeu_epi8
-        let mut h0_tmp = [0i8; W];
-        for lane in 0..lanes { h0_tmp[lane] = params.h0[lane]; }
-        let v = E::loadu_epi8(h0_tmp.as_ptr());
-        E::storeu_epi8(h_prev.as_mut_ptr() as *mut i8, v);
+    let mut h_prev = h1_vec;
+    for j in 2..qmax {
+        h_prev = E::subs_epi8(h_prev, e_ins_vec);
+        h_prev = E::max_epi8(h_prev, zero);
+        E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_prev);
     }
-    // j==1: h = max(0, h0 - (o_ins+e_ins)) then extend by e_ins
-    if qmax > 1 {
-        let base_ptr = h_prev.as_mut_ptr();
-        let h0_vec = E::loadu_epi8(base_ptr);
-        let mut h_vec = E::subs_epi8(h0_vec, oe_ins_vec);
-        h_vec = E::max_epi8(h_vec, zero);
-        E::storeu_epi8(base_ptr.add(row_bytes), h_vec);
-        let mut j = 2;
-        while j < qmax {
-            h_vec = E::subs_epi8(h_vec, e_ins_vec);
-            h_vec = E::max_epi8(h_vec, zero);
-            E::storeu_epi8(base_ptr.add(j * row_bytes), h_vec);
-            j += 1;
-        }
-    }
-    // E row initially zeros
-
+    
     // Track maxima per lane
-    let mut max_scores = [i8::MIN; W];
-    let mut max_i = [0i8; W];
-    let mut max_j = [0i8; W];
+    let mut max_scores_vec = E::loadu_epi8(params.h0.as_ptr());
+    let mut max_i_vec = zero;
+    let mut max_j_vec = zero;
+    
+    let mut beg = [0i8; W];
+    let mut end = [0i8; W];
+    for lane in 0..W {
+        end[lane] = params.qlen[lane];
+    }
 
-    // Temporary lane buffer for extracting values from vectors
-    let mut lane_buf = [0i8; W];
-    let mut row_max: [i8; W] = [0; W];
-    let mut terminated: [bool; W] = [false; W];
-    let ones = E::set1_epi8(-1);
+    let qlen_vec = E::loadu_epi8(params.qlen.as_ptr());
 
-
-
-    // Main DP sweep over target positions
+    // Main DP loop
     for i in 0..tmax {
-        let mut f_vec = zero; // F (insertion) scores for this row, carried across `j`
-        // h_diag_carry: Stores H(i-1, j-1) which is needed for current M score calculation.
-        // It's initialized from h_prev row, and updated in the loop.
-        let mut h_diag_carry = E::loadu_epi8(h_prev.as_ptr());
+        let mut f_vec = zero;
+        let mut h_diag_curr = vec![0i8; lanes];
+        E::storeu_epi8(h_diag_curr.as_mut_ptr(), E::loadu_epi8(h_matrix.as_ptr()));
 
-        // Compute band boundaries for this row (per-lane)
+        let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * lanes) as *const i8);
+        
         let i_vec = E::set1_epi8(i as i8);
         let w_vec = E::loadu_epi8(params.w.as_ptr());
-        let beg_vec_ = E::loadu_epi8(params.qlen.as_ptr());
-        let end_vec_ = E::loadu_epi8(params.qlen.as_ptr());
+        let beg_vec = E::loadu_epi8(beg.as_ptr());
+        let end_vec = E::loadu_epi8(end.as_ptr());
 
-        // This band calculation is simplified and may not match manual impl exactly yet
-        let current_beg_vec = E::max_epi8(zero, E::subs_epi8(i_vec, w_vec));
-        let current_end_vec = E::min_epi8(
-            E::adds_epi8(E::adds_epi8(i_vec, w_vec), E::set1_epi8(1)),
-            E::loadu_epi8(params.qlen.as_ptr()),
-        );
+        let i_minus_w = E::subs_epi8(i_vec, w_vec);
+        let current_beg_vec = E::max_epi8(beg_vec, i_minus_w);
 
-        // Create termination mask
-        let mut term_mask_vals = [0i8; W];
+        let one_vec = E::set1_epi8(1);
+        let i_plus_w = E::adds_epi8(i_vec, w_vec);
+        let i_plus_w_plus_1 = E::adds_epi8(i_plus_w, one_vec);
+        let current_end_vec = E::min_epu8(end_vec, i_plus_w_plus_1);
+        let current_end_vec = E::min_epu8(current_end_vec, qlen_vec);
+
+        let mut term_mask_vals = [-1i8; W];
         for lane in 0..W {
-            if !terminated[lane] && i < params.tlen[lane] as usize {
-                term_mask_vals[lane] = -1i8;
+            if i >= params.tlen[lane] as usize {
+                term_mask_vals[lane] = 0;
             }
         }
         let term_mask = E::loadu_epi8(term_mask_vals.as_ptr());
 
-        let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * W) as *const i8);
-
         for j in 0..qmax {
-            let j_vec = E::set1_epi8(j as i8);
-            let in_band_left = E::cmplt_epi8(E::subs_epi8(current_beg_vec, ones), j_vec);
-            let in_band_right = E::cmplt_epi8(j_vec, current_end_vec);
-            let in_band_mask = E::blendv_epi8(zero, ones, in_band_left);
-            let in_band_mask = E::blendv_epi8(zero, in_band_mask, in_band_right);
+            let h_top = E::loadu_epi8(h_matrix.as_ptr().add(j * lanes));
+            let e_prev = E::loadu_epi8(e_matrix.as_ptr().add(j * lanes));
+            let h_diag_vec = E::loadu_epi8(h_diag_curr.as_ptr());
 
-            let h_top = E::loadu_epi8(h_prev.as_ptr().add(j * W));
-            let e_prev = E::loadu_epi8(e_row.as_ptr().add(j * W));
+            E::storeu_epi8(h_diag_curr.as_mut_ptr(), h_top);
 
-            // h_diag_next is H(i-1, j) to be used as h_diag_carry in the next iteration (j+1)
-            let h_diag_next = h_top;
-
-            let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * W) as *const i8);
+            let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * lanes) as *const i8);
             let eq_mask = E::cmpeq_epi8(s1, s2);
-            let mut score_vec = E::blendv_epi8(mismatch_vec, match_vec, eq_mask);
+            let score_vec = E::blendv_epi8(mismatch_vec, match_vec, eq_mask);
             
-            let or_bases = E::blendv_epi8(zero, ones, E::cmplt_epi8(s1, zero));
-            let or_bases = E::blendv_epi8(or_bases, ones, E::cmplt_epi8(s2, zero));
-            let or_bases = E::blendv_epi8(or_bases, ones, E::cmplt_epi8(four_vec, s1));
-            let or_bases = E::blendv_epi8(or_bases, ones, E::cmplt_epi8(four_vec, s2));
-            score_vec = E::blendv_epi8(score_vec, zero, or_bases);
+            let or_bases = E::or_si128(s1, s2);
+            let m_vec = E::adds_epi8(h_diag_vec, score_vec);
+            let m_vec = E::blendv_epi8(m_vec, zero, or_bases);
+            let m_vec = E::max_epi8(m_vec, zero);
 
-            let mut m_vec = E::adds_epi8(h_diag_carry, score_vec);
-            m_vec = E::max_epi8(m_vec, zero);
-
-            let e_open = E::subs_epi8(m_vec, oe_del_vec);
-            let e_open = E::max_epi8(e_open, zero);
-            let e_extend = E::subs_epi8(e_prev, e_del_vec);
-            let e_val = E::max_epi8(e_open, e_extend);
-
-            h_diag_carry = h_diag_next;
-
-            let f_open = E::subs_epi8(m_vec, oe_ins_vec);
-            let f_open = E::max_epi8(f_open, zero);
-            let f_extend = E::subs_epi8(f_vec, e_ins_vec);
-            f_vec = E::max_epi8(f_open, f_extend);
-
+            let e_val = E::max_epi8(E::subs_epi8(m_vec, oe_del_vec), E::subs_epi8(e_prev, e_del_vec));
+            
+            f_vec = E::max_epi8(E::subs_epi8(m_vec, oe_ins_vec), E::subs_epi8(f_vec, e_ins_vec));
+            
             let mut h_val = E::max_epi8(m_vec, e_val);
             h_val = E::max_epi8(h_val, f_vec);
 
-            // Update max_scores before applying band/termination mask
-            E::storeu_epi8(lane_buf.as_mut_ptr(), h_val);
+            let j_vec = E::set1_epi8(j as i8);
+            let in_band_left = E::cmpgt_epi8(j_vec, E::subs_epi8(current_beg_vec, one_vec));
+            let in_band_right = E::cmpgt_epi8(current_end_vec, j_vec);
+            let in_band_mask = E::and_si128(in_band_left, in_band_right);
+            
+            let combined_mask = E::and_si128(in_band_mask, term_mask);
+            h_val = E::and_si128(h_val, combined_mask);
+            let e_val_masked = E::and_si128(e_val, combined_mask);
+            let f_vec_masked = E::and_si128(f_vec, combined_mask);
+
+            E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_val);
+            E::storeu_epi8(e_matrix.as_mut_ptr().add(j * lanes), e_val_masked);
+            E::storeu_epi8(f_matrix.as_mut_ptr().add(j * lanes), f_vec_masked);
+            
+            let is_greater = E::cmpgt_epi8(h_val, max_scores_vec);
+            max_scores_vec = E::max_epi8(h_val, max_scores_vec);
+
+            let mut h_vals = [0i8; W];
+            let mut is_greater_vals = [0i8; W];
+            E::storeu_epi8(h_vals.as_mut_ptr(), h_val);
+            E::storeu_epi8(is_greater_vals.as_mut_ptr(), is_greater);
+
+            let mut max_i_vals = [0i8; W];
+            let mut max_j_vals = [0i8; W];
+            E::storeu_epi8(max_i_vals.as_mut_ptr(), max_i_vec);
+            E::storeu_epi8(max_j_vals.as_mut_ptr(), max_j_vec);
+
             for lane in 0..W {
-                if lane_buf[lane] > max_scores[lane] {
-                    max_scores[lane] = lane_buf[lane];
-                    max_i[lane] = i as i8;
-                    max_j[lane] = j as i8;
+                if is_greater_vals[lane] as u8 == 0xFF {
+                    max_i_vals[lane] = i as i8;
+                    max_j_vals[lane] = j as i8;
                 }
             }
-
-            // Apply band and termination mask for storing H and E values
-            let combined_mask = E::blendv_epi8(zero, in_band_mask, term_mask);
-            let h_val_masked = E::blendv_epi8(zero, h_val, combined_mask);
-            let e_val_masked = E::blendv_epi8(zero, e_val, combined_mask);
-
-            E::storeu_epi8(h_curr.as_mut_ptr().add(j * W), h_val_masked);
-            E::storeu_epi8(e_row.as_mut_ptr().add(j * W), e_val_masked);
+            max_i_vec = E::loadu_epi8(max_i_vals.as_ptr());
+            max_j_vec = E::loadu_epi8(max_j_vals.as_ptr());
         }
-
-        std::mem::swap(&mut h_prev, &mut h_curr);
     }
 
-    // Assemble results per lane
-    let mut out = Vec::with_capacity(lanes);
-    for lane in 0..lanes {
-        out.push(OutScore {
-            score: max_scores[lane] as i32,
-            target_end_pos: max_i[lane] as i32,
-            gtarget_end_pos: max_i[lane] as i32,
-            query_end_pos: max_j[lane] as i32,
-            global_score: max_scores[lane] as i32,
+    let mut out_scores = vec![];
+    let mut max_scores = [0i8; W];
+    let mut max_i = [0i8; W];
+    let mut max_j = [0i8; W];
+
+    E::storeu_epi8(max_scores.as_mut_ptr(), max_scores_vec);
+    E::storeu_epi8(max_i.as_mut_ptr(), max_i_vec);
+    E::storeu_epi8(max_j.as_mut_ptr(), max_j_vec);
+
+    for i in 0..lanes {
+        out_scores.push(OutScore {
+            score: max_scores[i] as i32,
+            target_end_pos: max_i[i] as i32,
+            query_end_pos: max_j[i] as i32,
+            gtarget_end_pos: 0,
+            global_score: 0,
             max_offset: 0,
         });
     }
-    // Truncate to actual batch size if provided smaller than W
-    let actual = params.batch.len().min(lanes);
-    out.truncate(actual);
-
-
-    out
+    
+    out_scores.truncate(params.batch.len());
+    out_scores
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -318,15 +309,23 @@ impl SwSimd for SwEngine128 {
     #[inline(always)]
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::max_epi8(a, b) }
     #[inline(always)]
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::min_epi8(a, b) }
+    #[inline(always)]
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpeq_epi8(a, b) }
     #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpgt_epi8(b, a) }
     #[inline(always)]
-    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::min_epi8(a, b) }
-    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine128::blendv_epi8(a, b, mask)
     }
+    #[inline(always)]
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::and_si128(a,b) }
+    #[inline(always)]
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::or_si128(a,b) }
+    #[inline(always)]
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpgt_epi8(a, b) }
+    #[inline(always)]
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::min_epu8(a, b) }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -467,15 +466,23 @@ impl SwSimd for SwEngine256 {
     #[inline(always)]
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::max_epi8(a, b) }
     #[inline(always)]
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::min_epi8(a, b) }
+    #[inline(always)]
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpeq_epi8(a, b) }
     #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpgt_epi8(b, a) }
     #[inline(always)]
-    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::min_epi8(a, b) }
-    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine256::blendv_epi8(a, b, mask)
     }
+    #[inline(always)]
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::and_si128(a,b) }
+    #[inline(always)]
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::or_si128(a,b) }
+    #[inline(always)]
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpgt_epi8(a, b) }
+    #[inline(always)]
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::min_epu8(a, b) }
 }
 
 /// AVX-512 512-bit engine adapter (64 lanes of i8)
@@ -507,13 +514,23 @@ impl SwSimd for SwEngine512 {
     #[inline(always)]
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::max_epi8(a, b) }
     #[inline(always)]
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::min_epi8(a, b)
+    }
+    #[inline(always)]
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpeq_epi8(a, b) }
     #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpgt_epi8(b, a) }
     #[inline(always)]
-    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::min_epi8(a, b) }
-    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine512::blendv_epi8(a, b, mask)
     }
+    #[inline(always)]
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::and_si128(a,b) }
+    #[inline(always)]
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::or_si128(a,b) }
+    #[inline(always)]
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpgt_epi8(a, b) }
+    #[inline(always)]
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::min_epu8(a, b) }
 }
