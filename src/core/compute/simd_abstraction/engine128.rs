@@ -21,9 +21,9 @@
 //! - Pointer arguments to loads/stores must be valid for the accessed size and
 //!   (for the aligned variants) appropriately aligned.
 
-use std::arch::x86_64::_mm_min_epi8;
 use super::portable_intrinsics::_mm_storeu_si128;
 use super::portable_intrinsics::*;
+use std::arch::x86_64::_mm_min_epi8;
 
 use super::types::{__m128i, simd_arch};
 

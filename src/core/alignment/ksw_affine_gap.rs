@@ -206,7 +206,7 @@ pub unsafe fn ksw_qalloc(qlen: i32, m: i32, size: i32) -> *mut Kswq {
 ///
 /// # Arguments
 /// * `q_ptr` - A pointer to the `Kswq` structure to be freed.
-pub fn ksw_qfree(q_ptr: *mut Kswq) {
+pub unsafe fn ksw_qfree(q_ptr: *mut Kswq) {
     if q_ptr.is_null() {
         return;
     }

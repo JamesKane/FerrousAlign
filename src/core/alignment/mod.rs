@@ -5,8 +5,8 @@
 //! to paths extracted from graphs or linear references.
 
 pub mod banded_swa;
-pub mod types; // Shared alignment types (e.g., ExtensionDirection) — not re-exported yet to avoid name clashes
-pub mod banded_swa_sse_neon; // Baseline 128-bit vertical SIMD kernel (SSE/NEON)
+pub mod banded_swa_sse_neon;
+pub mod types; // Shared alignment types (e.g., ExtensionDirection) — not re-exported yet to avoid name clashes // Baseline 128-bit vertical SIMD kernel (SSE/NEON)
 // Note: batch_extension moved to pipelines::linear since it depends on linear-specific types
 pub mod cigar;
 pub mod edit_distance;

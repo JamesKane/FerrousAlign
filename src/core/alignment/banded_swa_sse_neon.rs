@@ -7,10 +7,8 @@
 // Works on both x86_64 (SSE2+) and aarch64 (NEON)
 
 use crate::alignment::banded_swa::OutScore;
-use crate::alignment::banded_swa_shared::{pad_batch, soa_transform, pack_outscores};
-use crate::compute::simd_abstraction::SimdEngine;
-use crate::compute::simd_abstraction::SimdEngine128 as Engine;
-use crate::alignment::banded_swa_kernel::{sw_kernel, SwEngine128, KernelParams};
+use crate::alignment::banded_swa_kernel::{KernelParams, SwEngine128, sw_kernel};
+use crate::alignment::banded_swa_shared::{pad_batch, soa_transform};
 
 /// SSE/NEON-optimized banded Smith-Waterman for batches of up to 16 alignments
 ///
@@ -31,8 +29,13 @@ use crate::alignment::banded_swa_kernel::{sw_kernel, SwEngine128, KernelParams};
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn simd_banded_swa_batch16(
     batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
-    o_del: i32, e_del: i32, o_ins: i32, e_ins: i32,
-    zdrop: i32, mat: &[i8; 25], m: i32,
+    o_del: i32,
+    e_del: i32,
+    o_ins: i32,
+    e_ins: i32,
+    zdrop: i32,
+    mat: &[i8; 25],
+    m: i32,
 ) -> Vec<OutScore> {
     const W: usize = 16;
     const MAX_SEQ_LEN: usize = 128; // keep i8 limits aligned with AVX2
@@ -50,7 +53,10 @@ pub unsafe fn simd_banded_swa_batch16(
         w: &w_arr,
         max_qlen,
         max_tlen,
-        o_del, e_del, o_ins, e_ins,
+        o_del,
+        e_del,
+        o_ins,
+        e_ins,
         zdrop,
         mat,
         m,

@@ -11,12 +11,12 @@ use crate::alignment::banded_swa::OutScore;
 pub fn pad_batch<'a, const W: usize>(
     batch: &'a [(i32, &'a [u8], i32, &'a [u8], i32, i32)],
 ) -> (
-    [i8; W], // qlen
-    [i8; W], // tlen
-    [i8; W], // h0
-    [i8; W], // w
-    i32,     // max_qlen
-    i32,     // max_tlen
+    [i8; W],                                       // qlen
+    [i8; W],                                       // tlen
+    [i8; W],                                       // h0
+    [i8; W],                                       // w
+    i32,                                           // max_qlen
+    i32,                                           // max_tlen
     [(i32, &'a [u8], i32, &'a [u8], i32, i32); W], // padded batch
 ) {
     let mut qlen = [0i8; W];
@@ -27,17 +27,26 @@ pub fn pad_batch<'a, const W: usize>(
     let mut max_t = 0i32;
 
     // Pad to width W (truncate extra lanes if provided)
-    let mut padded: [(i32, &'a [u8], i32, &'a [u8], i32, i32); W] = [(0, &[][..], 0, &[][..], 0, 0); W];
+    let mut padded: [(i32, &'a [u8], i32, &'a [u8], i32, i32); W] =
+        [(0, &[][..], 0, &[][..], 0, 0); W];
     for i in 0..W {
-        let tup = if i < batch.len() { batch[i] } else { (0, &[][..], 0, &[][..], 0, 0) };
+        let tup = if i < batch.len() {
+            batch[i]
+        } else {
+            (0, &[][..], 0, &[][..], 0, 0)
+        };
         let (q, _qs, t, _ts, w, h) = tup;
         padded[i] = tup;
         qlen[i] = q.min(127) as i8;
         tlen[i] = t.min(127) as i8;
         h0[i] = h as i8;
         w_arr[i] = w as i8;
-        if q > max_q { max_q = q; }
-        if t > max_t { max_t = t; }
+        if q > max_q {
+            max_q = q;
+        }
+        if t > max_t {
+            max_t = t;
+        }
     }
 
     (qlen, tlen, h0, w_arr, max_q, max_t, padded)
@@ -56,10 +65,18 @@ pub fn soa_transform<'a, const W: usize, const MAX: usize>(
         let (q_len, query, t_len, target, _w, _h) = padded[i];
         let qn = (q_len as usize).min(MAX);
         let tn = (t_len as usize).min(MAX);
-        for j in 0..qn { query_soa[j * W + i] = query[j]; }
-        for j in qn..MAX { query_soa[j * W + i] = 0xFF; }
-        for j in 0..tn { target_soa[j * W + i] = target[j]; }
-        for j in tn..MAX { target_soa[j * W + i] = 0xFF; }
+        for j in 0..qn {
+            query_soa[j * W + i] = query[j];
+        }
+        for j in qn..MAX {
+            query_soa[j * W + i] = 0xFF;
+        }
+        for j in 0..tn {
+            target_soa[j * W + i] = target[j];
+        }
+        for j in tn..MAX {
+            target_soa[j * W + i] = 0xFF;
+        }
     }
     (query_soa, target_soa)
 }
@@ -128,8 +145,10 @@ macro_rules! generate_swa_entry {
 
             let (qlen, tlen, h0, w_arr, max_qlen, max_tlen, padded) =
                 $crate::alignment::banded_swa_shared::pad_batch::<SIMD_WIDTH>(batch);
-            let (query_soa, target_soa) =
-                $crate::alignment::banded_swa_shared::soa_transform::<SIMD_WIDTH, MAX_SEQ_LEN>(&padded);
+            let (query_soa, target_soa) = $crate::alignment::banded_swa_shared::soa_transform::<
+                SIMD_WIDTH,
+                MAX_SEQ_LEN,
+            >(&padded);
 
             let params = $crate::alignment::banded_swa_kernel::KernelParams {
                 batch,

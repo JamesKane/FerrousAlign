@@ -9,7 +9,6 @@ use crate::alignment::banded_swa::OutScore;
 use crate::compute::simd_abstraction as simd;
 use crate::compute::simd_abstraction::SimdEngine; // bring trait into scope for method resolution
 
-
 /// Minimal SIMD engine contract for the shared SW kernel.
 ///
 /// Note: We intentionally keep this trait very small initially. As the shared
@@ -101,7 +100,10 @@ pub struct KernelParams<'a> {
 /// out‑of‑bounds loads, and that `qlen/tlen/h0/w` slices have length `W`.
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
-pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) -> Vec<OutScore> where <E as SwSimd>::V8: std::fmt::Debug {
+pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) -> Vec<OutScore>
+where
+    <E as SwSimd>::V8: std::fmt::Debug,
+{
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
 
     let lanes = W;
@@ -133,11 +135,11 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
     // DP buffers
     let mut h_matrix = vec![0i8; qmax * lanes];
     let mut e_matrix = vec![0i8; qmax * lanes];
-    
+
     // Initialize first row
     let h0_vec = E::loadu_epi8(params.h0.as_ptr());
     E::storeu_epi8(h_matrix.as_mut_ptr(), h0_vec);
-    
+
     let h1_vec = E::subs_epi8(h0_vec, oe_ins_vec);
     let h1_vec = E::max_epi8(h1_vec, zero);
     E::storeu_epi8(h_matrix.as_mut_ptr().add(lanes), h1_vec);
@@ -149,13 +151,13 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
         E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_curr);
         h_prev = h_curr;
     }
-    
+
     // Track maxima per lane
     let mut max_scores_vec = E::loadu_epi8(params.h0.as_ptr());
     let mut max_i_vec = zero;
     let mut max_j_vec = zero;
-    
-    let mut beg = [0i8; W];
+
+    let beg = [0i8; W];
     let mut end = [0i8; W];
     let mut terminated = [false; W];
     let mut terminated_count = 0;
@@ -177,7 +179,7 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
         let mut h_diag = E::loadu_epi8(h_matrix.as_ptr());
 
         let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * lanes) as *const i8);
-        
+
         let i_vec = E::set1_epi8(i as i8);
         let w_vec = E::loadu_epi8(params.w.as_ptr());
         let beg_vec = E::loadu_epi8(beg.as_ptr());
@@ -208,14 +210,14 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
         for j in 0..qmax {
             let h_top = E::loadu_epi8(h_matrix.as_ptr().add(j * lanes));
             let e_prev = E::loadu_epi8(e_matrix.as_ptr().add(j * lanes));
-            
+
             let h_diag_curr = h_diag;
             h_diag = h_top;
 
             let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * lanes) as *const i8);
             let eq_mask = E::cmpeq_epi8(s1, s2);
             let score_vec = E::blendv_epi8(mismatch_vec, match_vec, eq_mask);
-            
+
             let or_bases = E::or_si128(s1, s2);
             let mut m_vec = E::adds_epi8(h_diag_curr, score_vec);
             m_vec = E::blendv_epi8(m_vec, zero, or_bases);
@@ -225,12 +227,12 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
             let e_open = E::max_epi8(e_open, zero);
             let e_extend = E::subs_epi8(e_prev, e_del_vec);
             let e_val = E::max_epi8(e_open, e_extend);
-            
+
             let f_open = E::subs_epi8(m_vec, oe_ins_vec);
             let f_open = E::max_epi8(f_open, zero);
             let f_extend = E::subs_epi8(f_vec, e_ins_vec);
             f_vec = E::max_epi8(f_open, f_extend);
-            
+
             let mut h_val = E::max_epi8(m_vec, e_val);
             h_val = E::max_epi8(h_val, f_vec);
 
@@ -238,14 +240,14 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
             let in_band_left = E::cmpgt_epi8(j_vec, E::subs_epi8(current_beg_vec, one_vec));
             let in_band_right = E::cmpgt_epi8(current_end_vec, j_vec);
             let in_band_mask = E::and_si128(in_band_left, in_band_right);
-            
+
             let combined_mask = E::and_si128(in_band_mask, term_mask);
             h_val = E::and_si128(h_val, combined_mask);
             let e_val_masked = E::and_si128(e_val, combined_mask);
 
             E::storeu_epi8(h_matrix.as_mut_ptr().add(j * lanes), h_val);
             E::storeu_epi8(e_matrix.as_mut_ptr().add(j * lanes), e_val_masked);
-            
+
             let is_greater = E::cmpgt_epi8(h_val, max_scores_vec);
             max_scores_vec = E::max_epi8(h_val, max_scores_vec);
 
@@ -305,7 +307,7 @@ pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) ->
             max_offset: 0,
         });
     }
-    
+
     out_scores.truncate(params.batch.len());
     out_scores
 }
@@ -323,41 +325,65 @@ impl SwSimd for SwEngine128 {
     const LANES: usize = 16;
 
     #[inline(always)]
-    unsafe fn setzero_epi8() -> Self::V8 { simd::SimdEngine128::setzero_epi8() }
+    unsafe fn setzero_epi8() -> Self::V8 {
+        unsafe { simd::SimdEngine128::setzero_epi8() }
+    }
     #[inline(always)]
-    unsafe fn set1_epi8(x: i8) -> Self::V8 { simd::SimdEngine128::set1_epi8(x) }
+    unsafe fn set1_epi8(x: i8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::set1_epi8(x) }
+    }
     #[inline(always)]
     unsafe fn loadu_epi8(ptr: *const i8) -> Self::V8 {
-        simd::SimdEngine128::loadu_si128(ptr as *const _)
+        unsafe { simd::SimdEngine128::loadu_si128(ptr as *const _) }
     }
     #[inline(always)]
     unsafe fn storeu_epi8(ptr: *mut i8, v: Self::V8) {
-        simd::SimdEngine128::storeu_si128(ptr as *mut _, v)
+        unsafe { simd::SimdEngine128::storeu_si128(ptr as *mut _, v) }
     }
     #[inline(always)]
-    unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::adds_epi8(a, b) }
+    unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::adds_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::subs_epi8(a, b) }
+    unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::subs_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::max_epi8(a, b) }
+    unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::max_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::min_epi8(a, b) }
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::min_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpeq_epi8(a, b) }
+    unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::cmpeq_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpgt_epi8(b, a) }
+    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::cmpgt_epi8(b, a) }
+    }
     #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
-        simd::SimdEngine128::blendv_epi8(a, b, mask)
+        unsafe { simd::SimdEngine128::blendv_epi8(a, b, mask) }
     }
     #[inline(always)]
-    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::and_si128(a,b) }
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::and_si128(a, b) }
+    }
     #[inline(always)]
-    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::or_si128(a,b) }
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::or_si128(a, b) }
+    }
     #[inline(always)]
-    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::cmpgt_epi8(a, b) }
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::cmpgt_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine128::min_epu8(a, b) }
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine128::min_epu8(a, b) }
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -373,13 +399,15 @@ mod tests {
     #[test]
     fn kernel_sw_vs_avx2_basic_parity() {
         // 2-bit encoded A,C,G,T = 0,1,2,3
-        let q: [u8; 8] = [0,1,2,3,0,1,2,3];
-        let t: [u8; 8] = [0,1,2,3,0,1,2,3];
+        let q: [u8; 8] = [0, 1, 2, 3, 0, 1, 2, 3];
+        let t: [u8; 8] = [0, 1, 2, 3, 0, 1, 2, 3];
         let batch = vec![(8, &q[..], 8, &t[..], 10, 0)];
 
         // Simple scoring: match=1, mismatch=0
         let mut mat = [0i8; 25];
-        for i in 0..4 { mat[i*5 + i] = 1; }
+        for i in 0..4 {
+            mat[i * 5 + i] = 1;
+        }
 
         // Call AVX2 reference path (existing implementation)
         let avx2_out = unsafe {
@@ -416,7 +444,11 @@ mod tests {
 
         assert_eq!(shared_out.len(), avx2_out.len());
         for (a, b) in shared_out.iter().zip(avx2_out.iter()) {
-            assert_eq!(a.score, b.score, "score mismatch: shared={} avx2={}", a.score, b.score);
+            assert_eq!(
+                a.score, b.score,
+                "score mismatch: shared={} avx2={}",
+                a.score, b.score
+            );
         }
     }
 
@@ -424,13 +456,15 @@ mod tests {
     #[test]
     fn kernel_sw_vs_avx2_mismatch_case() {
         // Deliberate mismatches
-        let q: [u8; 8] = [0,0,0,0,1,1,1,1];
-        let t: [u8; 8] = [3,3,3,3,2,2,2,2];
+        let q: [u8; 8] = [0, 0, 0, 0, 1, 1, 1, 1];
+        let t: [u8; 8] = [3, 3, 3, 3, 2, 2, 2, 2];
         let batch = vec![(8, &q[..], 8, &t[..], 10, 0)];
 
         // Simple scoring: match=1, mismatch=0
         let mut mat = [0i8; 25];
-        for i in 0..4 { mat[i*5 + i] = 1; }
+        for i in 0..4 {
+            mat[i * 5 + i] = 1;
+        }
 
         let avx2_out = unsafe {
             crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
@@ -464,7 +498,11 @@ mod tests {
 
         assert_eq!(shared_out.len(), avx2_out.len());
         for (a, b) in shared_out.iter().zip(avx2_out.iter()) {
-            assert_eq!(a.score, b.score, "score mismatch: shared={} avx2={}", a.score, b.score);
+            assert_eq!(
+                a.score, b.score,
+                "score mismatch: shared={} avx2={}",
+                a.score, b.score
+            );
         }
     }
 }
@@ -480,41 +518,65 @@ impl SwSimd for SwEngine256 {
     const LANES: usize = 32;
 
     #[inline(always)]
-    unsafe fn setzero_epi8() -> Self::V8 { simd::SimdEngine256::setzero_epi8() }
+    unsafe fn setzero_epi8() -> Self::V8 {
+        unsafe { simd::SimdEngine256::setzero_epi8() }
+    }
     #[inline(always)]
-    unsafe fn set1_epi8(x: i8) -> Self::V8 { simd::SimdEngine256::set1_epi8(x) }
+    unsafe fn set1_epi8(x: i8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::set1_epi8(x) }
+    }
     #[inline(always)]
     unsafe fn loadu_epi8(ptr: *const i8) -> Self::V8 {
-        simd::SimdEngine256::loadu_si128(ptr as *const _)
+        unsafe { simd::SimdEngine256::loadu_si128(ptr as *const _) }
     }
     #[inline(always)]
     unsafe fn storeu_epi8(ptr: *mut i8, v: Self::V8) {
-        simd::SimdEngine256::storeu_si128(ptr as *mut _, v)
+        unsafe { simd::SimdEngine256::storeu_si128(ptr as *mut _, v) }
     }
     #[inline(always)]
-    unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::adds_epi8(a, b) }
+    unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::adds_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::subs_epi8(a, b) }
+    unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::subs_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::max_epi8(a, b) }
+    unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::max_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::min_epi8(a, b) }
+    unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::min_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpeq_epi8(a, b) }
+    unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::cmpeq_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpgt_epi8(b, a) }
+    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::cmpgt_epi8(b, a) }
+    }
     #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
-        simd::SimdEngine256::blendv_epi8(a, b, mask)
+        unsafe { simd::SimdEngine256::blendv_epi8(a, b, mask) }
     }
     #[inline(always)]
-    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::and_si128(a,b) }
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::and_si128(a, b) }
+    }
     #[inline(always)]
-    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::or_si128(a,b) }
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::or_si128(a, b) }
+    }
     #[inline(always)]
-    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::cmpgt_epi8(a, b) }
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::cmpgt_epi8(a, b) }
+    }
     #[inline(always)]
-    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine256::min_epu8(a, b) }
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        unsafe { simd::SimdEngine256::min_epu8(a, b) }
+    }
 }
 
 /// AVX-512 512-bit engine adapter (64 lanes of i8)
@@ -528,9 +590,13 @@ impl SwSimd for SwEngine512 {
     const LANES: usize = 64;
 
     #[inline(always)]
-    unsafe fn setzero_epi8() -> Self::V8 { simd::SimdEngine512::setzero_epi8() }
+    unsafe fn setzero_epi8() -> Self::V8 {
+        simd::SimdEngine512::setzero_epi8()
+    }
     #[inline(always)]
-    unsafe fn set1_epi8(x: i8) -> Self::V8 { simd::SimdEngine512::set1_epi8(x) }
+    unsafe fn set1_epi8(x: i8) -> Self::V8 {
+        simd::SimdEngine512::set1_epi8(x)
+    }
     #[inline(always)]
     unsafe fn loadu_epi8(ptr: *const i8) -> Self::V8 {
         simd::SimdEngine512::loadu_si128(ptr as *const _)
@@ -540,29 +606,47 @@ impl SwSimd for SwEngine512 {
         simd::SimdEngine512::storeu_si128(ptr as *mut _, v)
     }
     #[inline(always)]
-    unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::adds_epi8(a, b) }
+    unsafe fn adds_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::adds_epi8(a, b)
+    }
     #[inline(always)]
-    unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::subs_epi8(a, b) }
+    unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::subs_epi8(a, b)
+    }
     #[inline(always)]
-    unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::max_epi8(a, b) }
+    unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::max_epi8(a, b)
+    }
     #[inline(always)]
     unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         simd::SimdEngine512::min_epi8(a, b)
     }
     #[inline(always)]
-    unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpeq_epi8(a, b) }
+    unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::cmpeq_epi8(a, b)
+    }
     #[inline(always)]
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpgt_epi8(b, a) }
+    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::cmpgt_epi8(b, a)
+    }
     #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         simd::SimdEngine512::blendv_epi8(a, b, mask)
     }
     #[inline(always)]
-    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::and_si128(a,b) }
+    unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::and_si128(a, b)
+    }
     #[inline(always)]
-    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::or_si128(a,b) }
+    unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::or_si128(a, b)
+    }
     #[inline(always)]
-    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::cmpgt_epi8(a, b) }
+    unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::cmpgt_epi8(a, b)
+    }
     #[inline(always)]
-    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 { simd::SimdEngine512::min_epu8(a, b) }
+    unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 {
+        simd::SimdEngine512::min_epu8(a, b)
+    }
 }

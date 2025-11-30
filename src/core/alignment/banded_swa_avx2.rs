@@ -10,7 +10,6 @@
 
 use crate::alignment::banded_swa::OutScore;
 use crate::alignment::banded_swa_kernel::SwEngine256;
-use crate::alignment::banded_swa_shared::{pad_batch, soa_transform, pack_outscores};
 use crate::alignment::workspace::with_workspace;
 use crate::compute::simd_abstraction::SimdEngine256 as Engine;
 use crate::generate_swa_entry;
@@ -96,7 +95,7 @@ pub unsafe fn simd_banded_swa_batch16_int16(
     }
 
     // Clamp to MAX_SEQ_LEN
-    max_qlen = max_qlen.min(MAX_SEQ_LEN as i32);  // TODO: Orphaned code?  Not read after assignment
+    max_qlen = max_qlen.min(MAX_SEQ_LEN as i32); // TODO: Orphaned code?  Not read after assignment
     max_tlen = max_tlen.min(MAX_SEQ_LEN as i32);
 
     // ==================================================================
@@ -429,8 +428,6 @@ pub unsafe fn simd_banded_swa_batch16_int16(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{Rng, SeedableRng};
-    use rand::rngs::StdRng;
 
     #[test]
     fn test_simd_banded_swa_batch16_int16_basic() {
