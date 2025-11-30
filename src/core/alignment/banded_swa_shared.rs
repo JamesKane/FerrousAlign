@@ -90,3 +90,66 @@ pub fn pack_outscores<const W: usize>(
     }
     out
 }
+
+// ----------------------------------------------------------------------------
+// Macro: generate_swa_entry!
+// ----------------------------------------------------------------------------
+// This macro will be used to emit thin per‑ISA entry points that:
+// 1) Pad the batch and extract lane parameters
+// 2) Transform sequences to SoA (or no‑op once SoA‑first lands)
+// 3) Build KernelParams and call the shared kernel
+//
+// Note: Defining this macro does not change behavior. It will be expanded and
+// used by ISA modules in subsequent steps once the shared kernel is implemented.
+#[macro_export]
+macro_rules! generate_swa_entry {
+    (
+        name = $name:ident,
+        width = $W:expr,
+        engine = $E:ty,
+        cfg = $cfg:meta,
+    ) => {
+        #[$cfg]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        pub unsafe fn $name(
+            batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
+            o_del: i32,
+            e_del: i32,
+            o_ins: i32,
+            e_ins: i32,
+            zdrop: i32,
+            mat: &[i8; 25],
+            m: i32,
+        ) -> Vec<$crate::alignment::banded_swa::OutScore> {
+            const SIMD_WIDTH: usize = $W;
+            const MAX_SEQ_LEN: usize = 128;
+
+            let (qlen, tlen, h0, w_arr, max_qlen, max_tlen, padded) =
+                $crate::alignment::banded_swa_shared::pad_batch::<SIMD_WIDTH>(batch);
+            let (query_soa, target_soa) =
+                $crate::alignment::banded_swa_shared::soa_transform::<SIMD_WIDTH, MAX_SEQ_LEN>(&padded);
+
+            let params = $crate::alignment::banded_swa_kernel::KernelParams {
+                batch,
+                query_soa: &query_soa,
+                target_oa: &target_soa,
+                qlen: &qlen,
+                tlen: &tlen,
+                h0: &h0,
+                w: &w_arr,
+                max_qlen,
+                max_tlen,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                zdrop,
+                mat,
+                m,
+            };
+
+            // Placeholder call; returns empty Vec until the shared kernel is implemented.
+            $crate::alignment::banded_swa_kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+        }
+    };
+}
