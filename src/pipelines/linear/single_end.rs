@@ -419,7 +419,7 @@ fn process_single_end_soa(
 
         let pac_slice: &[u8] = &pac_data_clone;
         let pac_ref = Arc::new(pac_slice);
-        let alignments = process_sub_batch_internal_soa(
+        let soa_alignments = process_sub_batch_internal_soa(
             &bwa_idx_clone,
             &pac_ref,
             &opt_clone,
@@ -432,6 +432,9 @@ fn process_single_end_soa(
         *reads_processed += batch_size as u64;
 
         // Stage 2: Write output sequentially
+        // TODO PR4: Replace this with direct SoA-aware SAM writing (Phase 3)
+        let alignments = soa_alignments.to_aos();
+
         let rg_id = opt
             .read_group
             .as_ref()

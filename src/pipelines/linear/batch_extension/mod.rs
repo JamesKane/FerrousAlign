@@ -9,7 +9,7 @@ pub mod orchestration;
 pub mod orchestration_soa;
 pub mod finalize_soa;
 
-pub use types::*;   // keep external API stable
+pub use types::*;   // keep external API stable (includes SoAAlignmentResult from PR4)
 pub use dispatch::*;
 pub use orchestration::*; // Re-export orchestration functions
 pub use orchestration_soa::process_sub_batch_internal_soa;

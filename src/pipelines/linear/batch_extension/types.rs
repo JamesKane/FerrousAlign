@@ -305,3 +305,209 @@ pub struct SoAReadExtensionContext {
     pub chain_ref_segments: Vec<Option<(u64, u64)>>,
 }
 
+/// SoA-native alignment results (PR4)
+///
+/// Structure-of-Arrays representation of batch-wide alignment results.
+/// This eliminates the need to build individual Alignment structs before SAM output,
+/// allowing direct batch-wise SAM record generation.
+///
+/// All alignments are stored contiguously with per-read boundaries for indexing.
+#[derive(Debug, Clone)]
+pub struct SoAAlignmentResult {
+    // Scalar SAM fields (one per alignment)
+    /// Query/read names
+    pub query_names: Vec<String>,
+    /// SAM flags
+    pub flags: Vec<u16>,
+    /// Reference sequence names (chromosome)
+    pub ref_names: Vec<String>,
+    /// Reference sequence IDs (for paired-end scoring)
+    pub ref_ids: Vec<usize>,
+    /// 0-based leftmost mapping positions
+    pub positions: Vec<u64>,
+    /// Mapping qualities
+    pub mapqs: Vec<u8>,
+    /// Alignment scores
+    pub scores: Vec<i32>,
+
+    // CIGAR strings (flattened with boundaries)
+    /// CIGAR operation codes (M, I, D, S, etc.)
+    pub cigar_ops: Vec<u8>,
+    /// CIGAR operation lengths
+    pub cigar_lens: Vec<i32>,
+    /// Per-alignment boundaries into cigar_ops/cigar_lens: (start_idx, count)
+    pub cigar_boundaries: Vec<(usize, usize)>,
+
+    // Mate information
+    /// Mate reference names
+    pub rnexts: Vec<String>,
+    /// Mate positions
+    pub pnexts: Vec<u64>,
+    /// Template lengths
+    pub tlens: Vec<i32>,
+
+    // Sequence and quality (flattened with boundaries)
+    /// Query sequences (concatenated bytes)
+    pub seqs: Vec<u8>,
+    /// Quality scores (concatenated bytes)
+    pub quals: Vec<u8>,
+    /// Per-alignment boundaries into seqs/quals: (start_offset, length)
+    pub seq_boundaries: Vec<(usize, usize)>,
+
+    // SAM tags (flattened with boundaries)
+    /// Tag names (concatenated strings)
+    pub tag_names: Vec<String>,
+    /// Tag values (concatenated strings)
+    pub tag_values: Vec<String>,
+    /// Per-alignment boundaries into tag_names/tag_values: (start_idx, count)
+    pub tag_boundaries: Vec<(usize, usize)>,
+
+    // Internal fields for alignment selection (not output to SAM)
+    /// Query start positions (0-based)
+    pub query_starts: Vec<i32>,
+    /// Query end positions (exclusive)
+    pub query_ends: Vec<i32>,
+    /// Seed coverage lengths
+    pub seed_coverages: Vec<i32>,
+    /// Hash values for deterministic tie-breaking
+    pub hashes: Vec<u64>,
+    /// Repetitive fraction values
+    pub frac_reps: Vec<f32>,
+
+    // Per-read boundaries
+    /// Boundaries for alignments belonging to each read: (start_idx, count)
+    /// Index i gives the range of alignments for read i
+    pub read_alignment_boundaries: Vec<(usize, usize)>,
+}
+
+impl SoAAlignmentResult {
+    /// Create a new empty result with pre-allocated capacity
+    pub fn with_capacity(alignment_capacity: usize, num_reads: usize) -> Self {
+        Self {
+            query_names: Vec::with_capacity(alignment_capacity),
+            flags: Vec::with_capacity(alignment_capacity),
+            ref_names: Vec::with_capacity(alignment_capacity),
+            ref_ids: Vec::with_capacity(alignment_capacity),
+            positions: Vec::with_capacity(alignment_capacity),
+            mapqs: Vec::with_capacity(alignment_capacity),
+            scores: Vec::with_capacity(alignment_capacity),
+            cigar_ops: Vec::with_capacity(alignment_capacity * 10), // Estimate ~10 ops per alignment
+            cigar_lens: Vec::with_capacity(alignment_capacity * 10),
+            cigar_boundaries: Vec::with_capacity(alignment_capacity),
+            rnexts: Vec::with_capacity(alignment_capacity),
+            pnexts: Vec::with_capacity(alignment_capacity),
+            tlens: Vec::with_capacity(alignment_capacity),
+            seqs: Vec::with_capacity(alignment_capacity * 150), // Estimate ~150bp per read
+            quals: Vec::with_capacity(alignment_capacity * 150),
+            seq_boundaries: Vec::with_capacity(alignment_capacity),
+            tag_names: Vec::with_capacity(alignment_capacity * 3), // Estimate ~3 tags per alignment
+            tag_values: Vec::with_capacity(alignment_capacity * 3),
+            tag_boundaries: Vec::with_capacity(alignment_capacity),
+            query_starts: Vec::with_capacity(alignment_capacity),
+            query_ends: Vec::with_capacity(alignment_capacity),
+            seed_coverages: Vec::with_capacity(alignment_capacity),
+            hashes: Vec::with_capacity(alignment_capacity),
+            frac_reps: Vec::with_capacity(alignment_capacity),
+            read_alignment_boundaries: Vec::with_capacity(num_reads),
+        }
+    }
+
+    /// Create a new empty result
+    pub fn new() -> Self {
+        Self::with_capacity(512, 512)
+    }
+
+    /// Number of alignments in the result
+    pub fn len(&self) -> usize {
+        self.flags.len()
+    }
+
+    /// Check if the result is empty
+    pub fn is_empty(&self) -> bool {
+        self.flags.is_empty()
+    }
+
+    /// Number of reads in the result
+    pub fn num_reads(&self) -> usize {
+        self.read_alignment_boundaries.len()
+    }
+}
+
+impl Default for SoAAlignmentResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SoAAlignmentResult {
+    /// Temporary helper: Convert SoAAlignmentResult back to Vec<Vec<Alignment>> (PR4)
+    ///
+    /// This is a bridge function to allow existing SAM output code to work unchanged.
+    /// Will be removed in Phase 3 when write_sam_records_soa is implemented.
+    ///
+    /// # Returns
+    /// Vector of alignment vectors, one per read
+    pub fn to_aos(&self) -> Vec<Vec<super::super::finalization::Alignment>> {
+        let mut result = Vec::with_capacity(self.num_reads());
+
+        for (alignment_start_idx, num_alignments) in &self.read_alignment_boundaries {
+            let mut read_alignments = Vec::with_capacity(*num_alignments);
+
+            for i in 0..*num_alignments {
+                let alignment_idx = alignment_start_idx + i;
+
+                // Reconstruct CIGAR
+                let (cigar_start, cigar_len) = self.cigar_boundaries[alignment_idx];
+                let mut cigar = Vec::with_capacity(cigar_len);
+                for j in 0..cigar_len {
+                    cigar.push((
+                        self.cigar_ops[cigar_start + j],
+                        self.cigar_lens[cigar_start + j],
+                    ));
+                }
+
+                // Reconstruct seq/qual
+                let (seq_start, seq_len) = self.seq_boundaries[alignment_idx];
+                let seq = String::from_utf8_lossy(&self.seqs[seq_start..seq_start + seq_len]).to_string();
+                let qual = String::from_utf8_lossy(&self.quals[seq_start..seq_start + seq_len]).to_string();
+
+                // Reconstruct tags
+                let (tag_start, tag_len) = self.tag_boundaries[alignment_idx];
+                let mut tags = Vec::with_capacity(tag_len);
+                for j in 0..tag_len {
+                    tags.push((
+                        self.tag_names[tag_start + j].clone(),
+                        self.tag_values[tag_start + j].clone(),
+                    ));
+                }
+
+                read_alignments.push(super::super::finalization::Alignment {
+                    query_name: self.query_names[alignment_idx].clone(),
+                    flag: self.flags[alignment_idx],
+                    ref_name: self.ref_names[alignment_idx].clone(),
+                    ref_id: self.ref_ids[alignment_idx],
+                    pos: self.positions[alignment_idx],
+                    mapq: self.mapqs[alignment_idx],
+                    score: self.scores[alignment_idx],
+                    cigar,
+                    rnext: self.rnexts[alignment_idx].clone(),
+                    pnext: self.pnexts[alignment_idx],
+                    tlen: self.tlens[alignment_idx],
+                    seq,
+                    qual,
+                    tags,
+                    query_start: self.query_starts[alignment_idx],
+                    query_end: self.query_ends[alignment_idx],
+                    seed_coverage: self.seed_coverages[alignment_idx],
+                    hash: self.hashes[alignment_idx],
+                    frac_rep: self.frac_reps[alignment_idx],
+                });
+            }
+
+            result.push(read_alignments);
+        }
+
+        result
+    }
+}
+

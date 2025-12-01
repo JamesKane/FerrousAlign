@@ -1,9 +1,10 @@
-/// SoA-native finalization (PR3)
+/// SoA-native finalization (PR3/PR4)
 ///
 /// Converts extension results to final alignments while working with SoA structures.
 /// Extracts per-read data from SoA batches to call existing finalization logic.
+/// PR4: Returns SoAAlignmentResult instead of Vec<Vec<Alignment>>
 
-use super::types::{ReadExtensionMappings, SoAReadExtensionContext};
+use super::types::{ReadExtensionMappings, SoAReadExtensionContext, SoAAlignmentResult};
 use super::super::chaining::Chain;
 use super::super::finalization::Alignment;
 use super::super::index::index::BwaIndex;
@@ -14,7 +15,83 @@ use crate::core::alignment::banded_swa::OutScore;
 use rayon::prelude::*;
 use std::sync::Arc;
 
-/// Finalize alignments from SoA batch data
+/// Convert Vec<Vec<Alignment>> to SoAAlignmentResult (PR4)
+///
+/// This function flattens per-read alignment vectors into Structure-of-Arrays format,
+/// tracking per-read boundaries for later SAM output generation.
+///
+/// # Arguments
+/// * `all_alignments` - Vector of alignment vectors, one per read
+///
+/// # Returns
+/// SoAAlignmentResult with batch-wide alignment data
+fn convert_alignments_to_soa(all_alignments: Vec<Vec<Alignment>>) -> SoAAlignmentResult {
+    let num_reads = all_alignments.len();
+
+    // Estimate total alignment count for capacity
+    let total_alignments: usize = all_alignments.iter().map(|v| v.len()).sum();
+
+    let mut result = SoAAlignmentResult::with_capacity(total_alignments, num_reads);
+
+    // Process each read's alignments
+    for read_alignments in all_alignments {
+        let alignment_start_idx = result.len();
+        let num_alignments = read_alignments.len();
+
+        // Append each alignment's data to SoA arrays
+        for alignment in read_alignments {
+            // Scalar fields
+            result.query_names.push(alignment.query_name);
+            result.flags.push(alignment.flag);
+            result.ref_names.push(alignment.ref_name);
+            result.ref_ids.push(alignment.ref_id);
+            result.positions.push(alignment.pos);
+            result.mapqs.push(alignment.mapq);
+            result.scores.push(alignment.score);
+
+            // CIGAR (flattened with boundaries)
+            let cigar_start_idx = result.cigar_ops.len();
+            for (op, len) in &alignment.cigar {
+                result.cigar_ops.push(*op);
+                result.cigar_lens.push(*len);
+            }
+            result.cigar_boundaries.push((cigar_start_idx, alignment.cigar.len()));
+
+            // Mate information
+            result.rnexts.push(alignment.rnext);
+            result.pnexts.push(alignment.pnext);
+            result.tlens.push(alignment.tlen);
+
+            // Sequence and quality (flattened with boundaries)
+            let seq_start_offset = result.seqs.len();
+            result.seqs.extend_from_slice(alignment.seq.as_bytes());
+            result.quals.extend_from_slice(alignment.qual.as_bytes());
+            result.seq_boundaries.push((seq_start_offset, alignment.seq.len()));
+
+            // Tags (flattened with boundaries)
+            let tag_start_idx = result.tag_names.len();
+            for (tag_name, tag_value) in &alignment.tags {
+                result.tag_names.push(tag_name.clone());
+                result.tag_values.push(tag_value.clone());
+            }
+            result.tag_boundaries.push((tag_start_idx, alignment.tags.len()));
+
+            // Internal fields
+            result.query_starts.push(alignment.query_start);
+            result.query_ends.push(alignment.query_end);
+            result.seed_coverages.push(alignment.seed_coverage);
+            result.hashes.push(alignment.hash);
+            result.frac_reps.push(alignment.frac_rep);
+        }
+
+        // Record per-read boundary
+        result.read_alignment_boundaries.push((alignment_start_idx, num_alignments));
+    }
+
+    result
+}
+
+/// Finalize alignments from SoA batch data (PR4: returns SoAAlignmentResult)
 ///
 /// This function:
 /// 1. Iterates through each read in the batch using SoA boundaries
@@ -22,6 +99,7 @@ use std::sync::Arc;
 /// 3. Calls merge_extension_scores_to_regions to create alignment regions
 /// 4. Generates CIGAR strings for surviving alignments
 /// 5. Marks secondary alignments
+/// 6. Converts to SoAAlignmentResult for batch-wise SAM output (PR4)
 ///
 /// # Arguments
 /// * `bwa_idx` - Reference genome index
@@ -34,7 +112,7 @@ use std::sync::Arc;
 /// * `batch_start_id` - Starting read ID for deterministic hashing
 ///
 /// # Returns
-/// Vector of alignments for each read (same order as input)
+/// SoAAlignmentResult with batch-wide alignment data
 pub fn finalize_alignments_soa(
     bwa_idx: &Arc<&BwaIndex>,
     pac_data: &Arc<&[u8]>,
@@ -44,7 +122,7 @@ pub fn finalize_alignments_soa(
     per_read_left_scores: Vec<Vec<OutScore>>,
     per_read_right_scores: Vec<Vec<OutScore>>,
     batch_start_id: u64,
-) -> Vec<Vec<Alignment>> {
+) -> SoAAlignmentResult {
     let num_reads = soa_context.read_boundaries.len();
 
     // Process each read in parallel
@@ -276,5 +354,6 @@ pub fn finalize_alignments_soa(
         all_alignments[read_idx] = alignments;
     }
 
-    all_alignments
+    // Convert to SoAAlignmentResult (PR4)
+    convert_alignments_to_soa(all_alignments)
 }

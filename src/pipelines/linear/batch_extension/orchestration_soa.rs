@@ -3,7 +3,7 @@
 /// This is the end-to-end SoA implementation that eliminates AoS-to-SoA conversion.
 /// Data flows: SoAReadBatch → find_seeds_batch → chain_seeds_batch → extension → finalization
 
-use super::types::{SoAReadExtensionContext, ExtensionJobBatch};
+use super::types::{SoAReadExtensionContext, ExtensionJobBatch, SoAAlignmentResult};
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::super::seeding::find_seeds_batch;
@@ -15,17 +15,16 @@ use super::finalize_soa::finalize_alignments_soa;
 use crate::core::io::soa_readers::SoAReadBatch;
 use crate::core::alignment::banded_swa::BandedPairWiseSW;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use super::super::finalization::Alignment;
 use std::sync::Arc;
 
-/// Process a sub-batch using end-to-end SoA pipeline (PR3)
+/// Process a sub-batch using end-to-end SoA pipeline (PR3/PR4)
 ///
 /// This function implements the complete SoA flow:
 /// 1. Seeding: find_seeds_batch (SoA) - PR2
 /// 2. Chaining: chain_seeds_batch + filter_chains_batch (SoA) - PR2
 /// 3. Extension: collect_extension_jobs_batch_soa (NEW) - PR3
 /// 4. SIMD scoring: execute_batch_simd_scoring (already SoA)
-/// 5. Finalization: finalize_alignments_soa (NEW) - PR3
+/// 5. Finalization: finalize_alignments_soa (NEW) - PR3, returns SoAAlignmentResult in PR4
 ///
 /// # Arguments
 /// * `bwa_idx` - Reference genome index
@@ -36,7 +35,7 @@ use std::sync::Arc;
 /// * `engine` - SIMD engine type
 ///
 /// # Returns
-/// Vector of alignments for each read (same order as input)
+/// SoAAlignmentResult with batch-wide alignment data (PR4)
 pub fn process_sub_batch_internal_soa(
     bwa_idx: &Arc<&BwaIndex>,
     pac_data: &Arc<&[u8]>,
@@ -44,11 +43,11 @@ pub fn process_sub_batch_internal_soa(
     soa_read_batch: &SoAReadBatch,
     batch_start_id: u64,
     engine: SimdEngineType,
-) -> Vec<Vec<Alignment>> {
+) -> SoAAlignmentResult {
     let batch_size = soa_read_batch.len();
 
     if batch_size == 0 {
-        return Vec::new();
+        return SoAAlignmentResult::new();
     }
 
     log::debug!("SOA_PIPELINE: Processing {} reads with end-to-end SoA", batch_size);
@@ -149,7 +148,7 @@ pub fn process_sub_batch_internal_soa(
     let per_read_right_scores =
         convert_batch_results_to_outscores(&right_results, &right_batch, batch_size);
 
-    // Phase 5: Finalization (PR3 - SoA native)
+    // Phase 5: Finalization (PR3/PR4 - SoA native, returns SoAAlignmentResult)
     let alignments = finalize_alignments_soa(
         bwa_idx,
         pac_data,
@@ -162,7 +161,8 @@ pub fn process_sub_batch_internal_soa(
     );
 
     log::debug!(
-        "SOA_PIPELINE: Finalization complete, {} reads with alignments",
+        "SOA_PIPELINE: Finalization complete, {} reads with {} total alignments",
+        alignments.num_reads(),
         alignments.len()
     );
 
