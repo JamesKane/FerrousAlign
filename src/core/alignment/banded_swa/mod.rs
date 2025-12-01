@@ -18,6 +18,8 @@ pub mod isa_avx512_int8;
 pub mod isa_avx512_int16;
 
 pub mod dispatch;
+pub mod kernel_i16;
+mod engines16;
 
 // Re‑exports (keep external API stable)
 pub use dispatch::*;

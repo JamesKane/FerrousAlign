@@ -23,6 +23,11 @@ Pending/Planned:
 - AVX‑512 migration (int8, then int16) to the shared kernel — postponed until after SoA‑first work.
 - SoA‑first in pipelines to remove per‑call transposes and improve throughput (next feature).
 
+### Status update (post size-guard compliance)
+- SoA‑first pipelines: completed — per‑call AoS→SoA transforms removed on hot paths; transform time near zero in perf runs.
+- Core module split + dispatch consolidation: completed — `core/alignment/banded_swa/` now contains `shared`, `kernel`, `engines`, ISA wrappers, `scalar`, and `dispatch` modules; umbrella re‑exports preserve API.
+- Size guard: all previously flagged files have been reduced or split; every file in target areas is ≤ 500 LOC (most ≤ 300–400 LOC).
+
 ### Scope and priorities
 1. Core SW alignment: `src/core/alignment/banded_swa_{sse_neon,avx2,avx512}.rs` and `banded_swa.rs`.
 2. Pipelines: `src/pipelines/linear/batch_extension.rs`.

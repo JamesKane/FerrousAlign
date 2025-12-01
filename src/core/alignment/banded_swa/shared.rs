@@ -5,6 +5,7 @@
 
 use crate::core::alignment::banded_swa::OutScore;
 
+
 /// Carrier for pre-formatted Structure-of-Arrays (SoA) data.
 ///
 /// This is used for the SoA-first path where data transformation is skipped.
@@ -197,6 +198,46 @@ macro_rules! generate_swa_entry {
 
             // Placeholder call; returns empty Vec until the shared kernel is implemented.
             crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! generate_swa_entry_i16 {
+    ( name = $name:ident, width = $W:expr, engine = $E:ty, cfg = $cfg:meta, target_feature = $tf:expr, ) => {
+        #[$cfg]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        #[cfg_attr(any(), target_feature(enable = $tf))] // leave empty tf for NEON/SSE if desired
+        pub unsafe fn $name(
+            batch: &[(i32,&[u8],i32,&[u8],i32,i32)],
+            o_del: i32, e_del: i32, o_ins: i32, e_ins: i32,
+            zdrop: i32, mat: &[i8; 25], m: i32,
+        ) -> Vec<OutScore> {
+            const W: usize = $W;
+            const MAX: usize = 512; // typical default for i16 path
+            let (qlen, tlen, h0_i8, w_arr, max_q, max_t, padded) =
+                crate::core::alignment::banded_swa::shared::pad_batch::<W>(batch);
+            let (query_soa, target_soa) = crate::core::alignment::banded_swa::shared::soa_transform::<
+                W,
+                MAX,
+            >(&padded); // no-op when pre-SoA
+            let mut h0: [i16; W] = [0; W];
+            for i in 0..W { h0[i] = h0_i8[i] as i16; }
+            let params = crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
+                batch,
+                query_soa: &query_soa,
+                target_soa: &target_soa,
+                qlen: &qlen,
+                tlen: &tlen,
+                h0: &h0,
+                w: &w_arr,
+                max_qlen: max_q,
+                max_tlen: max_t,
+                o_del, e_del, o_ins, e_ins,
+                zdrop,
+                mat, m,
+            };
+            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params)
         }
     };
 }
