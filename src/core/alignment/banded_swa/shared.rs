@@ -217,16 +217,27 @@ macro_rules! generate_swa_entry_i16 {
             const MAX: usize = 512; // typical default for i16 path
             let (qlen, tlen, h0_i8, w_arr, max_q, max_t, padded) =
                 crate::core::alignment::banded_swa::shared::pad_batch::<W>(batch);
-            let (query_soa, target_soa) = crate::core::alignment::banded_swa::shared::soa_transform::<
+            let (query_soa_u8, target_soa_u8) = crate::core::alignment::banded_swa::shared::soa_transform::<
                 W,
                 MAX,
-            >(&padded); // no-op when pre-SoA
+            >(&padded);
+
+            // Convert u8 SoA to i16 SoA for the i16 kernel
+            let mut query_soa_i16 = Vec::with_capacity(query_soa_u8.len());
+            for &val in query_soa_u8.iter() {
+                query_soa_i16.push(val as i16);
+            }
+            let mut target_soa_i16 = Vec::with_capacity(target_soa_u8.len());
+            for &val in target_soa_u8.iter() {
+                target_soa_i16.push(val as i16);
+            }
+
             let mut h0: [i16; W] = [0; W];
             for i in 0..W { h0[i] = h0_i8[i] as i16; }
             let params = crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
                 batch,
-                query_soa: &query_soa,
-                target_soa: &target_soa,
+                query_soa: &query_soa_i16,
+                target_soa: &target_soa_i16,
                 qlen: &qlen,
                 tlen: &tlen,
                 h0: &h0,

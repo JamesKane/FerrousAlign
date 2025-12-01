@@ -11,8 +11,7 @@ use crate::generate_swa_entry_i16;
 
 use super::shared::{pad_batch, soa_transform}; // Updated path
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::__m128i;
+
 
 /// SSE/NEON-optimized banded Smith-Waterman for batches of up to 16 alignments
 /// Processes 16 alignments in parallel (baseline SIMD for all platforms)

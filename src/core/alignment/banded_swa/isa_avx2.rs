@@ -10,9 +10,11 @@
 
 use crate::core::alignment::banded_swa::OutScore;
 use super::engines::SwEngine256;
-use super::engines16::SwEngine256_16;
-use crate::generate_swa_entry_i16;
-use crate::generate_swa_entry;
+
+use crate::alignment::workspace::with_workspace;
+use crate::compute::simd_abstraction::SimdEngine256 as Engine;
+use crate::{generate_swa_entry, generate_swa_entry_i16};
+use crate::alignment::banded_swa::engines16::SwEngine256_16;
 
 // -----------------------------------------------------------------------------
 // Macro-generated wrapper calling the shared kernel (for parity/comparison)
@@ -26,7 +28,17 @@ generate_swa_entry!(
     target_feature = "avx2",
 );
 
-
+/// AVX2-optimized banded Smith-Waterman for batches of up to 16 alignments (16-bit scores)
+///
+/// **SIMD Width**: 16 lanes (256-bit / 16-bit)
+/// **Parallelism**: Processes 16 alignments simultaneously
+/// **Score Range**: Full i16 range (-32768 to 32767) for sequences > 127bp
+///
+/// This is the 16-bit precision version optimized for:
+/// - Sequences longer than 127bp where 8-bit scores would overflow
+/// - Typical 151bp Illumina reads (max score = 151 with match=1)
+///
+/// **Performance**: 2x parallelism over SSE 8-wide (8 vs 16 lanes)
 generate_swa_entry_i16!(
     name = simd_banded_swa_batch16_int16,
     width = 16,

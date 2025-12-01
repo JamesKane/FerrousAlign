@@ -7,12 +7,7 @@
 
 use crate::core::alignment::banded_swa::OutScore;
 
-
-pub use super::engines::{SwEngine128, SwEngine256}; // Re-export publicly
-
-
-
-
+pub use super::engines::{SwEngine128, SwEngine256};
 
 /// Minimal SIMD engine contract for the shared SW kernel.
 ///
@@ -316,5 +311,3 @@ where
     out_scores.truncate(params.batch.len());
     out_scores
 }
-
-

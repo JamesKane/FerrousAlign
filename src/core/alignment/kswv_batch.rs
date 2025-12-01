@@ -399,7 +399,7 @@ pub fn batch_ksw_align(
     gap_extend: i32,
     _debug: bool,
 ) -> usize {
-    use crate::alignment::workspace::with_workspace;
+    use crate::core::alignment::workspace::with_workspace;
 
     // Use thread-local workspace for pre-allocated buffers
     with_workspace(|ws| {
@@ -407,7 +407,7 @@ pub fn batch_ksw_align(
         match engine {
             #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
             SimdEngineType::Engine512 => {
-                use crate::alignment::kswv_avx512;
+                use crate::core::alignment::kswv_avx512;
 
                 // Get AVX-512 workspace buffers
                 let workspace_buffers = ws.ksw_buffers_avx512();
@@ -436,7 +436,7 @@ pub fn batch_ksw_align(
             }
             #[cfg(target_arch = "x86_64")]
             SimdEngineType::Engine256 => {
-                use crate::alignment::kswv_avx2;
+                use crate::core::alignment::kswv_avx2;
 
                 // Get AVX2 workspace buffers
                 let workspace_buffers = ws.ksw_buffers_avx2();
@@ -464,7 +464,7 @@ pub fn batch_ksw_align(
                 }
             }
             SimdEngineType::Engine128 => {
-                use crate::alignment::kswv_sse_neon;
+                use crate::core::alignment::kswv_sse_neon;
 
                 // Get SSE/NEON workspace buffers
                 let workspace_buffers = ws.ksw_buffers_sse_neon();
