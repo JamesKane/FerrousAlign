@@ -207,6 +207,7 @@ macro_rules! generate_swa_entry {
                 zdrop,
                 mat,
                 m,
+                cfg: None,
             };
 
             // Placeholder call; returns empty Vec until the shared kernel is implemented.
@@ -313,6 +314,7 @@ macro_rules! generate_swa_entry_soa {
                 zdrop,
                 mat,
                 m,
+                cfg: None,
             };
 
             crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)

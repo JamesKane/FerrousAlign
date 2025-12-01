@@ -3,20 +3,18 @@
 use crate::core::alignment::banded_swa::OutScore;
 use super::engines::SwEngine128;
 use crate::core::alignment::banded_swa::KernelParams;
-use crate::core::alignment::banded_swa::kernel::sw_kernel;
 use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
 
 use super::engines16::SwEngine128_16;
 use crate::generate_swa_entry_i16;
 use crate::generate_swa_entry_i16_soa;
 
-
-use super::shared::{pad_batch, soa_transform}; // Updated path
+// Legacy helpers no longer needed here; SoA is provided by the arena-backed provider
 use crate::core::alignment::shared_types::AlignJob;
 use crate::core::alignment::shared_types::SoAProvider;
 use crate::core::alignment::workspace::BandedSoAProvider;
-use crate::core::alignment::shared_types::WorkspaceArena;
 use crate::core::alignment::workspace::with_workspace;
+use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
 
 
 
@@ -54,6 +52,12 @@ pub unsafe fn simd_banded_swa_batch16(
     let mut provider = BandedSoAProvider::new();
     let soa = provider.ensure_and_transpose(&jobs[..lanes], W);
 
+    let cfg = KernelConfig {
+        gaps: GapPenalties { o_del, e_del, o_ins, e_ins },
+        banding: Banding { band: 0, zdrop },
+        scoring: ScoringMatrix { mat5x5: mat, m },
+    };
+
     let params = KernelParams {
         batch,
         query_soa: soa.query_soa,
@@ -71,6 +75,7 @@ pub unsafe fn simd_banded_swa_batch16(
         zdrop,
         mat,
         m,
+        cfg: Some(cfg),
     };
 
     // Use workspace-powered kernel variant to avoid per-call row allocations

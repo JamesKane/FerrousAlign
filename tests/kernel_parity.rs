@@ -68,6 +68,7 @@ fn kernel_sw_vs_avx2_basic_parity() {
         zdrop: 100,
         mat: &mat,
         m: 5,
+        cfg: None,
     };
 
     let shared_out = unsafe { sw_kernel::<W, SwEngine256>(&params) };
@@ -133,6 +134,7 @@ fn kernel_sw_vs_avx2_mismatch_case() {
         zdrop: 100,
         mat: &mat,
         m: 5,
+        cfg: None,
     };
     let shared_out = unsafe { sw_kernel::<W, SwEngine256>(&params) };
 

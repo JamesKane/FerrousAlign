@@ -51,19 +51,34 @@ where
     let h_ptr = h_rows.as_ptr() as *mut i8;
     let e_ptr = e_rows.as_ptr() as *mut i8;
 
+    // Prefer bundled config when provided (migration path); otherwise, use legacy scalars
+    let (o_del, e_del, o_ins, e_ins, zdrop, mat, _m) = if let Some(cfg) = params.cfg {
+        (
+            cfg.gaps.o_del,
+            cfg.gaps.e_del,
+            cfg.gaps.o_ins,
+            cfg.gaps.e_ins,
+            cfg.banding.zdrop,
+            cfg.scoring.mat5x5,
+            cfg.scoring.m,
+        )
+    } else {
+        (params.o_del, params.e_del, params.o_ins, params.e_ins, params.zdrop, params.mat, params.m)
+    };
+
     // Score constants (match/mismatch)
-    let match_score = params.mat[0];
-    let mismatch_score = params.mat[1];
+    let match_score = mat[0];
+    let mismatch_score = mat[1];
 
     let zero = E::setzero_epi8();
     let match_vec = E::set1_epi8(match_score);
     let mismatch_vec = E::set1_epi8(mismatch_score);
 
     // Gap penalties (saturating 8-bit arithmetic)
-    let oe_del = (params.o_del + params.e_del) as i8;
-    let oe_ins = (params.o_ins + params.e_ins) as i8;
-    let e_del = params.e_del as i8;
-    let e_ins = params.e_ins as i8;
+    let oe_del = (o_del + e_del) as i8;
+    let oe_ins = (o_ins + e_ins) as i8;
+    let e_del = e_del as i8;
+    let e_ins = e_ins as i8;
     let oe_del_vec = E::set1_epi8(oe_del);
     let oe_ins_vec = E::set1_epi8(oe_ins);
     let e_del_vec = E::set1_epi8(e_del);
@@ -191,7 +206,7 @@ where
         let mut max_score_vals = [0i8; W];
         E::storeu_epi8(max_score_vals.as_mut_ptr(), max_scores_vec);
 
-        if params.zdrop > 0 {
+        if zdrop > 0 {
             for lane in 0..W {
                 if !terminated[lane] && i > 0 && i < params.tlen[lane] as usize {
                     let mut row_max = 0i8;
@@ -213,7 +228,7 @@ where
                     let global_max = max_score_vals[lane];
                     let score_drop = (global_max as i32) - (row_max as i32);
 
-                    if score_drop > params.zdrop {
+                    if score_drop > zdrop {
                         terminated[lane] = true;
                         terminated_count += 1;
                     }
@@ -324,4 +339,9 @@ pub struct KernelParams<'a> {
     /// Scoring matrix (5x5: A,C,G,T,N) and its dimension (typically 5).
     pub mat: &'a [i8; 25],
     pub m: i32,
+
+    /// Optional bundled configuration. During migration, callers may set this
+    /// and kernels can prefer it over the scalar fields. Legacy scalar fields
+    /// remain for compatibility until all call sites are updated.
+    pub cfg: Option<crate::core::alignment::shared_types::KernelConfig<'a>>,
 }
