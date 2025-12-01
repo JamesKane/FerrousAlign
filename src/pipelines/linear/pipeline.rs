@@ -13,7 +13,7 @@ use crate::alignment::utils::reverse_complement_code;
 use crate::alignment::workspace::with_workspace;
 use crate::compute::ComputeBackend;
 use crate::core::io::soa_readers::SoAReadBatch;
-use super::seeding::{SoASeedBatch, SoAEncodedQueryBatch, find_seeds_batch};
+use super::seeding::{SoASeedBatch, find_seeds_batch};
 use super::chaining::{SoAChainBatch, chain_seeds_batch, filter_chains_batch, chain_seeds, Chain, filter_chains};
 
 // ============================================================================
@@ -667,13 +667,13 @@ pub fn build_and_filter_chains_batch(
 #[allow(dead_code)]
 pub fn align_reads_batch_deferred(
     bwa_idx: &BwaIndex,
-    pac_data: &[u8],
+    _pac_data: &[u8],
     read_batch: &SoAReadBatch,
     opt: &MemOpt,
-    compute_backend: ComputeBackend,
+    _compute_backend: ComputeBackend,
 ) -> SoAChainBatch {
     // Phase 1: Batch Seeding
-    let (soa_seed_batch, soa_encoded_query_batch, soa_encoded_query_rc_batch) =
+    let (soa_seed_batch, _soa_encoded_query_batch, _soa_encoded_query_rc_batch) =
         find_seeds_batch(bwa_idx, read_batch, opt);
 
     // Phase 2: Batch Chaining

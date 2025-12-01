@@ -172,8 +172,8 @@ pub fn scalar_dispatch_from_soa(sw_params: &BandedPairWiseSW, batch: &ExtensionJ
     note = "Legacy AoS dispatch; will be removed. Benches should be updated to use SoA entry points."
 )]
 pub fn simd_banded_swa_dispatch(
-    sw_params: &BandedPairWiseSW,
-    batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
+    _sw_params: &BandedPairWiseSW,
+    _batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
 ) -> Vec<OutScore> {
     panic!("Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points.");
 }
@@ -192,8 +192,8 @@ pub fn simd_banded_swa_dispatch(
     note = "Legacy AoS dispatch; will be removed. Benches should be updated to use SoA entry points."
 )]
 pub fn simd_banded_swa_dispatch_int16(
-    sw_params: &BandedPairWiseSW,
-    batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
+    _sw_params: &BandedPairWiseSW,
+    _batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
 ) -> Vec<OutScore> {
     panic!("Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points.");
 }
@@ -218,8 +218,8 @@ pub fn simd_banded_swa_dispatch_int16(
     note = "Legacy scalar dispatch; will be removed. Use the SoA pipeline with deferred CIGAR generation."
 )]
 pub fn simd_banded_swa_dispatch_with_cigar(
-    sw_params: &BandedPairWiseSW,
-    batch: &[(
+    _sw_params: &BandedPairWiseSW,
+    _batch: &[(
         i32,
         Vec<u8>,
         i32,

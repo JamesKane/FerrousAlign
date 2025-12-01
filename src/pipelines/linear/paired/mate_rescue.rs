@@ -1434,8 +1434,8 @@ pub fn execute_compact_batch(
     let (simd_batch_size, _) = crate::compute::simd_abstraction::simd::get_simd_batch_sizes(engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults)
-    let match_score: i8 = 1;
-    let mismatch_penalty: i8 = -4;
+    let _match_score: i8 = 1;
+    let _mismatch_penalty: i8 = -4;
     let o_del: i8 = 6;
     let e_del: i8 = 1;
     let o_ins: i8 = 6;

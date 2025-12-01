@@ -80,7 +80,7 @@ impl SoASeedBatch {
         self.read_seed_boundaries.clear();
     }
 
-    pub fn push(&mut self, seed: &Seed, read_idx: usize) {
+    pub fn push(&mut self, seed: &Seed, _read_idx: usize) {
         self.query_pos.push(seed.query_pos);
         self.ref_pos.push(seed.ref_pos);
         self.len.push(seed.len);

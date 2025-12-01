@@ -446,7 +446,7 @@ pub fn chain_seeds_batch(
             let mut merged = false;
 
             let (lower, _upper) = tree.interval(&seed_rpos);
-            if let Some(&(chain_pos, chain_local_idx)) = lower {
+            if let Some(&(_chain_pos, chain_local_idx)) = lower {
                 let chain = &mut current_read_chains[chain_local_idx];
 
                 if chain.is_rev == soa_seed_batch.is_rev[global_seed_idx] {

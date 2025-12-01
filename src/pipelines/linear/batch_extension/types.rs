@@ -3,7 +3,7 @@ use std::cell::RefCell;
 
 use super::super::chaining::{Chain, SoAChainBatch};
 use super::super::region::{ChainExtensionMapping};
-use super::super::seeding::{Seed, SoASeedBatch, SoAEncodedQueryBatch};
+use super::super::seeding::{Seed, SoASeedBatch};
 
 
 thread_local! {
