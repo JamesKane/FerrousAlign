@@ -84,6 +84,36 @@ pub struct SwSoA16<'a> {
     pub max_tlen: i32,
 }
 
+/// Structure-of-Arrays carrier for kswv (horizontal SIMD) kernels using u8 lanes.
+///
+/// This mirrors `SwSoA` but names the sequences as `ref_soa`/`query_soa` to
+/// match ksw terminology. Sequences are laid out as `pos * lanes + lane` and
+/// padded with 0xFF sentinel up to `max_*len` for safe loads.
+#[derive(Clone, Copy, Debug)]
+pub struct KswSoA<'a> {
+    /// Reference (target) sequences in SoA layout: `ref_soa[pos * lanes + lane]`.
+    pub ref_soa: &'a [u8],
+    /// Query sequences in SoA layout: `query_soa[pos * lanes + lane]`.
+    pub query_soa: &'a [u8],
+    /// Per-lane query lengths (clamped to i8 domain where applicable).
+    pub qlen: &'a [i8],
+    /// Per-lane reference lengths (clamped to i8 domain where applicable).
+    pub tlen: &'a [i8],
+    /// Optional per-lane band width (some ksw variants use this as window size).
+    pub band: &'a [i8],
+    /// Optional per-lane initial score (not always used in ksw paths).
+    pub h0: &'a [i8],
+    /// SIMD stride (lanes) for the prepared SoA.
+    pub lanes: usize,
+    /// Maximum clamped query length across lanes.
+    pub max_qlen: i32,
+    /// Maximum clamped reference length across lanes.
+    pub max_tlen: i32,
+}
+
+/// Kernel configuration for kswv paths. Reuses the generic `KernelConfig`.
+pub type KswKernelConfig<'a> = KernelConfig<'a>;
+
 /// Provider of reusable SoA buffers. Implementations should guarantee 64-byte
 /// alignment and capacity sufficient for `(lanes, max_qlen, max_tlen)`.
 pub trait SoAProvider {
