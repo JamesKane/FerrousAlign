@@ -6,6 +6,7 @@ use crate::generate_swa_entry_soa;
 use super::engines::SwEngine512;
 use crate::core::alignment::banded_swa::KernelParams;
 use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
+use crate::core::alignment::banded_swa::kernel_avx512::sw_kernel_avx512_with_ws;
 use crate::core::alignment::shared_types::{AlignJob, SoAProvider};
 use crate::core::alignment::workspace::{BandedSoAProvider, with_workspace};
 use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
@@ -70,8 +71,8 @@ pub unsafe fn simd_banded_swa_batch64(
         cfg: Some(cfg),
     };
 
-    // Use workspace-powered kernel variant to avoid per-call row allocations
-    with_workspace(|ws| sw_kernel_with_ws::<W, SwEngine512>(&params, ws))
+    // Use AVX-512 fast path (falls back to generic kernel internally for now)
+    with_workspace(|ws| sw_kernel_avx512_with_ws::<W, SwEngine512>(&params, ws))
 }
 
 generate_swa_entry_soa!(
