@@ -12,6 +12,7 @@ pub mod kswv_batch; // Horizontal SIMD batching infrastructure
 pub mod kswv_sse_neon; // Baseline 128-bit horizontal SIMD kernel
 pub mod utils;
 pub mod workspace; // Thread-local buffer pools for allocation reuse
+pub mod shared_types; // Shared SoA carriers, config bundles, and arena traits
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

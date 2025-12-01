@@ -27,6 +27,7 @@
 //! additional performance improvement on top of Priority 1 (workspace allocation).
 
 use crate::pipelines::linear::seeding::SMEM;
+use crate::core::alignment::shared_types::{WorkspaceArena, SoAProvider, AlignJob, SwSoA};
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 use std::ptr::NonNull;
@@ -220,6 +221,20 @@ pub struct AlignmentWorkspace {
     ksw_f_buf_avx512: AlignedVec<u8>,
     /// Row max buffer for horizontal SIMD (8-bit, 64 lanes)
     ksw_row_max_buf_avx512: AlignedVec<u8>,
+
+    // ========================================================================
+    // Banded SW (generic) reusable DP rows (64-byte aligned)
+    // ========================================================================
+    /// H/E/F rows for int8 scoring kernels (size managed via ensure_rows)
+    banded_h_u8: AlignedVec<i8>,
+    banded_e_u8: AlignedVec<i8>,
+    banded_f_u8: AlignedVec<i8>,
+    /// H/E/F rows for int16 scoring kernels (size managed via ensure_rows)
+    banded_h_i16: AlignedVec<i16>,
+    banded_e_i16: AlignedVec<i16>,
+    banded_f_i16: AlignedVec<i16>,
+    /// Tracked shape for current allocations (for debugging/validation)
+    banded_shape: (usize, usize, usize), // (lanes, qmax, tmax)
 }
 
 impl AlignmentWorkspace {
@@ -283,6 +298,15 @@ impl AlignmentWorkspace {
             ksw_row_max_buf_avx512: AlignedVec::with_capacity(
                 (KSW_MAX_SEQ_LEN + 1) * KSW_SIMD_WIDTH_AVX512,
             ),
+
+            // Banded SW generic rows (empty; sized on demand)
+            banded_h_u8: AlignedVec::with_capacity(0),
+            banded_e_u8: AlignedVec::with_capacity(0),
+            banded_f_u8: AlignedVec::with_capacity(0),
+            banded_h_i16: AlignedVec::with_capacity(0),
+            banded_e_i16: AlignedVec::with_capacity(0),
+            banded_f_i16: AlignedVec::with_capacity(0),
+            banded_shape: (0, 0, 0),
         }
     }
 
@@ -392,6 +416,167 @@ impl AlignmentWorkspace {
     #[inline]
     pub const fn ksw_max_seq_len() -> usize {
         KSW_MAX_SEQ_LEN
+    }
+
+    #[inline]
+    fn ensure_aligned_capacity_u8(buf: &mut AlignedVec<i8>, needed: usize) {
+        if buf.capacity < needed {
+            *buf = AlignedVec::with_capacity(needed);
+        } else {
+            // update logical length if we ever use it as a slice view
+            buf.len = needed;
+        }
+    }
+
+    #[inline]
+    fn ensure_aligned_capacity_i16(buf: &mut AlignedVec<i16>, needed: usize) {
+        if buf.capacity < needed {
+            *buf = AlignedVec::with_capacity(needed);
+        } else {
+            buf.len = needed;
+        }
+    }
+}
+
+impl WorkspaceArena for AlignmentWorkspace {
+    /// Ensure internal DP rows for the requested shape and element size.
+    /// All rows are 64-byte aligned by construction of AlignedVec.
+    fn ensure_rows(&mut self, lanes: usize, qmax: usize, tmax: usize, elem_size: usize) {
+        let _ = tmax; // reserved for future use (row-per-target optimizations)
+        let needed = lanes.saturating_mul(qmax.max(1));
+        if elem_size == std::mem::size_of::<i8>() {
+            Self::ensure_aligned_capacity_u8(&mut self.banded_h_u8, needed);
+            Self::ensure_aligned_capacity_u8(&mut self.banded_e_u8, needed);
+            Self::ensure_aligned_capacity_u8(&mut self.banded_f_u8, needed);
+        } else if elem_size == std::mem::size_of::<i16>() {
+            Self::ensure_aligned_capacity_i16(&mut self.banded_h_i16, needed);
+            Self::ensure_aligned_capacity_i16(&mut self.banded_e_i16, needed);
+            Self::ensure_aligned_capacity_i16(&mut self.banded_f_i16, needed);
+        }
+        self.banded_shape = (lanes, qmax, tmax);
+    }
+
+    fn rows_u8(&mut self) -> Option<(&mut [i8], &mut [i8], &mut [i8])> {
+        Some((
+            self.banded_h_u8.as_mut_slice(),
+            self.banded_e_u8.as_mut_slice(),
+            self.banded_f_u8.as_mut_slice(),
+        ))
+    }
+
+    fn rows_u16(&mut self) -> Option<(&mut [i16], &mut [i16], &mut [i16])> {
+        Some((
+            self.banded_h_i16.as_mut_slice(),
+            self.banded_e_i16.as_mut_slice(),
+            self.banded_f_i16.as_mut_slice(),
+        ))
+    }
+}
+
+// ============================================================================
+// SoA Provider for banded SW (u8 scoring) with 64-byte alignment
+// ============================================================================
+
+/// Reusable 64B-aligned buffers that hold interleaved SoA sequences for the
+/// banded SW kernels (u8 scoring path). This avoids per-call heap allocations.
+pub struct BandedSoAProvider {
+    query_soa: AlignedVec<u8>,
+    target_soa: AlignedVec<u8>,
+    // Per-lane scalar metadata (i8 lanes for u8 scoring kernels)
+    qlen: Vec<i8>,
+    tlen: Vec<i8>,
+    band: Vec<i8>,
+    h0:   Vec<i8>,
+    lanes: usize,
+    max_qlen: i32,
+    max_tlen: i32,
+}
+
+impl BandedSoAProvider {
+    pub fn new() -> Self {
+        Self {
+            query_soa: AlignedVec::with_capacity(0),
+            target_soa: AlignedVec::with_capacity(0),
+            qlen: Vec::new(),
+            tlen: Vec::new(),
+            band: Vec::new(),
+            h0:   Vec::new(),
+            lanes: 0,
+            max_qlen: 0,
+            max_tlen: 0,
+        }
+    }
+
+    #[inline]
+    fn ensure_soa_capacity(&mut self, lanes: usize, max_q: usize, max_t: usize) {
+        let q_needed = lanes.saturating_mul(max_q);
+        let t_needed = lanes.saturating_mul(max_t);
+        if self.query_soa.capacity < q_needed { self.query_soa = AlignedVec::with_capacity(q_needed); } else { self.query_soa.len = q_needed; }
+        if self.target_soa.capacity < t_needed { self.target_soa = AlignedVec::with_capacity(t_needed); } else { self.target_soa.len = t_needed; }
+        // per-lane arrays
+        if self.qlen.len() != lanes { self.qlen.resize(lanes, 0); }
+        if self.tlen.len() != lanes { self.tlen.resize(lanes, 0); }
+        if self.band.len() != lanes { self.band.resize(lanes, 0); }
+        if self.h0.len()   != lanes { self.h0.resize(lanes, 0); }
+        self.lanes = lanes;
+        self.max_qlen = max_q as i32;
+        self.max_tlen = max_t as i32;
+    }
+}
+
+impl Default for BandedSoAProvider { fn default() -> Self { Self::new() } }
+
+impl SoAProvider for BandedSoAProvider {
+    fn ensure_and_transpose<'a>(&'a mut self, jobs: &[AlignJob<'a>], lanes: usize) -> SwSoA<'a> {
+        let lanes = lanes.min(jobs.len());
+        // Determine maximum lengths
+        let mut max_q = 0usize;
+        let mut max_t = 0usize;
+        for i in 0..lanes {
+            max_q = max_q.max(jobs[i].qlen);
+            max_t = max_t.max(jobs[i].tlen);
+        }
+        // Ensure capacities
+        self.ensure_soa_capacity(lanes, max_q, max_t);
+
+        let qbuf = self.query_soa.as_mut_slice();
+        let tbuf = self.target_soa.as_mut_slice();
+
+        // Initialize padding to 0xFF (common sentinel used by kernels)
+        qbuf.fill(0xFF);
+        tbuf.fill(0xFF);
+
+        // Per-lane scalars and transpose
+        for lane in 0..lanes {
+            let j = &jobs[lane];
+            let qn = j.qlen.min(max_q);
+            let tn = j.tlen.min(max_t);
+            // Write per-lane scalars (clamped to i8 range for u8 scoring path)
+            self.qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
+            self.tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
+            self.band[lane] = j.band.clamp(i32::MIN, 127) as i8;
+            self.h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
+
+            // Transpose sequences into SoA: pos*k + lane
+            for pos in 0..qn {
+                qbuf[pos * lanes + lane] = j.query[pos];
+            }
+            for pos in 0..tn {
+                tbuf[pos * lanes + lane] = j.target[pos];
+            }
+        }
+
+        SwSoA {
+            query_soa: qbuf,
+            target_soa: tbuf,
+            qlen: &self.qlen[..lanes],
+            tlen: &self.tlen[..lanes],
+            band: &self.band[..lanes],
+            h0:   &self.h0[..lanes],
+            lanes,
+            max_qlen: self.max_qlen,
+            max_tlen: self.max_tlen,
+        }
     }
 }
 
