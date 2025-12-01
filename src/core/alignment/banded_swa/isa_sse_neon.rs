@@ -18,6 +18,10 @@ use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, 
 
 /// SSE/NEON-optimized banded Smith-Waterman for batches of up to 16 alignments
 /// Processes 16 alignments in parallel (baseline SIMD for all platforms)
+#[deprecated(
+    since = "0.7.0",
+    note = "Legacy AoS entry point; will be removed. Use SoA dispatch functions instead."
+)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn simd_banded_swa_batch16(
     batch: &[(i32, &[u8], i32, &[u8], i32, i32)],

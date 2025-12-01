@@ -1,10 +1,9 @@
-use crate::alignment::banded_swa::{reverse_cigar, BandedPairWiseSW};
+use crate::alignment::banded_swa::BandedPairWiseSW;
 use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 use super::shared::SoAInputs;
 use crate::core::alignment::banded_swa::types::{OutScore, AlignmentResult, ExtensionDirection};
 
 
-use crate::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
 use crate::pipelines::linear::batch_extension::ExtensionJobBatch;
 
 /// Dispatch to the appropriate SoA SIMD kernel based on engine type.
@@ -168,76 +167,15 @@ pub fn scalar_dispatch_from_soa(sw_params: &BandedPairWiseSW, batch: &ExtensionJ
 /// **Performance Expectations**:
 /// - AVX2: ~1.8-2.2x speedup over SSE (memory-bound workload)
 /// - AVX-512: ~2.5-3.0x speedup over SSE (on compatible CPUs)
+#[deprecated(
+    since = "0.7.0",
+    note = "Legacy AoS dispatch; will be removed. Benches should be updated to use SoA entry points."
+)]
 pub fn simd_banded_swa_dispatch(
     sw_params: &BandedPairWiseSW,
     batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
 ) -> Vec<OutScore> {
-    if batch.is_empty() {
-        return Vec::new();
-    }
-
-    let engine = detect_optimal_simd_engine();
-
-    // Log-once for SIMD engine selection
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static LOGGED_8BIT_SIMD: AtomicBool = AtomicBool::new(false);
-    if !LOGGED_8BIT_SIMD.swap(true, Ordering::Relaxed) {
-        log::info!("[SIMD] Vertical batch (8-bit): using {engine:?} engine");
-    }
-
-    // Determine batch size based on SIMD engine
-    let simd_batch_size: usize = match engine {
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => 32,
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => 64,
-        SimdEngineType::Engine128 => 16,
-    };
-
-    // Process all jobs in batches
-    let mut all_results = Vec::with_capacity(batch.len());
-
-    for chunk_start in (0..batch.len()).step_by(simd_batch_size) {
-        let chunk_end = (chunk_start + simd_batch_size).min(batch.len());
-        let chunk = &batch[chunk_start..chunk_end];
-
-        let chunk_results = match engine {
-            #[cfg(target_arch = "x86_64")]
-            SimdEngineType::Engine256 => {
-                // Use AVX2 kernel (32-way parallelism)
-                unsafe {
-                    super::isa_avx2::simd_banded_swa_batch32(
-                        chunk, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(),
-                        sw_params.scoring_matrix(), sw_params.alphabet_size(),
-                    )
-                }
-            }
-            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-            SimdEngineType::Engine512 => {
-                // Use AVX-512 kernel (64-way parallelism)
-                unsafe {
-                    super::isa_avx512_int8::simd_banded_swa_batch64(
-                        chunk, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(),
-                        sw_params.scoring_matrix(), sw_params.alphabet_size(),
-                    )
-                }
-            }
-            SimdEngineType::Engine128 => {
-                // Use SSE/NEON kernel (16-way parallelism)
-                unsafe {
-                    super::isa_sse_neon::simd_banded_swa_batch16(
-                        chunk, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(),
-                        sw_params.scoring_matrix(), sw_params.alphabet_size(),
-                    )
-                }
-            },
-        };
-
-        // Only take the actual number of results (chunk may be padded)
-        all_results.extend(chunk_results.into_iter().take(chunk.len()));
-    }
-
-    all_results
+    panic!("Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points.");
 }
 
 /// Runtime dispatch for 16-bit SIMD batch scoring (score-only, no CIGAR)
@@ -249,41 +187,15 @@ pub fn simd_banded_swa_dispatch(
 /// Use this function when:
 /// - seq_len * match_score >= 127
 /// - For 150bp reads with match=1, always use this version
+#[deprecated(
+    since = "0.7.0",
+    note = "Legacy AoS dispatch; will be removed. Benches should be updated to use SoA entry points."
+)]
 pub fn simd_banded_swa_dispatch_int16(
     sw_params: &BandedPairWiseSW,
     batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
 ) -> Vec<OutScore> {
-    if batch.is_empty() {
-        return Vec::new();
-    }
-
-    // 16-bit version processes 8 alignments per batch
-    const SIMD_BATCH_SIZE: usize = 8;
-
-    // Log-once for 16-bit SIMD selection
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static LOGGED_16BIT_SIMD: AtomicBool = AtomicBool::new(false);
-    if !LOGGED_16BIT_SIMD.swap(true, Ordering::Relaxed) {
-        log::info!("[SIMD] Vertical batch (16-bit): using NEON/SSE 128-bit engine");
-    }
-
-    let mut all_results = Vec::with_capacity(batch.len());
-
-    for chunk_start in (0..batch.len()).step_by(SIMD_BATCH_SIZE) {
-        let chunk_end = (chunk_start + SIMD_BATCH_SIZE).min(batch.len());
-        let chunk = &batch[chunk_start..chunk_end];
-
-        // Use 16-bit SIMD scoring (handles scores > 127)
-        let chunk_results = unsafe { super::isa_sse_neon::simd_banded_swa_batch8_int16(
-            chunk, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(),
-            sw_params.zdrop(), sw_params.scoring_matrix(), sw_params.alphabet_size(),
-        ) };
-
-        // Only take the actual number of results (chunk may be padded)
-        all_results.extend(chunk_results.into_iter().take(chunk.len()));
-    }
-
-    all_results
+    panic!("Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points.");
 }
 
 /// Runtime dispatch version of batch alignment with CIGAR generation
@@ -301,6 +213,10 @@ pub fn simd_banded_swa_dispatch_int16(
 /// This would eliminate ~80-90% of CIGAR generation work (which is 46% of CPU time).
 /// The 16-bit SIMD batch scoring function (simd_banded_swa_batch8_int16) is ready
 /// for this optimization but requires architectural changes to defer CIGAR generation.
+#[deprecated(
+    since = "0.7.0",
+    note = "Legacy scalar dispatch; will be removed. Use the SoA pipeline with deferred CIGAR generation."
+)]
 pub fn simd_banded_swa_dispatch_with_cigar(
     sw_params: &BandedPairWiseSW,
     batch: &[(
@@ -313,23 +229,5 @@ pub fn simd_banded_swa_dispatch_with_cigar(
         Option<ExtensionDirection>,
     )],
 ) -> Vec<AlignmentResult> {
-    // Use proven scalar implementation for all alignments
-    // This matches the production C++ bwa-mem2 design pattern for CIGAR generation
-    let mut results = Vec::with_capacity(batch.len());
-    for (qlen, query, tlen, target, w, h0, direction) in batch.iter() {
-        let (score, mut cigar, ref_aligned, query_aligned) =
-            scalar_banded_swa(sw_params, *qlen, query, *tlen, target, *w, *h0);
-
-        if *direction == Some(ExtensionDirection::Left) {
-            cigar = reverse_cigar(&cigar[..]);
-        }
-
-        results.push(AlignmentResult {
-            score,
-            cigar,
-            ref_aligned,
-            query_aligned,
-        });
-    }
-    results
+    panic!("Legacy scalar dispatch is deprecated and will be removed. Use the SoA pipeline with deferred CIGAR generation.");
 }

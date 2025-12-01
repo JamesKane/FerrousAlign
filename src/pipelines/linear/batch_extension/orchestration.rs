@@ -2,7 +2,6 @@ use super::types::ReadExtensionContext;
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 
-
 use std::sync::Arc;
 use rayon::prelude::*;
 
@@ -11,7 +10,7 @@ use crate::compute::simd_abstraction::simd::SimdEngineType; // Corrected import
 
 use super::super::finalization::{Alignment, mark_secondary_alignments}; // Corrected import
 use super::super::pipeline::{build_and_filter_chains, find_seeds}; // Corrected import
-use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions}; // Corrected import
+use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions, OutScore}; // Corrected import
 use super::dispatch::execute_batch_simd_scoring; // Corrected import
 use super::distribute::convert_batch_results_to_outscores; // Corrected import
 use super::collect::collect_extension_jobs_batch; // Corrected import
@@ -60,260 +59,19 @@ pub fn process_batch_cross_read(
     batch_start_id: u64,
     engine: SimdEngineType,
 ) -> Vec<Vec<Alignment>> {
-    use std::time::Instant;
-
-    let batch_size = names.len();
-    if batch_size == 0 {
-        return Vec::new();
-    }
-
-    // ========================================================================
-    // Phase 1: Seeding + Chaining (parallel per-read)
-    // ========================================================================
-    let phase1_start = Instant::now();
-
-    let contexts: Vec<Option<ReadExtensionContext>> = names
-        .par_iter()
-        .zip(seqs.par_iter())
-        .map(|(name, seq)| {
-            // Find seeds
-            let (seeds, encoded_query, encoded_query_rc) = find_seeds(bwa_idx, name, seq, opt);
-
-            if seeds.is_empty() {
-                return None;
-            }
-
-            // Build chains
-            let (chains, sorted_seeds) = build_and_filter_chains(seeds, opt, seq.len(), name);
-
-            if chains.is_empty() {
-                return None;
-            }
-
-            Some(ReadExtensionContext {
-                query_name: name.clone(),
-                encoded_query,
-                encoded_query_rc,
-                chains,
-                seeds: sorted_seeds,
-                query_len: seq.len() as i32,
-                chain_ref_segments: Vec::new(), // Filled during job collection
-            })
-        })
-        .collect();
-
-    let phase1_time = phase1_start.elapsed();
-
-    // Count reads with valid contexts
-    let valid_count = contexts.iter().filter(|c| c.is_some()).count();
-    log::debug!(
-        "CROSS_READ_BATCH: Phase 1 (seed+chain) took {:.3}s for {} reads ({} valid)",
-        phase1_time.as_secs_f64(),
-        batch_size,
-        valid_count
-    );
-
-    // ========================================================================
-    // Phase 2: Collect extension jobs across ALL reads
-    // ========================================================================
-    let phase2_start = Instant::now();
-
-    // Convert Option<Context> to mutable contexts, tracking indices
-    let mut read_contexts: Vec<ReadExtensionContext> = Vec::with_capacity(valid_count);
-    let mut context_to_read_idx: Vec<usize> = Vec::with_capacity(valid_count);
-
-    for (read_idx, ctx_opt) in contexts.into_iter().enumerate() {
-        if let Some(ctx) = ctx_opt {
-            read_contexts.push(ctx);
-            context_to_read_idx.push(read_idx);
-        }
-    }
-
-    let (mut left_batch, mut right_batch, mappings) =
-        collect_extension_jobs_batch(bwa_idx, opt, &mut read_contexts);
-
-    let phase2_time = phase2_start.elapsed();
-    log::debug!(
-        "CROSS_READ_BATCH: Phase 2 (collect) took {:.3}s - {} left, {} right jobs",
-        phase2_time.as_secs_f64(),
-        left_batch.len(),
-        right_batch.len()
-    );
-
-    // ========================================================================
-    // Phase 3: Execute SIMD scoring on FULL batch
-    // ========================================================================
-    let phase3_start = Instant::now();
-
-    let sw_params = BandedPairWiseSW::new(
-        opt.o_del,
-        opt.e_del,
-        opt.o_ins,
-        opt.e_ins,
-        opt.zdrop,
-        5, // end_bonus
-        opt.pen_clip5,
-        opt.pen_clip3,
-        opt.mat,
-        opt.a as i8,
-        -(opt.b as i8),
-    );
-
-    let left_results = execute_batch_simd_scoring(&sw_params, &mut left_batch, engine);
-    let right_results = execute_batch_simd_scoring(&sw_params, &mut right_batch, engine);
-
-    let phase3_time = phase3_start.elapsed();
-    log::debug!(
-        "CROSS_READ_BATCH: Phase 3 (SIMD) took {:.3}s",
-        phase3_time.as_secs_f64()
-    );
-
-    // ========================================================================
-    // Phase 4: Distribute results and merge to regions
-    // ========================================================================
-    let phase4_start = Instant::now();
-
-    let per_read_left_scores =
-        convert_batch_results_to_outscores(&left_results, &left_batch, read_contexts.len());
-    let per_read_right_scores =
-        convert_batch_results_to_outscores(&right_results, &right_batch, read_contexts.len());
-
-    let phase4_time = phase4_start.elapsed();
-    log::debug!(
-        "CROSS_READ_BATCH: Phase 4 (distribute) took {:.3}s",
-        phase4_time.as_secs_f64()
-    );
-
-    // ========================================================================
-    // Phase 5: Finalization (parallel per-read)
-    // ========================================================================
-    let phase5_start = Instant::now();
-
-    let valid_alignments: Vec<(usize, Vec<Alignment>)> = read_contexts
-        .into_par_iter()
-        .zip(mappings.par_iter())
-        .zip(per_read_left_scores.par_iter())
-        .zip(per_read_right_scores.par_iter())
-        .enumerate()
-        .map(|(ctx_idx, (((ctx, mapping), left_scores), right_scores))| {
-            let read_idx = context_to_read_idx[ctx_idx];
-            let read_id = batch_start_id + read_idx as u64;
-
-            // Merge scores to regions
-            let regions = merge_extension_scores_to_regions(
-                bwa_idx,
-                opt,
-                &ctx.chains,
-                &ctx.seeds,
-                &mapping.chain_mappings,
-                &ctx.chain_ref_segments,
-                left_scores,
-                right_scores,
-                ctx.query_len,
-            );
-
-            if regions.is_empty() {
-                return (
-                    read_idx,
-                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
-                );
-            }
-
-            // Filter regions by score
-            let mut filtered_regions: Vec<_> =
-                regions.into_iter().filter(|r| r.score >= opt.t).collect();
-
-            if filtered_regions.is_empty() {
-                return (
-                    read_idx,
-                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
-                );
-            }
-
-            // Sort by score descending
-            filtered_regions.sort_by(|a, b| b.score.cmp(&a.score));
-
-            // Generate CIGAR for surviving regions
-            let mut alignments = Vec::new();
-            for (idx, region) in filtered_regions.iter().enumerate() {
-                let cigar_result =
-                    generate_cigar_from_region(bwa_idx, pac_data, &ctx.encoded_query, region, opt);
-
-                let (cigar, nm, md_tag) = match cigar_result {
-                    Some(result) => result,
-                    None => continue,
-                };
-
-                let flag = if region.is_rev {
-                    super::super::finalization::sam_flags::REVERSE
-                } else {
-                    0
-                };
-
-                let hash = crate::utils::hash_64(read_id + idx as u64);
-
-                alignments.push(Alignment {
-                    query_name: ctx.query_name.clone(),
-                    flag,
-                    ref_name: region.ref_name.clone(),
-                    ref_id: region.rid as usize,
-                    pos: region.chr_pos,
-                    mapq: 60,
-                    score: region.score,
-                    cigar,
-                    rnext: "*".to_string(),
-                    pnext: 0,
-                    tlen: 0,
-                    seq: String::new(),
-                    qual: String::new(),
-                    tags: vec![
-                        ("AS".to_string(), format!("i:{}", region.score)),
-                        ("NM".to_string(), format!("i:{nm}")),
-                        ("MD".to_string(), format!("Z:{md_tag}")),
-                    ],
-                    query_start: region.qb,
-                    query_end: region.qe,
-                    seed_coverage: region.seedcov,
-                    hash,
-                    frac_rep: region.frac_rep,
-                });
-            }
-
-            if alignments.is_empty() {
-                return (
-                    read_idx,
-                    vec![create_unmapped_alignment_internal(&ctx.query_name)],
-                );
-            }
-
-            mark_secondary_alignments(&mut alignments, opt);
-
-            (read_idx, alignments)
-        })
-        .collect();
-
-    let phase5_time = phase5_start.elapsed();
-    log::debug!(
-        "CROSS_READ_BATCH: Phase 5 (finalize) took {:.3}s",
-        phase5_time.as_secs_f64()
-    );
-
-    // ========================================================================
-    // Assemble final results
-    // ========================================================================
-
-    // Initialize all reads as unmapped
-    let mut all_alignments: Vec<Vec<Alignment>> = names
-        .iter()
-        .map(|name| vec![create_unmapped_alignment_internal(name)])
-        .collect();
-
-    // Fill in valid alignments
-    for (read_idx, alignments) in valid_alignments {
-        all_alignments[read_idx] = alignments;
-    }
-
-    all_alignments
+    let bwa_idx_arc = Arc::new(bwa_idx);
+    let pac_data_arc = Arc::new(pac_data);
+    let opt_arc = Arc::new(opt);
+    
+    process_sub_batch_internal(
+        &bwa_idx_arc,
+        &pac_data_arc,
+        &opt_arc,
+        names,
+        seqs,
+        batch_start_id,
+        engine,
+    )
 }
 
 /// Create an unmapped alignment record (internal helper)
@@ -522,7 +280,33 @@ fn process_sub_batch_internal(
     let per_read_right_scores =
         convert_batch_results_to_outscores(&right_results, &right_batch, read_contexts.len());
 
-    // Phase 5: Finalization (parallel within sub-batch)
+    // Phase 5: Finalization
+    finalize_alignments(
+        bwa_idx,
+        pac_data,
+        opt,
+        names,
+        read_contexts,
+        context_to_read_idx,
+        mappings,
+        per_read_left_scores,
+        per_read_right_scores,
+        batch_start_id,
+    )
+}
+
+fn finalize_alignments(
+    bwa_idx: &Arc<&BwaIndex>,
+    pac_data: &Arc<&[u8]>,
+    opt: &Arc<&MemOpt>,
+    names: &[String],
+    read_contexts: Vec<ReadExtensionContext>,
+    context_to_read_idx: Vec<usize>,
+    mappings: Vec<super::collect::ReadExtensionMappings>,
+    per_read_left_scores: Vec<Vec<OutScore>>,
+    per_read_right_scores: Vec<Vec<OutScore>>,
+    batch_start_id: u64,
+) -> Vec<Vec<Alignment>> {
     let valid_alignments: Vec<(usize, Vec<Alignment>)> = read_contexts
         .into_par_iter()
         .zip(mappings.par_iter())
@@ -634,3 +418,4 @@ fn process_sub_batch_internal(
 
     all_alignments
 }
+

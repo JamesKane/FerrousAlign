@@ -87,4 +87,5 @@ Artifacts
 Notes and next steps
 - Increase measurement time or reduce sample size for 400bp cases to avoid Criterion warnings; adjust in `configure()` or per‑group.
 - Add an AVX‑512 kswv W64 parity smoke test (feature‑gated) mirroring the banded_swa parity test to aid stabilization.
-- Optional: move banded_swa SoA provisioning into the thread‑local `AlignmentWorkspace` for full zero‑alloc on repeated shapes.
+- The `banded_swa` SoA provisioning is now part of the thread-local `AlignmentWorkspace`. While the current implementation is not zero-allocation, it paves the way for future optimizations.
+- Legacy AoS paths have been deprecated and will be removed in a future release. Benches and tests that use them should be updated.
