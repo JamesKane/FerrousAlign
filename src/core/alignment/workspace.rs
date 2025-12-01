@@ -457,19 +457,23 @@ impl WorkspaceArena for AlignmentWorkspace {
     }
 
     fn rows_u8(&mut self) -> Option<(&mut [i8], &mut [i8], &mut [i8])> {
-        Some((
-            self.banded_h_u8.as_mut_slice(),
-            self.banded_e_u8.as_mut_slice(),
-            self.banded_f_u8.as_mut_slice(),
-        ))
+        let h = self.banded_h_u8.as_mut_slice();
+        let e = self.banded_e_u8.as_mut_slice();
+        let f = self.banded_f_u8.as_mut_slice();
+        debug_assert_eq!((h.as_ptr() as usize) & 63, 0, "H row not 64B aligned");
+        debug_assert_eq!((e.as_ptr() as usize) & 63, 0, "E row not 64B aligned");
+        debug_assert_eq!((f.as_ptr() as usize) & 63, 0, "F row not 64B aligned");
+        Some((h, e, f))
     }
 
     fn rows_u16(&mut self) -> Option<(&mut [i16], &mut [i16], &mut [i16])> {
-        Some((
-            self.banded_h_i16.as_mut_slice(),
-            self.banded_e_i16.as_mut_slice(),
-            self.banded_f_i16.as_mut_slice(),
-        ))
+        let h = self.banded_h_i16.as_mut_slice();
+        let e = self.banded_e_i16.as_mut_slice();
+        let f = self.banded_f_i16.as_mut_slice();
+        debug_assert_eq!((h.as_ptr() as usize) & 63, 0, "H16 row not 64B aligned");
+        debug_assert_eq!((e.as_ptr() as usize) & 63, 0, "E16 row not 64B aligned");
+        debug_assert_eq!((f.as_ptr() as usize) & 63, 0, "F16 row not 64B aligned");
+        Some((h, e, f))
     }
 }
 

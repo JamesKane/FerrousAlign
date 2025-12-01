@@ -118,7 +118,9 @@ where
     // Main DP loop
     let mut _final_row = tmax;
     for i in 0..tmax {
-        if terminated_count > params.batch.len() / 2 {
+        // Early termination heuristic based on number of lanes terminated.
+        // Use the active SIMD width (lanes) rather than AoS batch length.
+        if terminated_count > lanes / 2 {
             _final_row = i;
             break;
         }
