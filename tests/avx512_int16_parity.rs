@@ -1,5 +1,3 @@
-use ferrous_align::alignment::banded_swa::OutScore;
-use ferrous_align::alignment::banded_swa::isa_avx2::simd_banded_swa_batch16_int16;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 use ferrous_align::alignment::banded_swa::isa_avx512_int16::simd_banded_swa_batch32_int16;
 

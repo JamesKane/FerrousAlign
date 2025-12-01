@@ -1,6 +1,6 @@
 use crate::alignment::banded_swa::{EhT, OutScore};
 use crate::alignment::banded_swa::{BandedPairWiseSW};
-use crate::alignment::banded_swa::types::{DEFAULT_AMBIG, TB_DEL, TB_INS, TB_MATCH};
+use crate::alignment::banded_swa::types::{TB_DEL, TB_INS, TB_MATCH};
 
 pub fn scalar_banded_swa(
     sw_params: &BandedPairWiseSW,

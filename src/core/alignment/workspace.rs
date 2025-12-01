@@ -27,10 +27,23 @@
 //! additional performance improvement on top of Priority 1 (workspace allocation).
 
 use crate::pipelines::linear::seeding::SMEM;
-use crate::core::alignment::shared_types::{WorkspaceArena, SoAProvider, AlignJob, SwSoA, KswSoA};
+use crate::core::alignment::shared_types::{WorkspaceArena, AlignJob, KswSoA};
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 use std::ptr::NonNull;
+
+/// An owned version of SwSoA for passing data out of a workspace closure.
+pub struct OwnedSwSoA {
+    pub query_soa: Vec<u8>,
+    pub target_soa: Vec<u8>,
+    pub qlen: Vec<i8>,
+    pub tlen: Vec<i8>,
+    pub band: Vec<i8>,
+    pub h0:   Vec<i8>,
+    pub lanes: usize,
+    pub max_qlen: i32,
+    pub max_tlen: i32,
+}
 
 /// A vector-like container with 64-byte alignment for SIMD operations
 ///
@@ -252,6 +265,17 @@ pub struct AlignmentWorkspace {
     banded_f_i16: AlignedVec<i16>,
     /// Tracked shape for current allocations (for debugging/validation)
     banded_shape: (usize, usize, usize), // (lanes, qmax, tmax)
+
+    // Banded SWA SoA provider fields
+    banded_query_soa: AlignedVec<u8>,
+    banded_target_soa: AlignedVec<u8>,
+    banded_qlen: Vec<i8>,
+    banded_tlen: Vec<i8>,
+    banded_band: Vec<i8>,
+    banded_h0:   Vec<i8>,
+    banded_lanes: usize,
+    banded_max_qlen: i32,
+    banded_max_tlen: i32,
 }
 
 impl AlignmentWorkspace {
@@ -340,6 +364,17 @@ impl AlignmentWorkspace {
             banded_e_i16: AlignedVec::with_capacity(0),
             banded_f_i16: AlignedVec::with_capacity(0),
             banded_shape: (0, 0, 0),
+
+            // Banded SWA SoA provider fields
+            banded_query_soa: AlignedVec::with_capacity(0),
+            banded_target_soa: AlignedVec::with_capacity(0),
+            banded_qlen: Vec::new(),
+            banded_tlen: Vec::new(),
+            banded_band: Vec::new(),
+            banded_h0:   Vec::new(),
+            banded_lanes: 0,
+            banded_max_qlen: 0,
+            banded_max_tlen: 0,
         }
     }
 
@@ -593,61 +628,14 @@ impl WorkspaceArena for AlignmentWorkspace {
     }
 }
 
-// ============================================================================
-// SoA Provider for banded SW (u8 scoring) with 64-byte alignment
-// ============================================================================
 
-/// Reusable 64B-aligned buffers that hold interleaved SoA sequences for the
-/// banded SW kernels (u8 scoring path). This avoids per-call heap allocations.
-pub struct BandedSoAProvider {
-    query_soa: AlignedVec<u8>,
-    target_soa: AlignedVec<u8>,
-    // Per-lane scalar metadata (i8 lanes for u8 scoring kernels)
-    qlen: Vec<i8>,
-    tlen: Vec<i8>,
-    band: Vec<i8>,
-    h0:   Vec<i8>,
-    lanes: usize,
-    max_qlen: i32,
-    max_tlen: i32,
-}
 
-impl BandedSoAProvider {
-    pub fn new() -> Self {
-        Self {
-            query_soa: AlignedVec::with_capacity(0),
-            target_soa: AlignedVec::with_capacity(0),
-            qlen: Vec::new(),
-            tlen: Vec::new(),
-            band: Vec::new(),
-            h0:   Vec::new(),
-            lanes: 0,
-            max_qlen: 0,
-            max_tlen: 0,
-        }
-    }
-
-    #[inline]
-    fn ensure_soa_capacity(&mut self, lanes: usize, max_q: usize, max_t: usize) {
-        let q_needed = lanes.saturating_mul(max_q);
-        let t_needed = lanes.saturating_mul(max_t);
-        if self.query_soa.capacity < q_needed { self.query_soa = AlignedVec::with_capacity(q_needed); } else { self.query_soa.len = q_needed; }
-        if self.target_soa.capacity < t_needed { self.target_soa = AlignedVec::with_capacity(t_needed); } else { self.target_soa.len = t_needed; }
-        // per-lane arrays
-        if self.qlen.len() != lanes { self.qlen.resize(lanes, 0); }
-        if self.tlen.len() != lanes { self.tlen.resize(lanes, 0); }
-        if self.band.len() != lanes { self.band.resize(lanes, 0); }
-        if self.h0.len()   != lanes { self.h0.resize(lanes, 0); }
-        self.lanes = lanes;
-        self.max_qlen = max_q as i32;
-        self.max_tlen = max_t as i32;
-    }
-}
-
-impl Default for BandedSoAProvider { fn default() -> Self { Self::new() } }
-
-impl SoAProvider for BandedSoAProvider {
-    fn ensure_and_transpose<'a>(&'a mut self, jobs: &[AlignJob<'a>], lanes: usize) -> SwSoA<'a> {
+// =========================================================================
+// KSWV SoA adapter (workspace-backed, 64B-aligned, zero per-call allocs)
+// =========================================================================
+impl AlignmentWorkspace {
+    /// Ensure capacity and transpose AlignJob descriptors into an owned Banded SWA SoA view.
+    pub fn ensure_and_transpose_banded_owned(&mut self, jobs: &[AlignJob], lanes: usize) -> OwnedSwSoA {
         let stride_lanes = lanes; // desired SIMD stride (e.g., 16/32)
         let job_count = jobs.len(); // actual number of active lanes
 
@@ -659,10 +647,10 @@ impl SoAProvider for BandedSoAProvider {
             max_t = max_t.max(jobs[i].tlen);
         }
         // Ensure capacities using the SIMD stride (pad inactive lanes)
-        self.ensure_soa_capacity(stride_lanes, max_q, max_t);
+        self.ensure_banded_soa_capacity(stride_lanes, max_q, max_t);
 
-        let qbuf = self.query_soa.as_mut_slice();
-        let tbuf = self.target_soa.as_mut_slice();
+        let qbuf = self.banded_query_soa.as_mut_slice();
+        let tbuf = self.banded_target_soa.as_mut_slice();
 
         // Initialize padding to 0xFF (common sentinel used by kernels)
         qbuf.fill(0xFF);
@@ -675,10 +663,10 @@ impl SoAProvider for BandedSoAProvider {
                 let qn = j.qlen.min(max_q);
                 let tn = j.tlen.min(max_t);
                 // Write per-lane scalars (clamped to i8 range for u8 scoring path)
-                self.qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
-                self.tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
-                self.band[lane] = j.band.clamp(i32::MIN, 127) as i8;
-                self.h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
+                self.banded_qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
+                self.banded_tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
+                self.banded_band[lane] = j.band.clamp(i32::MIN, 127) as i8;
+                self.banded_h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
 
                 // Transpose sequences into SoA: pos*stride + lane
                 for pos in 0..qn {
@@ -689,31 +677,42 @@ impl SoAProvider for BandedSoAProvider {
                 }
             } else {
                 // Inactive lanes: zero scalars; buffers already set to 0xFF
-                self.qlen[lane] = 0;
-                self.tlen[lane] = 0;
-                self.band[lane] = 0;
-                self.h0[lane]   = 0;
+                self.banded_qlen[lane] = 0;
+                self.banded_tlen[lane] = 0;
+                self.banded_band[lane] = 0;
+                self.banded_h0[lane]   = 0;
             }
         }
 
-        SwSoA {
-            query_soa: qbuf,
-            target_soa: tbuf,
-            qlen: &self.qlen[..stride_lanes],
-            tlen: &self.tlen[..stride_lanes],
-            band: &self.band[..stride_lanes],
-            h0:   &self.h0[..stride_lanes],
+        OwnedSwSoA {
+            query_soa: self.banded_query_soa.as_mut_slice().to_vec(),
+            target_soa: self.banded_target_soa.as_mut_slice().to_vec(),
+            qlen: self.banded_qlen.clone(),
+            tlen: self.banded_tlen.clone(),
+            band: self.banded_band.clone(),
+            h0:   self.banded_h0.clone(),
             lanes: stride_lanes,
-            max_qlen: self.max_qlen,
-            max_tlen: self.max_tlen,
+            max_qlen: self.banded_max_qlen,
+            max_tlen: self.banded_max_tlen,
         }
     }
-}
 
-// =========================================================================
-// KSWV SoA adapter (workspace-backed, 64B-aligned, zero per-call allocs)
-// =========================================================================
-impl AlignmentWorkspace {
+    #[inline]
+    fn ensure_banded_soa_capacity(&mut self, lanes: usize, max_q: usize, max_t: usize) {
+        let q_needed = lanes.saturating_mul(max_q);
+        let t_needed = lanes.saturating_mul(max_t);
+        if self.banded_query_soa.capacity < q_needed { self.banded_query_soa = AlignedVec::with_capacity(q_needed); } else { self.banded_query_soa.len = q_needed; }
+        if self.banded_target_soa.capacity < t_needed { self.banded_target_soa = AlignedVec::with_capacity(t_needed); } else { self.banded_target_soa.len = t_needed; }
+        // per-lane arrays
+        if self.banded_qlen.len() != lanes { self.banded_qlen.resize(lanes, 0); }
+        if self.banded_tlen.len() != lanes { self.banded_tlen.resize(lanes, 0); }
+        if self.banded_band.len() != lanes { self.banded_band.resize(lanes, 0); }
+        if self.banded_h0.len()   != lanes { self.banded_h0.resize(lanes, 0); }
+        self.banded_lanes = lanes;
+        self.banded_max_qlen = max_q as i32;
+        self.banded_max_tlen = max_t as i32;
+    }
+    
     /// Ensure capacity and transpose AlignJob descriptors into a KSWV SoA view.
     /// Buffers are sized as `max_len * lanes` and padded with 0xFF sentinel.
     pub fn ensure_and_transpose_ksw<'a>(&'a mut self, jobs: &[AlignJob<'a>], lanes: usize) -> KswSoA<'a> {

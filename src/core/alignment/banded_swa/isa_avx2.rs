@@ -14,8 +14,8 @@ use crate::core::alignment::banded_swa::KernelParams;
 use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
 use crate::core::alignment::banded_swa::engines16::SwEngine256_16;
 use crate::{generate_swa_entry_i16, generate_swa_entry_i16_soa};
-use crate::core::alignment::shared_types::{AlignJob, SoAProvider};
-use crate::core::alignment::workspace::{BandedSoAProvider, with_workspace};
+use crate::core::alignment::shared_types::{AlignJob};
+use crate::core::alignment::workspace::with_workspace;
 use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 32 alignments
@@ -54,9 +54,9 @@ pub unsafe fn simd_banded_swa_batch32(
         };
     }
 
-    // Build SoA using 64B-aligned provider (no per-call Vec allocations)
-    let mut provider = BandedSoAProvider::new();
-    let soa = provider.ensure_and_transpose(&jobs[..lanes], W);
+    let soa = with_workspace(|ws| {
+        ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W)
+    });
 
     let cfg = KernelConfig {
         gaps: GapPenalties { o_del, e_del, o_ins, e_ins },
@@ -66,12 +66,12 @@ pub unsafe fn simd_banded_swa_batch32(
 
     let params = KernelParams {
         batch,
-        query_soa: soa.query_soa,
-        target_soa: soa.target_soa,
-        qlen: soa.qlen,
-        tlen: soa.tlen,
-        h0: soa.h0,
-        w: soa.band,
+        query_soa: &soa.query_soa,
+        target_soa: &soa.target_soa,
+        qlen: &soa.qlen,
+        tlen: &soa.tlen,
+        h0: &soa.h0,
+        w: &soa.band,
         max_qlen: soa.max_qlen,
         max_tlen: soa.max_tlen,
         o_del,
@@ -84,8 +84,10 @@ pub unsafe fn simd_banded_swa_batch32(
         cfg: Some(cfg),
     };
 
-    // Use workspace-powered kernel variant to avoid per-call row allocations
-    with_workspace(|ws| sw_kernel_with_ws::<W, SwEngine256>(&params, ws))
+    with_workspace(|ws| {
+        // Use workspace-powered kernel variant to avoid per-call row allocations
+        sw_kernel_with_ws::<W, SwEngine256>(&params, ws)
+    })
 }
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 16 alignments (16-bit scores)

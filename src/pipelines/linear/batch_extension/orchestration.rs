@@ -1,5 +1,4 @@
 use super::types::ReadExtensionContext;
-use super::super::chaining;
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 

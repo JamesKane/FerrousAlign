@@ -1,9 +1,8 @@
 // tests/kernel_parity.rs
 use ferrous_align::core::alignment::banded_swa::{
-    kernel::{sw_kernel, KernelParams, SwSimd, SwEngine128, SwEngine256}, // SwEngine128/256 from kernel
+    kernel::{sw_kernel, KernelParams, SwEngine256}, // SwEngine128/256 from kernel
     shared::{pad_batch, soa_transform},
     isa_avx2::simd_banded_swa_batch32,
-    types::OutScore,
 };
 
 // Define the AVX-512 implementation locally for testing
@@ -23,8 +22,7 @@ fn simd_banded_swa_batch64(
         simd_banded_swa_batch32(batch, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
     }
 }
-#[cfg(target_arch = "x86_64")]
-use std::is_x86_feature_detected; // New import
+ // New import
 
 #[cfg(target_arch = "x86_64")]
 #[test]

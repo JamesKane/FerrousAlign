@@ -5,10 +5,9 @@ use crate::core::alignment::banded_swa::OutScore;
 use crate::generate_swa_entry_soa;
 use super::engines::SwEngine512;
 use crate::core::alignment::banded_swa::KernelParams;
-use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
-use crate::core::alignment::banded_swa::kernel_avx512::sw_kernel_avx512_with_ws;
-use crate::core::alignment::shared_types::{AlignJob, SoAProvider};
-use crate::core::alignment::workspace::{BandedSoAProvider, with_workspace};
+use crate::core::alignment::banded_swa::kernel::sw_kernel_avx512_with_ws;
+use crate::core::alignment::shared_types::{AlignJob};
+use crate::core::alignment::workspace::{with_workspace, OwnedSwSoA};
 use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 64 alignments
@@ -41,9 +40,9 @@ pub unsafe fn simd_banded_swa_batch64(
         };
     }
 
-    // Build SoA using 64B-aligned provider (no per-call Vec allocations)
-    let mut provider = BandedSoAProvider::new();
-    let soa = provider.ensure_and_transpose(&jobs[..lanes], W);
+    let soa = with_workspace(|ws| {
+        ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W)
+    });
 
     let cfg = KernelConfig {
         gaps: GapPenalties { o_del, e_del, o_ins, e_ins },
@@ -53,12 +52,12 @@ pub unsafe fn simd_banded_swa_batch64(
 
     let params = KernelParams {
         batch,
-        query_soa: soa.query_soa,
-        target_soa: soa.target_soa,
-        qlen: soa.qlen,
-        tlen: soa.tlen,
-        h0: soa.h0,
-        w: soa.band,
+        query_soa: &soa.query_soa,
+        target_soa: &soa.target_soa,
+        qlen: &soa.qlen,
+        tlen: &soa.tlen,
+        h0: &soa.h0,
+        w: &soa.band,
         max_qlen: soa.max_qlen,
         max_tlen: soa.max_tlen,
         o_del,
@@ -71,8 +70,10 @@ pub unsafe fn simd_banded_swa_batch64(
         cfg: Some(cfg),
     };
 
-    // Use AVX-512 fast path (falls back to generic kernel internally for now)
-    with_workspace(|ws| sw_kernel_avx512_with_ws::<W, SwEngine512>(&params, ws))
+    with_workspace(|ws| {
+        // Use AVX-512 fast path (falls back to generic kernel internally for now)
+        sw_kernel_avx512_with_ws::<W, SwEngine512>(&params, ws)
+    })
 }
 
 generate_swa_entry_soa!(

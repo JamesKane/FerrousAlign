@@ -1,10 +1,10 @@
 // tests/pipeline_batch_extension.rs
 use ferrous_align::pipelines::linear::batch_extension::{
-    BatchedExtensionJob, BatchExtensionResult, ChainExtensionScores, ExtensionDirection, ExtensionJobBatch,
+    BatchExtensionResult, ChainExtensionScores, ExtensionDirection, ExtensionJobBatch,
     execute_batch_simd_scoring,
 };
 use ferrous_align::pipelines::linear::batch_extension::soa::make_batch_soa;
-use ferrous_align::core::alignment::banded_swa::{BandedPairWiseSW, OutScore}; // Also need OutScore for BatchExtensionResult
+use ferrous_align::core::alignment::banded_swa::BandedPairWiseSW; // Also need OutScore for BatchExtensionResult
 use ferrous_align::compute::simd_abstraction::simd::SimdEngineType;
 
 #[test]

@@ -8,7 +8,7 @@ use ferrous_align::core::alignment::workspace::with_workspace;
 #[test]
 fn kswv_sse_neon_soa_vs_direct_parity() {
     use ferrous_align::core::alignment::kswv_sse_neon::batch_ksw_align_sse_neon as direct;
-    use ferrous_align::core::alignment::kswv::shared as _;
+    
     use ferrous_align::core::alignment::shared_types::KswSoA;
     use ferrous_align::core::alignment::kswv_sse_neon::kswv_batch16_soa as soa_entry;
 
@@ -17,7 +17,7 @@ fn kswv_sse_neon_soa_vs_direct_parity() {
     let t = vec![0u8; 16 * 16];
 
     // Setup pairs
-    let mut pairs: Vec<SeqPair> = (0..16)
+    let pairs: Vec<SeqPair> = (0..16)
         .map(|id| SeqPair { ref_len: 16, query_len: 16, id, ..Default::default() })
         .collect();
     let mut results_direct = vec![KswResult::default(); 16];
@@ -87,7 +87,7 @@ fn kswv_avx2_soa_vs_direct_parity() {
     let q = vec![0u8; 32 * 16];
     let t = vec![0u8; 32 * 16];
 
-    let mut pairs: Vec<SeqPair> = (0..32)
+    let pairs: Vec<SeqPair> = (0..32)
         .map(|id| SeqPair { ref_len: 16, query_len: 16, id, ..Default::default() })
         .collect();
     let mut results_direct = vec![KswResult::default(); 32];

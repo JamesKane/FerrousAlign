@@ -1,8 +1,5 @@
 // tests/sse_neon_parity.rs
-use ferrous_align::core::alignment::banded_swa::{
-    OutScore,
-    isa_sse_neon::simd_banded_swa_batch16,
-};
+use ferrous_align::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch16;
 
 #[test]
 fn test_simd_banded_swa_batch16_basic() {
