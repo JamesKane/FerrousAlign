@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 
 
-use super::super::chaining::Chain;
+use super::super::chaining::{Chain, SoAChainBatch};
 use super::super::region::{ChainExtensionMapping};
-use super::super::seeding::Seed; // Add this line
+use super::super::seeding::{Seed, SoASeedBatch, SoAEncodedQueryBatch};
 
 
 thread_local! {
@@ -259,5 +259,49 @@ pub struct ReadExtensionContext {
 #[derive(Debug, Clone, Default)]
 pub struct ReadExtensionMappings {
     pub chain_mappings: Vec<ChainExtensionMapping>,
+}
+
+/// SoA-native context for cross-read batched extension (PR3)
+///
+/// This structure holds batch-wide SoA data from seeding and chaining stages,
+/// eliminating the need for per-read AoS intermediate representations.
+/// All data is stored in SoA format with per-read boundaries for indexing.
+#[derive(Debug, Clone)]
+pub struct SoAReadExtensionContext {
+    /// Per-read boundaries into batch-wide arrays
+    /// Each entry is (start_index, count) for accessing batch-wide SoA data
+    pub read_boundaries: Vec<(usize, usize)>,
+
+    /// Query names for all reads in the batch
+    pub query_names: Vec<String>,
+
+    /// Query lengths for all reads in the batch
+    pub query_lengths: Vec<i32>,
+
+    /// Encoded query sequences (flattened from SoAEncodedQueryBatch)
+    /// Access via read_boundaries to get per-read slices
+    pub encoded_queries: Vec<u8>,
+
+    /// Encoded query boundaries for accessing encoded_queries
+    /// Each entry is (start_offset, length) in encoded_queries buffer
+    pub encoded_query_boundaries: Vec<(usize, usize)>,
+
+    /// Reverse complement encoded queries (flattened from SoAEncodedQueryBatch)
+    pub encoded_queries_rc: Vec<u8>,
+
+    /// Encoded query RC boundaries for accessing encoded_queries_rc
+    /// Each entry is (start_offset, length) in encoded_queries_rc buffer
+    pub encoded_query_rc_boundaries: Vec<(usize, usize)>,
+
+    /// SoA seed batch (from PR2's find_seeds_batch)
+    pub soa_seed_batch: SoASeedBatch,
+
+    /// SoA chain batch (from PR2's chain_seeds_batch + filter_chains_batch)
+    pub soa_chain_batch: SoAChainBatch,
+
+    /// Reference segments for each chain: Some((rmax_0, rmax_1)) or None
+    /// Indexed by global chain index across all reads
+    /// Size = total number of chains across all reads in batch
+    pub chain_ref_segments: Vec<Option<(u64, u64)>>,
 }
 
