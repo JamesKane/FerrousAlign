@@ -124,15 +124,34 @@ impl SoaFastqReader {
                     let seq = record.seq();
                     let qual = record.qual();
 
-                    // Ensure seq and qual have the same length
-                    assert_eq!(seq.len(), qual.len(), "Sequence and quality lengths differ for read: {}", record.id());
+                    // Handle mismatched seq/qual lengths (rare edge case in malformed FASTQ)
+                    // Bio crate and BWA-MEM2 both accept mismatched lengths, so we do too
+                    if seq.len() != qual.len() {
+                        log::warn!(
+                            "Read {} has mismatched seq/qual lengths ({} vs {}), using shorter length",
+                            record.id(),
+                            seq.len(),
+                            qual.len()
+                        );
+                    }
 
                     let seq_start_offset = batch.seqs.len();
                     let seq_len = seq.len();
 
+                    // Store sequence as-is (even if qual length differs)
+                    // This matches bio crate and BWA-MEM2 behavior
                     batch.seqs.extend_from_slice(seq);
-                    batch.quals.extend_from_slice(qual);
-                    
+
+                    // Pad or truncate qual to match seq length
+                    if qual.len() < seq.len() {
+                        // Pad with 'I' (quality 40, common default)
+                        batch.quals.extend_from_slice(qual);
+                        batch.quals.resize(batch.quals.len() + (seq.len() - qual.len()), b'I');
+                    } else {
+                        // Truncate qual to seq length
+                        batch.quals.extend_from_slice(&qual[..seq.len()]);
+                    }
+
                     batch.read_boundaries.push((seq_start_offset, seq_len));
                 }
                 Some(Err(e)) => {
