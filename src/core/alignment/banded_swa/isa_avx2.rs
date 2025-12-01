@@ -13,7 +13,7 @@ use super::engines::SwEngine256;
 
 use crate::alignment::workspace::with_workspace;
 use crate::compute::simd_abstraction::SimdEngine256 as Engine;
-use crate::{generate_swa_entry, generate_swa_entry_i16};
+use crate::{generate_swa_entry, generate_swa_entry_i16, generate_swa_entry_i16_soa};
 use crate::alignment::banded_swa::engines16::SwEngine256_16;
 
 // -----------------------------------------------------------------------------
@@ -104,6 +104,14 @@ generate_swa_entry_soa!(
     name = simd_banded_swa_batch32_soa,
     width = 32,
     engine = SwEngine256,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "avx2",
+);
+
+generate_swa_entry_i16_soa!(
+    name = simd_banded_swa_batch16_int16_soa,
+    width = 16,
+    engine = SwEngine256_16,
     cfg = cfg(target_arch = "x86_64"),
     target_feature = "avx2",
 );

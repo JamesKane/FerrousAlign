@@ -4,6 +4,15 @@ use crate::core::alignment::banded_swa::OutScore;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use super::soa::make_batch_soa; // Import make_batch_soa
 
+// Imports for SoA dispatch
+use crate::core::alignment::banded_swa::shared::{SoAInputs, SoAInputs16};
+#[cfg(target_arch = "x86_64")]
+use crate::core::alignment::banded_swa::isa_avx2::{simd_banded_swa_batch16_int16_soa, simd_banded_swa_batch32_soa};
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use crate::core::alignment::banded_swa::isa_sse_neon::{simd_banded_swa_batch16_soa, simd_banded_swa_batch8_int16_soa};
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+use crate::core::alignment::banded_swa::isa_avx512_int16::simd_banded_swa_batch32_int16_soa;
+
 /// Execute batched SIMD scoring for extension jobs
 ///
 /// This function is the main entry point for scoring a batch. It dynamically
@@ -79,81 +88,14 @@ pub fn execute_batch_simd_scoring(
         }
         results
     } else {
-        // AoS Path (i16 kernels for long reads)
-        unsafe { execute_batch_simd_scoring_aos(sw_params, batch, engine) }
-    }
-}
+        // SoA Path (i16 kernels for long reads)
+        // Need to convert existing u8 query_soa/target_soa to i16 versions
+        // and extract other i16-specific parameters from batch.jobs.
+        let scores = unsafe { dispatch_simd_scoring_soa_i16(sw_params, batch, engine) };
 
-/// AoS (Array-of-Structures) path for batched SIMD scoring.
-///
-/// Processes jobs in chunks matching the SIMD width for maximum lane utilization.
-/// This path is used as a fallback for reads longer than 128bp, where the i16
-/// kernel is required.
-///
-/// # NEON Optimization (Session 32)
-/// On 128-bit engines (NEON/SSE), we use "double-pump" batching: process 16 jobs
-/// at a time using 2x batch8 calls. This amortizes job collection and result
-/// distribution overhead, reducing pipeline overhead from ~44% to ~35%.
-pub unsafe fn execute_batch_simd_scoring_aos(
-    sw_params: &BandedPairWiseSW,
-    batch: &ExtensionJobBatch,
-    engine: SimdEngineType,
-) -> Vec<BatchExtensionResult> {
-    if batch.is_empty() {
-        return Vec::new();
-    }
-
-    let simd_width = match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => 32,
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => 16,
-        SimdEngineType::Engine128 => 8,
-    };
-
-    // OPTIMIZATION: On 128-bit engines, process 16 jobs at a time (2x batch8)
-    // to amortize job collection and result distribution overhead.
-    // This "double-pump" approach reduces pipeline overhead on NEON/SSE.
-    let effective_chunk_size = if simd_width == 8 { 16 } else { simd_width };
-
-    let mut results = Vec::with_capacity(batch.len());
-
-    // Process in chunks of effective_chunk_size
-    for chunk_start in (0..batch.len()).step_by(effective_chunk_size) {
-        let chunk_end = (chunk_start + effective_chunk_size).min(batch.len());
-        let chunk_jobs = &batch.jobs[chunk_start..chunk_end];
-
-        // Build tuple batch for all jobs in this chunk
-        // Format: (query_len, query_slice, ref_len, ref_slice, band_width, h0)
-        let simd_batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = chunk_jobs
-            .iter()
-            .enumerate()
-            .map(|(i, job)| {
-                let job_idx = chunk_start + i;
-                (
-                    job.query_len,
-                    batch.get_query_seq(job_idx),
-                    job.ref_len,
-                    batch.get_ref_seq(job_idx),
-                    job.band_width,
-                    job.h0,
-                )
-            })
-            .collect();
-
-        // For 128-bit engines with >8 jobs, use double-pump (2x batch8)
-        let scores: Vec<OutScore> = if simd_width == 8 && simd_batch.len() > 8 {
-            let (first_half, second_half) = simd_batch.split_at(8);
-            let mut scores1 = unsafe { crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(first_half, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(), sw_params.scoring_matrix(), sw_params.alphabet_size()) };
-            let scores2 = unsafe { crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch8_int16(second_half, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(), sw_params.scoring_matrix(), sw_params.alphabet_size()) };
-            scores1.extend(scores2);
-            scores1
-        } else {
-            crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch(sw_params, &simd_batch)
-        };
-
-        // Map scores back to results with job metadata (single pass for all jobs)
-        for (job, score) in chunk_jobs.iter().zip(scores.iter()) {
+        // Map scores back to results (same as i8 path)
+        let mut results = Vec::with_capacity(batch.len());
+        for (job, score) in batch.jobs.iter().zip(scores.iter()) {
             results.push(BatchExtensionResult {
                 read_idx: job.read_idx,
                 chain_idx: job.chain_idx,
@@ -167,10 +109,102 @@ pub unsafe fn execute_batch_simd_scoring_aos(
                 max_off: score.max_offset,
             });
         }
+        results
+    }
+}
+
+/// Dispatch to the appropriate SoA SIMD i16 kernel based on engine type.
+unsafe fn dispatch_simd_scoring_soa_i16(
+    sw_params: &BandedPairWiseSW,
+    batch: &ExtensionJobBatch,
+    engine: SimdEngineType,
+) -> Vec<OutScore> {
+    // Determine SIMD width based on engine
+    let simd_width = match engine {
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => 32,
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => 16,
+        SimdEngineType::Engine128 => 8,
+        _ => panic!("Unsupported SIMD engine type for i16 SoA dispatch: {:?}", engine),
+    };
+
+    // Prepare SoAInputs16 from the batch
+    // These vectors will hold the lane-packed data
+    let mut qlen_vec = vec![0i8; simd_width]; // Initialize with zeros and correct size
+    let mut tlen_vec = vec![0i8; simd_width];
+    let mut h0_vec = vec![0i16; simd_width];
+    let mut w_vec = vec![0i8; simd_width];
+
+    // Convert query_soa and target_soa (u8) to i16 for the i16 kernel
+    let query_soa_i16: Vec<i16> = batch.query_soa.iter().map(|&x| x as i16).collect();
+    let target_soa_i16: Vec<i16> = batch.target_soa.iter().map(|&x| x as i16).collect();
+
+    // Populate the lane-packed data from jobs, up to batch.len()
+    for (idx, job) in batch.jobs.iter().enumerate() {
+        if idx < simd_width { // Ensure we don't write out of bounds of our vectors
+            qlen_vec[idx] = job.query_len.min(127) as i8;
+            tlen_vec[idx] = job.ref_len.min(127) as i8;
+            h0_vec[idx] = job.h0 as i16;
+            w_vec[idx] = job.band_width as i8;
+        }
     }
 
-    results
+    let inputs = SoAInputs16 {
+        query_soa: &query_soa_i16,
+        target_soa: &target_soa_i16,
+        qlen: &qlen_vec,
+        tlen: &tlen_vec,
+        h0: &h0_vec,
+        w: &w_vec,
+        max_qlen: batch.jobs.iter().map(|j| j.query_len).max().unwrap_or(0),
+        max_tlen: batch.jobs.iter().map(|j| j.ref_len).max().unwrap_or(0),
+    };
+
+    let num_jobs = batch.len();
+    let o_del = sw_params.o_del();
+    let e_del = sw_params.e_del();
+    let o_ins = sw_params.o_ins();
+    let e_ins = sw_params.e_ins();
+    let zdrop = sw_params.zdrop();
+    let mat = sw_params.scoring_matrix();
+    let m = sw_params.alphabet_size();
+
+    // Dispatch based on engine type
+    match engine {
+        SimdEngineType::Engine128 => {
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+            {
+                simd_banded_swa_batch8_int16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
+            }
+            #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+            {
+                panic!("Engine128 not supported on this architecture without x86_64 or aarch64 features for i16 SoA.");
+            }
+        },
+        #[cfg(target_arch = "x86_64")]
+        SimdEngineType::Engine256 => {
+            simd_banded_swa_batch16_int16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
+        },
+        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+        SimdEngineType::Engine512 => {
+            simd_banded_swa_batch32_int16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
+        },
+        _ => panic!("Unsupported SIMD engine type for i16 SoA dispatch: {:?}", engine),
+    }
 }
+
+/// AoS (Array-of-Structures) path for batched SIMD scoring.
+///
+/// Processes jobs in chunks matching the SIMD width for maximum lane utilization.
+/// This path is used as a fallback for reads longer than 128bp, where the i16
+/// kernel is required.
+///
+/// # NEON Optimization (Session 32)
+/// On 128-bit engines (NEON/SSE), we use "double-pump" batching: process 16 jobs
+/// at a time using 2x batch8 calls. This amortizes job collection and result
+/// distribution overhead, reducing pipeline overhead from ~44% to ~35%.
+
 
 /// Dispatch to the appropriate SoA SIMD kernel based on engine type.
 fn dispatch_simd_scoring_soa(
@@ -178,32 +212,52 @@ fn dispatch_simd_scoring_soa(
     batch: &ExtensionJobBatch,
     engine: SimdEngineType,
 ) -> Vec<OutScore> {
-    // These dispatch functions will be implemented in Step 4. They are expected
-    // to exist on BandedPairWiseSW and accept an ExtensionJobBatch directly.
-    // The generic const `W` corresponds to the i8 SIMD width.
-    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-    {
-        match engine {
-            SimdEngineType::Engine512 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<64>(sw_params, batch),
-            SimdEngineType::Engine256 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<32>(sw_params, batch),
-            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<16>(sw_params, batch),
+    let simd_width = batch.lanes; // Use batch.lanes for the actual width
+
+    let mut qlen_vec = vec![0i8; simd_width];
+    let mut tlen_vec = vec![0i8; simd_width];
+    let mut h0_vec = vec![0i8; simd_width];
+    let mut w_vec = vec![0i8; simd_width];
+
+    for (idx, job) in batch.jobs.iter().enumerate() {
+        if idx < simd_width {
+            qlen_vec[idx] = job.query_len.min(127) as i8;
+            tlen_vec[idx] = job.ref_len.min(127) as i8;
+            h0_vec[idx] = job.h0 as i8;
+            w_vec[idx] = job.band_width as i8;
         }
     }
 
-    #[cfg(all(target_arch = "x86_64", not(feature = "avx512")))]
-    {
-        match engine {
-            SimdEngineType::Engine256 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<32>(sw_params, batch),
-            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<16>(sw_params, batch),
-        }
-    }
+    let inputs = SoAInputs {
+        query_soa: &batch.query_soa,
+        target_soa: &batch.target_soa,
+        qlen: &qlen_vec,
+        tlen: &tlen_vec,
+        h0: &h0_vec,
+        w: &w_vec,
+        lanes: batch.lanes, // This is already set in execute_batch_simd_scoring
+        max_qlen: batch.jobs.iter().map(|j| j.query_len).max().unwrap_or(0),
+        max_tlen: batch.jobs.iter().map(|j| j.ref_len).max().unwrap_or(0),
+    };
 
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        // aarch64 (NEON) or scalar fallback
+    let num_jobs = batch.len();
+    let o_del = sw_params.o_del();
+    let e_del = sw_params.e_del();
+    let o_ins = sw_params.o_ins();
+    let e_ins = sw_params.e_ins();
+    let zdrop = sw_params.zdrop();
+    let mat = sw_params.scoring_matrix();
+    let m = sw_params.alphabet_size();
+
+    unsafe {
         match engine {
-            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::dispatch::simd_banded_swa_dispatch_soa::<16>(sw_params, batch),
-            _ => crate::core::alignment::banded_swa::dispatch::scalar_dispatch_from_soa(sw_params, batch), // Should not happen if engine is selected correctly
+            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+            SimdEngineType::Engine512 => crate::core::alignment::banded_swa::isa_avx512_int8::simd_banded_swa_batch64_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m),
+            #[cfg(target_arch = "x86_64")]
+            SimdEngineType::Engine256 => crate::core::alignment::banded_swa::isa_avx2::simd_banded_swa_batch32_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m),
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+            SimdEngineType::Engine128 => crate::core::alignment::banded_swa::isa_sse_neon::simd_banded_swa_batch16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m),
+            _ => panic!("Unsupported SIMD engine type for i8 SoA dispatch: {:?}", engine),
         }
     }
 }

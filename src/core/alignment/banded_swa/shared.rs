@@ -22,6 +22,19 @@ pub struct SoAInputs<'a> {
     pub max_tlen: i32,
 }
 
+/// Carrier for pre-formatted Structure-of-Arrays (SoA) data for i16 kernel.
+#[derive(Debug)]
+pub struct SoAInputs16<'a> {
+    pub query_soa: &'a [i16],
+    pub target_soa: &'a [i16],
+    pub qlen: &'a [i8],
+    pub tlen: &'a [i8],
+    pub h0: &'a [i16], // i16 h0 slice
+    pub w: &'a [i8],
+    pub max_qlen: i32,
+    pub max_tlen: i32,
+}
+
 /// Pad a batch of jobs to a fixed SIMD width and extract lane-wise parameters.
 #[inline(always)]
 #[allow(dead_code)]
@@ -303,6 +316,47 @@ macro_rules! generate_swa_entry_soa {
             };
 
             crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! generate_swa_entry_i16_soa {
+    (
+        name = $name:ident,
+        width = $W:expr,
+        engine = $E:ty,
+        cfg = $cfg:meta,
+        target_feature = $tf:literal,
+    ) => {
+        #[$cfg]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        #[cfg_attr(any(), target_feature(enable = $tf))]
+        pub unsafe fn $name(
+            inputs: &crate::core::alignment::banded_swa::shared::SoAInputs16,
+            num_jobs: usize,
+            o_del: i32, e_del: i32, o_ins: i32, e_ins: i32,
+            zdrop: i32, mat: &[i8; 25], m: i32,
+        ) -> Vec<$crate::alignment::banded_swa::OutScore> {
+            const W: usize = $W;
+            // Dummy AoS to satisfy KernelParams16::batch type; lengths come from inputs
+            let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); W];
+            let dummy_batch = &dummy_batch_arr[0..num_jobs];
+
+            let params = crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
+                batch: dummy_batch,
+                query_soa: inputs.query_soa,
+                target_soa: inputs.target_soa,
+                qlen: inputs.qlen,
+                tlen: inputs.tlen,
+                h0: inputs.h0,        // i16 h0 slice
+                w: inputs.w,
+                max_qlen: inputs.max_qlen,
+                max_tlen: inputs.max_tlen,
+                o_del, e_del, o_ins, e_ins,
+                zdrop, mat, m,
+            };
+            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params)
         }
     };
 }

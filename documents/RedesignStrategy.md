@@ -194,19 +194,16 @@ Phase 4 — Portable SIMD exploration and optional adoption
 - [x] AVX‑512 uses shared kernel (int8), parity and perf OK.
 - [x] SSE/NEON uses shared kernel (int16), parity and perf OK.
 - [x] AVX2 uses shared kernel (int16), parity and perf OK.
-- [ ] AVX‑512 uses shared kernel (int16). (pending)
+- [x] AVX‑512 uses shared kernel (int16).
 - [x] Pipelines SoA‑first adoption; transforms removed on hot paths.
 - [x] Core/pipelines module splits finalized; size guard enforced across new files.
 
 ### Next set of changes (planned work)
-1. AVX‑512 int16 migration to shared kernel (pending)
-   - Add thin macro wrapper for 32×i16 (`simd_banded_swa_batch32_int16`) using `SwEngine512_16`.
-   - Add deterministic and randomized parity tests; validate perf within ±2–3% on AVX‑512 hosts.
-2. CI perf guard updates
+1. CI perf guard updates
    - Enable/strict‑enforce the SoA transform‑time guard (must remain ≈0 on SIMD paths); fail CI if it regresses above threshold.
-3. Optional: Portable‑SIMD prototype behind feature flag
+2. Optional: Portable‑SIMD prototype behind feature flag
    - Implement a portable engine for `SwSimd`; run A/B perf and decide adoption.
-4. Optional: Re‑enable engine‑comparison bench once OOB is fixed and add to perf CI behind a feature gate.
+3. Optional: Re‑enable engine‑comparison bench once OOB is fixed and add to perf CI behind a feature gate.
 
 ### Next task (immediate)
 - Implement AVX‑512 int16 migration to the shared kernel:

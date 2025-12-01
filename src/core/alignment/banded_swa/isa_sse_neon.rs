@@ -7,6 +7,7 @@ use crate::core::alignment::banded_swa::kernel::sw_kernel;
 
 use super::engines16::SwEngine128_16;
 use crate::generate_swa_entry_i16;
+use crate::generate_swa_entry_i16_soa;
 
 
 use super::shared::{pad_batch, soa_transform}; // Updated path
@@ -70,6 +71,14 @@ generate_swa_entry_soa!(
 
 generate_swa_entry_i16!(
     name = simd_banded_swa_batch8_int16,
+    width = 8,
+    engine = SwEngine128_16,
+    cfg = cfg(any(target_arch = "x86_64", target_arch = "aarch64")),
+    target_feature = "",
+);
+
+generate_swa_entry_i16_soa!(
+    name = simd_banded_swa_batch8_int16_soa,
     width = 8,
     engine = SwEngine128_16,
     cfg = cfg(any(target_arch = "x86_64", target_arch = "aarch64")),

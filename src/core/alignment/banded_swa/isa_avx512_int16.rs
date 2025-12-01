@@ -7,6 +7,7 @@ use crate::core::alignment::banded_swa::OutScore;
 use crate::alignment::workspace::with_workspace;
 use std::arch::x86_64::*; // For raw AVX-512 intrinsics
 use crate::generate_swa_entry_i16; // Import the macro
+use crate::generate_swa_entry_i16_soa; // Import the macro
 use crate::alignment::banded_swa::engines16::SwEngine512_16; // Import SwEngine512_16
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 32 alignments (16-bit scores)
@@ -22,6 +23,14 @@ use crate::alignment::banded_swa::engines16::SwEngine512_16; // Import SwEngine5
 /// **Performance**: 4x parallelism over SSE 8-wide (8 vs 32 lanes)
 generate_swa_entry_i16!(
     name = simd_banded_swa_batch32_int16,
+    width = 32,
+    engine = SwEngine512_16,
+    cfg = cfg(all(target_arch = "x86_64", feature = "avx512")),
+    target_feature = "avx512bw,avx512f",
+);
+
+generate_swa_entry_i16_soa!(
+    name = simd_banded_swa_batch32_int16_soa,
     width = 32,
     engine = SwEngine512_16,
     cfg = cfg(all(target_arch = "x86_64", feature = "avx512")),
