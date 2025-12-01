@@ -21,11 +21,14 @@ use super::super::finalization::Alignment;
 use super::super::finalization::sam_flags;
 use super::super::index::index::BwaIndex;
 use super::insert_size::InsertSizeStats;
-use crate::alignment::edit_distance;
-use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
-use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
+use crate::core::alignment::edit_distance;
+use crate::core::alignment::ksw_affine_gap::{ksw_align2, KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr};
+
 use crate::compute::simd_abstraction::SimdEngine128;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::core::alignment::shared_types::AlignJob;
+use crate::core::alignment::workspace::with_workspace;
+use crate::pipelines::linear::batch_extension::dispatch::dispatch_kswv_soa;
 use rayon::prelude::*;
 
 /// A mate rescue SW job prepared for batch execution
@@ -707,35 +710,17 @@ fn execute_mate_rescue_batch_simd(
     }
 
     // Determine batch size from engine
-    let batch_size = match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => 64,
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => 32,
-        SimdEngineType::Engine128 => 16,
-    };
-
-    // Find max lengths across all jobs (for buffer allocation)
-    let max_ref_len = jobs.iter().map(|j| j.ref_seq.len()).max().unwrap_or(0);
-    let max_query_len = jobs.iter().map(|j| j.query_seq.len()).max().unwrap_or(0);
-
-    log::debug!(
-        "SIMD mate rescue: {} jobs, engine={:?}, batch_size={}, max_ref={}, max_query={}",
-        jobs.len(),
-        engine,
-        batch_size,
-        max_ref_len,
-        max_query_len
-    );
+    let (batch_size, _) = crate::compute::simd_abstraction::simd::get_simd_batch_sizes(engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults for mate rescue)
     let match_score: i8 = 1;
     let mismatch_penalty: i8 = -4;
-    let gap_open: i32 = 6;
-    let gap_extend: i32 = 1;
+    let o_del: i32 = 6;
+    let e_del: i32 = 1;
+    let o_ins: i32 = 6;
+    let e_ins: i32 = 1;
 
     // Process batches in parallel using rayon
-    // Each thread gets its own SoABuffer to avoid contention
     let results: Vec<MateRescueResult> = jobs
         .par_chunks(batch_size)
         .enumerate()
@@ -743,79 +728,35 @@ fn execute_mate_rescue_batch_simd(
             let chunk_start = chunk_idx * batch_size;
             let chunk_len = chunk.len();
 
-            // Each thread allocates its own SoA buffer
-            let mut soa = SoABuffer::new(max_ref_len + 16, max_query_len + 16, engine);
-
-            // Find max lengths for this chunk
-            let chunk_max_ref = chunk.iter().map(|j| j.ref_seq.len()).max().unwrap_or(0);
-            let chunk_max_query = chunk.iter().map(|j| j.query_seq.len()).max().unwrap_or(0);
-
-            // Create SeqPair metadata for the chunk
-            let mut pairs: Vec<SeqPair> = chunk
+            let align_jobs: Vec<AlignJob> = chunk
                 .iter()
-                .enumerate()
-                .map(|(i, job)| SeqPair {
-                    ref_idx: i,
-                    query_idx: i,
-                    id: chunk_start + i,
-                    ref_len: job.ref_seq.len() as i32,
-                    query_len: job.query_seq.len() as i32,
+                .map(|job| AlignJob {
+                    query: &job.query_seq,
+                    target: &job.ref_seq,
+                    qlen: job.query_seq.len(),
+                    tlen: job.ref_seq.len(),
+                    band: -1,
                     h0: 0,
-                    score: 0,
-                    te: -1,
-                    qe: -1,
-                    score2: -1,
-                    te2: -1,
-                    tb: -1,
-                    qb: -1,
                 })
                 .collect();
 
-            // Pad to batch_size with dummy entries
-            while pairs.len() < batch_size {
-                pairs.push(SeqPair {
-                    ref_len: 1,
-                    query_len: 1,
-                    ..Default::default()
-                });
-            }
-
-            // Collect sequence slices for transpose
-            let ref_seqs: Vec<&[u8]> = chunk.iter().map(|j| j.ref_seq.as_slice()).collect();
-            let query_seqs: Vec<&[u8]> = chunk.iter().map(|j| j.query_seq.as_slice()).collect();
-
-            // Extend with padding sequences
-            let padding_ref: Vec<u8> = vec![4; 1]; // N base
-            let padding_query: Vec<u8> = vec![4; 1];
-            let mut ref_seqs_padded: Vec<&[u8]> = ref_seqs;
-            let mut query_seqs_padded: Vec<&[u8]> = query_seqs;
-            while ref_seqs_padded.len() < batch_size {
-                ref_seqs_padded.push(&padding_ref);
-                query_seqs_padded.push(&padding_query);
-            }
-
-            // Transpose sequences into SoA layout
-            soa.transpose(&pairs, &ref_seqs_padded, &query_seqs_padded);
-
-            // Allocate results for this batch
-            let mut batch_results: Vec<KswResult> = vec![KswResult::default(); batch_size];
-
-            // Set max dimensions for the kernel
-            pairs[0].ref_len = chunk_max_ref as i32;
-            pairs[0].query_len = chunk_max_query as i32;
-
-            // Execute horizontal SIMD alignment
-            let _processed = batch_ksw_align(
-                &soa,
-                &mut pairs,
-                &mut batch_results,
-                engine,
-                match_score,
-                mismatch_penalty,
-                gap_open,
-                gap_extend,
-                false, // debug
-            );
+            let batch_results = with_workspace(|ws| {
+                let ksw_soa = ws.ensure_and_transpose_ksw(&align_jobs, batch_size);
+                
+                dispatch_kswv_soa(
+                    &ksw_soa,
+                    chunk_len,
+                    match_score,
+                    mismatch_penalty,
+                    o_del,
+                    e_del,
+                    o_ins,
+                    e_ins,
+                    0,     // ambig_penalty
+                    false, // debug
+                    engine,
+                )
+            });
 
             // Convert results back to MateRescueResult format
             batch_results
@@ -1484,31 +1425,25 @@ pub fn execute_compact_batch(
     ctx: &MateRescueBatchContext,
     engine: Option<SimdEngineType>,
 ) -> Vec<MateRescueResultCompact> {
-    use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
-
     if jobs.is_empty() {
         return Vec::new();
     }
 
     // Determine SIMD engine and batch size
     let engine = engine.unwrap_or(SimdEngineType::Engine128);
-    let simd_batch_size: usize = match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => 64,
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => 32,
-        SimdEngineType::Engine128 => 16,
-    };
+    let (simd_batch_size, _) = crate::compute::simd_abstraction::simd::get_simd_batch_sizes(engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults)
     let match_score: i8 = 1;
     let mismatch_penalty: i8 = -4;
-    let gap_open: i32 = 6;
-    let gap_extend: i32 = 1;
+    let o_del: i8 = 6;
+    let e_del: i8 = 1;
+    let o_ins: i8 = 6;
+    let e_ins: i8 = 1;
 
     // Process in chunks matching SIMD batch size
     // Use Rayon to parallelize across chunks
-    let num_chunks = jobs.len().div_ceil(simd_batch_size);
+    let num_chunks = (jobs.len() + simd_batch_size - 1) / simd_batch_size;
 
     (0..num_chunks)
         .into_par_iter()
@@ -1521,68 +1456,44 @@ pub fn execute_compact_batch(
             // Materialize sequences for this chunk
             let mut ref_seqs: Vec<Vec<u8>> = Vec::with_capacity(chunk_size);
             let mut query_seqs: Vec<Vec<u8>> = Vec::with_capacity(chunk_size);
-            let mut max_ref_len: usize = 0;
-            let mut max_query_len: usize = 0;
 
             for job in chunk_jobs {
                 let query_seq = job.get_query_seq(ctx);
                 let (ref_seq, _, _, _) = job.fetch_ref_seq(ctx);
-
-                max_ref_len = max_ref_len.max(ref_seq.len());
-                max_query_len = max_query_len.max(query_seq.len());
-
-                ref_seqs.push(ref_seq);
                 query_seqs.push(query_seq);
+                ref_seqs.push(ref_seq);
             }
 
-            // Build SeqPair metadata
-            let mut pairs: Vec<SeqPair> = chunk_jobs
+            let align_jobs: Vec<AlignJob> = chunk_jobs
                 .iter()
-                .enumerate()
-                .map(|(i, job)| SeqPair {
-                    ref_idx: i,
-                    query_idx: i,
-                    id: chunk_start + i,
-                    ref_len: ref_seqs[i].len() as i32,
-                    query_len: job.mate_len as i32,
+                .zip(query_seqs.iter())
+                .zip(ref_seqs.iter())
+                .map(|((_job, query), target)| AlignJob {
+                    query,
+                    target,
+                    qlen: query.len(),
+                    tlen: target.len(),
+                    band: -1,
                     h0: 0,
-                    score: 0,
-                    te: 0,
-                    qe: 0,
-                    score2: 0,
-                    te2: 0,
-                    tb: 0,
-                    qb: 0,
                 })
                 .collect();
 
-            // Pad pairs to SIMD batch size with dummies
-            while pairs.len() < simd_batch_size {
-                pairs.push(SeqPair::default());
-            }
-
-            // Create SoA buffer and transpose sequences
-            let mut soa = SoABuffer::new(max_ref_len.max(1), max_query_len.max(1), engine);
-
-            let ref_slices: Vec<&[u8]> = ref_seqs.iter().map(|s| s.as_slice()).collect();
-            let query_slices: Vec<&[u8]> = query_seqs.iter().map(|s| s.as_slice()).collect();
-            soa.transpose(&pairs[..chunk_size], &ref_slices, &query_slices);
-
-            // Allocate results
-            let mut results = vec![KswResult::default(); simd_batch_size];
-
-            // Call batched SIMD kernel
-            batch_ksw_align(
-                &soa,
-                &mut pairs,
-                &mut results,
-                engine,
-                match_score,
-                mismatch_penalty,
-                gap_open,
-                gap_extend,
-                false, // debug
-            );
+            let results = with_workspace(|ws| {
+                let ksw_soa = ws.ensure_and_transpose_ksw(&align_jobs, simd_batch_size);
+                dispatch_kswv_soa(
+                    &ksw_soa,
+                    chunk_size,
+                    5, 
+                    o_del,
+                    e_del as i32,
+                    o_ins as i32,
+                    e_ins as i32,
+                    0,     
+                    -1,    
+                    false, 
+                    engine,
+                )
+            });
 
             // Convert results to MateRescueResultCompact
             let chunk_results: Vec<MateRescueResultCompact> = (0..chunk_size)
