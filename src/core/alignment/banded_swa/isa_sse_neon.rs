@@ -4,6 +4,7 @@ use crate::core::alignment::banded_swa::OutScore;
 use super::engines::SwEngine128;
 use crate::core::alignment::banded_swa::KernelParams;
 use crate::core::alignment::banded_swa::kernel::sw_kernel;
+use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
 
 use super::engines16::SwEngine128_16;
 use crate::generate_swa_entry_i16;
@@ -11,6 +12,11 @@ use crate::generate_swa_entry_i16_soa;
 
 
 use super::shared::{pad_batch, soa_transform}; // Updated path
+use crate::core::alignment::shared_types::AlignJob;
+use crate::core::alignment::shared_types::SoAProvider;
+use crate::core::alignment::workspace::BandedSoAProvider;
+use crate::core::alignment::shared_types::WorkspaceArena;
+use crate::core::alignment::workspace::with_workspace;
 
 
 
@@ -28,21 +34,36 @@ pub unsafe fn simd_banded_swa_batch16(
     m: i32,
 ) -> Vec<OutScore> {
     const W: usize = 16;
-    const MAX_SEQ_LEN: usize = 128; // keep i8 limits aligned with AVX2
 
-    let (qlen, tlen, h0, w_arr, max_qlen, max_tlen, padded) = pad_batch::<W>(batch);
-    let (query_soa, target_soa) = soa_transform::<W, MAX_SEQ_LEN>(&padded);
+    // Convert legacy AoS tuples into AlignJob slice
+    let mut jobs: [AlignJob; W] = [AlignJob { query: &[], target: &[], qlen: 0, tlen: 0, band: 0, h0: 0 }; W];
+    let lanes = batch.len().min(W);
+    for i in 0..lanes {
+        let (ql, q, tl, t, w, h0) = batch[i];
+        jobs[i] = AlignJob {
+            query: q,
+            target: t,
+            qlen: ql as usize,
+            tlen: tl as usize,
+            band: w,
+            h0,
+        };
+    }
+
+    // Build SoA using 64B-aligned provider (no per-call Vec allocations)
+    let mut provider = BandedSoAProvider::new();
+    let soa = provider.ensure_and_transpose(&jobs[..lanes], W);
 
     let params = KernelParams {
         batch,
-        query_soa: &query_soa,
-        target_soa: &target_soa,
-        qlen: &qlen,
-        tlen: &tlen,
-        h0: &h0,
-        w: &w_arr,
-        max_qlen,
-        max_tlen,
+        query_soa: soa.query_soa,
+        target_soa: soa.target_soa,
+        qlen: soa.qlen,
+        tlen: soa.tlen,
+        h0: soa.h0,
+        w: soa.band,
+        max_qlen: soa.max_qlen,
+        max_tlen: soa.max_tlen,
         o_del,
         e_del,
         o_ins,
@@ -52,7 +73,8 @@ pub unsafe fn simd_banded_swa_batch16(
         m,
     };
 
-    sw_kernel::<W, SwEngine128>(&params)
+    // Use workspace-powered kernel variant to avoid per-call row allocations
+    with_workspace(|ws| sw_kernel_with_ws::<W, SwEngine128>(&params, ws))
 }
 
 
