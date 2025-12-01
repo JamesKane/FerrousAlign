@@ -14,6 +14,8 @@ This unifies the refactor plan with your existing docs (`DOD_ANALYSIS.md`, `docu
   - AVX2 path now calls the shared `sw_kernel::<32, SwEngine256>` via thin wrapper; parity tests green; no perf regressions observed.
   - SSE/NEON path now calls the shared `sw_kernel::<16, SwEngine128>`; tests green on x86_64 and aarch64; no perf regressions observed.
   - Deterministic and randomized parity tests added and kept to guard future changes.
+- AVX‑512 int8 unified and adopted:
+  - Thin wrapper `simd_banded_swa_batch64` calls `sw_kernel::<64, SwEngine512>`; parity and perf validated (±2–3%).
 - CI/tooling:
   - Quality workflow with rustfmt, clippy (deny warnings), and size‑guard (≤500 LOC in hot modules) is active.
   - Perf workflow runs Criterion benches and stores artifacts; problematic engine comparison bench is gated behind an opt‑in feature.
@@ -27,6 +29,7 @@ Pending/Planned:
 - SoA‑first pipelines: completed — per‑call AoS→SoA transforms removed on hot paths; transform time near zero in perf runs.
 - Core module split + dispatch consolidation: completed — `core/alignment/banded_swa/` now contains `shared`, `kernel`, `engines`, ISA wrappers, `scalar`, and `dispatch` modules; umbrella re‑exports preserve API.
 - Size guard: all previously flagged files have been reduced or split; every file in target areas is ≤ 500 LOC (most ≤ 300–400 LOC).
+- Int16 kernels: SSE/NEON (8×i16) and AVX2 (16×i16) now call the shared i16 kernel via thin wrappers; tests and benches show no regressions.
 
 ### Scope and priorities
 1. Core SW alignment: `src/core/alignment/banded_swa_{sse_neon,avx2,avx512}.rs` and `banded_swa.rs`.
@@ -188,25 +191,25 @@ Phase 4 — Portable SIMD exploration and optional adoption
 ### Status checklist (quick)
 - [x] AVX2 uses shared kernel (int8), parity and perf OK.
 - [x] SSE/NEON uses shared kernel (int8), parity and perf OK.
-- [ ] AVX‑512 (int8, int16) migrated to shared kernel (post‑SoA).
+- [x] AVX‑512 uses shared kernel (int8), parity and perf OK.
+- [x] SSE/NEON uses shared kernel (int16), parity and perf OK.
+- [x] AVX2 uses shared kernel (int16), parity and perf OK.
+- [ ] AVX‑512 uses shared kernel (int16). (pending)
 - [x] Pipelines SoA‑first adoption; transforms removed on hot paths.
 - [x] Core/pipelines module splits finalized; size guard enforced across new files.
 
 ### Next set of changes (planned work)
-1. AVX‑512 migration to shared kernel
-   - Add thin macro wrappers for int8 (`simd_banded_swa_batch64`) and int16 variants using `SwEngine512`.
+1. AVX‑512 int16 migration to shared kernel (pending)
+   - Add thin macro wrapper for 32×i16 (`simd_banded_swa_batch32_int16`) using `SwEngine512_16`.
    - Add deterministic and randomized parity tests; validate perf within ±2–3% on AVX‑512 hosts.
-2. Core module split and dispatch consolidation
-   - Split `banded_swa.rs` into `scalar.rs` and `dispatch.rs`; keep an umbrella re‑export file to avoid API churn.
-   - In pipelines, keep only thin dispatch; centralize conversions in a small helper module if needed.
-3. CI perf guard updates
-   - Enable SoA transform‑time guard (must remain ≈0 on SIMD paths); fail CI if it regresses above threshold.
-4. Optional: Portable‑SIMD prototype behind feature flag
+2. CI perf guard updates
+   - Enable/strict‑enforce the SoA transform‑time guard (must remain ≈0 on SIMD paths); fail CI if it regresses above threshold.
+3. Optional: Portable‑SIMD prototype behind feature flag
    - Implement a portable engine for `SwSimd`; run A/B perf and decide adoption.
+4. Optional: Re‑enable engine‑comparison bench once OOB is fixed and add to perf CI behind a feature gate.
 
 ### Next task (immediate)
-- Implement AVX‑512 int8 migration to the shared kernel:
-  - Introduce a macro wrapper in `isa_avx512.rs`: `generate_swa_entry!(name = simd_banded_swa_batch64, width = 64, engine = SwEngine512, cfg = cfg(all(target_arch = "x86_64", feature = "avx512")), target_feature = "avx512bw,avx512f");`
-  - Add deterministic and randomized parity tests (mirror AVX2 set) comparing old vs new if the manual path remains; otherwise cross‑engine parity (AVX‑512 vs AVX2 shared kernel) on tiny cases.
-  - Run benches on an AVX‑512 host; accept ±2–3% vs baseline.
-  - Keep int16 on the manual path for now; plan a `generate_swa_entry_i16!` once the i16 shared kernel is introduced.
+- Implement AVX‑512 int16 migration to the shared kernel:
+  - Add `SwEngine512_16` adapter implementing `SwSimd16` in `engines.rs` (or `engines16.rs`).
+  - Introduce a thin wrapper in `isa_avx512_int16.rs` with `generate_swa_entry_i16!(name = simd_banded_swa_batch32_int16, width = 32, engine = SwEngine512_16, cfg = cfg(all(target_arch = "x86_64", feature = "avx512")), target_feature = "avx512bw,avx512f");`
+  - Add deterministic and randomized parity tests (mirror AVX2/SSE i16 set); validate perf within ±2–3% on AVX‑512 hosts.
