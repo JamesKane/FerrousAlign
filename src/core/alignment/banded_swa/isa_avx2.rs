@@ -10,23 +10,69 @@
 
 use crate::core::alignment::banded_swa::OutScore;
 use super::engines::SwEngine256;
+use crate::core::alignment::banded_swa::KernelParams;
+use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
+use crate::core::alignment::banded_swa::engines16::SwEngine256_16;
+use crate::{generate_swa_entry_i16, generate_swa_entry_i16_soa};
+use crate::core::alignment::shared_types::{AlignJob, SoAProvider};
+use crate::core::alignment::workspace::{BandedSoAProvider, with_workspace};
 
-use crate::alignment::workspace::with_workspace;
-use crate::compute::simd_abstraction::SimdEngine256 as Engine;
-use crate::{generate_swa_entry, generate_swa_entry_i16, generate_swa_entry_i16_soa};
-use crate::alignment::banded_swa::engines16::SwEngine256_16;
+/// AVX2-optimized banded Smith-Waterman for batches of up to 32 alignments
+/// Uses arena-backed SoA buffers and reusable DP rows (no per-call heap allocs).
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn simd_banded_swa_batch32(
+    batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
+    o_del: i32,
+    e_del: i32,
+    o_ins: i32,
+    e_ins: i32,
+    zdrop: i32,
+    mat: &[i8; 25],
+    m: i32,
+) -> Vec<OutScore> {
+    const W: usize = 32;
 
-// -----------------------------------------------------------------------------
-// Macro-generated wrapper calling the shared kernel (for parity/comparison)
-// -----------------------------------------------------------------------------
-// Note: single declaration only; used for side-by-side parity testing
-generate_swa_entry!(
-    name = simd_banded_swa_batch32,
-    width = 32,
-    engine = SwEngine256,
-    cfg = cfg(target_arch = "x86_64"),
-    target_feature = "avx2",
-);
+    // Convert legacy AoS tuples into AlignJob slice
+    let mut jobs: [AlignJob; W] = [AlignJob { query: &[], target: &[], qlen: 0, tlen: 0, band: 0, h0: 0 }; W];
+    let lanes = batch.len().min(W);
+    for i in 0..lanes {
+        let (ql, q, tl, t, w, h0) = batch[i];
+        jobs[i] = AlignJob {
+            query: q,
+            target: t,
+            qlen: ql as usize,
+            tlen: tl as usize,
+            band: w,
+            h0,
+        };
+    }
+
+    // Build SoA using 64B-aligned provider (no per-call Vec allocations)
+    let mut provider = BandedSoAProvider::new();
+    let soa = provider.ensure_and_transpose(&jobs[..lanes], W);
+
+    let params = KernelParams {
+        batch,
+        query_soa: soa.query_soa,
+        target_soa: soa.target_soa,
+        qlen: soa.qlen,
+        tlen: soa.tlen,
+        h0: soa.h0,
+        w: soa.band,
+        max_qlen: soa.max_qlen,
+        max_tlen: soa.max_tlen,
+        o_del,
+        e_del,
+        o_ins,
+        e_ins,
+        zdrop,
+        mat,
+        m,
+    };
+
+    // Use workspace-powered kernel variant to avoid per-call row allocations
+    with_workspace(|ws| sw_kernel_with_ws::<W, SwEngine256>(&params, ws))
+}
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 16 alignments (16-bit scores)
 ///
