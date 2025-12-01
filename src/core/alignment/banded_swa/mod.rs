@@ -16,6 +16,8 @@ pub mod isa_avx2;
 pub mod isa_avx512_int8;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 pub mod isa_avx512_int16;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+pub mod kernel_avx512;
 
 pub mod dispatch;
 pub mod kernel_i16;
