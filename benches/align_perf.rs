@@ -301,40 +301,46 @@ fn bench_kswv(c: &mut Criterion) {
     // AVX-512 width 64
     #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
     if std::is_x86_feature_detected!("avx512bw") {
-        for (len, _band) in params.iter().copied() {
-            if len > 128 { continue; }
-            group.throughput(Throughput::Bytes((len as u64) * 64 * 2));
-            group.bench_function(format!("i8_w64_len{}", len), |b| {
-                let batch_spec = make_batch(len, 64);
-                let mut qsoa = vec![0xFFu8; len * 64];
-                let mut rsoa = vec![0xFFu8; len * 64];
-                for lane in 0..64 {
-                    let (_, q, _, t, _, _) = &batch_spec[lane];
-                    for pos in 0..len { qsoa[pos * 64 + lane] = q[pos]; rsoa[pos * 64 + lane] = t[pos]; }
-                }
-                let qlen = vec![len as i8; 64];
-                let tlen = vec![len as i8; 64];
-                let zeros = vec![0i8; 64];
-                let inputs = KswSoA {
-                    ref_soa: &rsoa,
-                    query_soa: &qsoa,
-                    qlen: &qlen,
-                    tlen: &tlen,
-                    band: &zeros,
-                    h0: &zeros,
-                    lanes: 64,
-                    max_qlen: len as i32,
-                    max_tlen: len as i32,
-                };
-                b.iter_batched(
-                    || (),
-                    |_| unsafe {
-                        let _r: Vec<KswResult> = kswv64_soa(&inputs, 64, 1, 0, 6, 1, 6, 1, -1, false);
-                        black_box(_r)
-                    },
-                    BatchSize::SmallInput,
-                );
-            });
+        // Allow temporarily skipping unstable W64 kswv benches via env var
+        let skip_w64 = std::env::var("SKIP_KSWV_W64").is_ok();
+        if skip_w64 {
+            eprintln!("Skipping AVX-512 kswv W64 benches due to SKIP_KSWV_W64 env var");
+        } else {
+            for (len, _band) in params.iter().copied() {
+                if len > 128 { continue; }
+                group.throughput(Throughput::Bytes((len as u64) * 64 * 2));
+                group.bench_function(format!("i8_w64_len{}", len), |b| {
+                    let batch_spec = make_batch(len, 64);
+                    let mut qsoa = vec![0xFFu8; len * 64];
+                    let mut rsoa = vec![0xFFu8; len * 64];
+                    for lane in 0..64 {
+                        let (_, q, _, t, _, _) = &batch_spec[lane];
+                        for pos in 0..len { qsoa[pos * 64 + lane] = q[pos]; rsoa[pos * 64 + lane] = t[pos]; }
+                    }
+                    let qlen = vec![len as i8; 64];
+                    let tlen = vec![len as i8; 64];
+                    let zeros = vec![0i8; 64];
+                    let inputs = KswSoA {
+                        ref_soa: &rsoa,
+                        query_soa: &qsoa,
+                        qlen: &qlen,
+                        tlen: &tlen,
+                        band: &zeros,
+                        h0: &zeros,
+                        lanes: 64,
+                        max_qlen: len as i32,
+                        max_tlen: len as i32,
+                    };
+                    b.iter_batched(
+                        || (),
+                        |_| unsafe {
+                            let _r: Vec<KswResult> = kswv64_soa(&inputs, 64, 1, 0, 6, 1, 6, 1, -1, false);
+                            black_box(_r)
+                        },
+                        BatchSize::SmallInput,
+                    );
+                });
+            }
         }
     } else {
         eprintln!("Skipping AVX-512 kswv benches: CPU lacks avx512bw");
