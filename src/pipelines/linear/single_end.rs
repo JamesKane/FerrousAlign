@@ -22,7 +22,7 @@ use crate::io::fastq_reader::FastqReader;
 use crate::io::soa_readers::SoaFastqReader;
 use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
-    write_sam_record,
+    write_sam_record, write_sam_records_soa,
 };
 use crate::utils::cputime;
 use rayon::prelude::*;
@@ -431,59 +431,20 @@ fn process_single_end_soa(
         // Update global read counter for next batch
         *reads_processed += batch_size as u64;
 
-        // Stage 2: Write output sequentially
-        // TODO PR4: Replace this with direct SoA-aware SAM writing (Phase 3)
-        let alignments = soa_alignments.to_aos();
-
+        // Stage 2: Write output sequentially using SoA-aware SAM writer (PR4)
         let rg_id = opt
             .read_group
             .as_ref()
             .and_then(|rg| super::mem_opt::MemOpt::extract_rg_id(rg));
 
-        for (read_idx, mut alignment_vec) in alignments.into_iter().enumerate() {
-            // Get original seq/qual from SoA batch
-            let (seq_start, seq_len) = soa_read_batch.read_boundaries[read_idx];
-            let seq_bytes = &soa_read_batch.seqs[seq_start..seq_start + seq_len];
-            let orig_seq = std::str::from_utf8(seq_bytes).unwrap_or("");
-            let qual_bytes = &soa_read_batch.quals[seq_start..seq_start + seq_len];
-            let orig_qual = std::str::from_utf8(qual_bytes).unwrap_or("");
-
-            // Select which alignments to output
-            let selection = select_single_end_alignments(&alignment_vec, opt);
-
-            if selection.output_as_unmapped {
-                // Output unmapped record
-                let query_name = alignment_vec
-                    .first()
-                    .map(|a| a.query_name.as_str())
-                    .unwrap_or("unknown");
-                let mut unmapped = create_unmapped_single_end(query_name, orig_seq.len());
-
-                if let Some(ref rg) = rg_id {
-                    unmapped.tags.push(("RG".to_string(), format!("Z:{rg}")));
-                }
-
-                if let Err(e) = write_sam_record(writer, &unmapped, orig_seq, orig_qual) {
-                    log::error!("Error writing SAM record: {e}");
-                }
-                continue;
-            }
-
-            // Output selected alignments
-            for idx in selection.output_indices {
-                let is_primary = idx == selection.primary_idx;
-                prepare_single_end_alignment(
-                    &mut alignment_vec[idx],
-                    is_primary,
-                    rg_id.as_deref(),
-                );
-
-                if let Err(e) =
-                    write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual)
-                {
-                    log::error!("Error writing SAM record: {e}");
-                }
-            }
+        if let Err(e) = write_sam_records_soa(
+            writer,
+            &soa_alignments,
+            &soa_read_batch,
+            opt,
+            rg_id.as_deref(),
+        ) {
+            log::error!("Error writing SAM records: {e}");
         }
 
         // Log per-batch timing

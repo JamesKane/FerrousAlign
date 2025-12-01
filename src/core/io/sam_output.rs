@@ -6,6 +6,8 @@
 
 use crate::pipelines::linear::finalization::{Alignment, sam_flags};
 use crate::pipelines::linear::mem_opt::MemOpt;
+use crate::pipelines::linear::batch_extension::SoAAlignmentResult;
+use crate::core::io::soa_readers::SoAReadBatch;
 use std::io::Write;
 
 // ============================================================================
@@ -488,6 +490,304 @@ pub fn write_single_end_alignments<W: Write>(
     }
 
     Ok(records_written)
+}
+
+// ============================================================================
+// SOA-AWARE SAM WRITING (PR4 Phase 3)
+// ============================================================================
+
+/// Write SAM records directly from SoAAlignmentResult (PR4)
+///
+/// This function writes SAM records batch-wise without converting to individual
+/// Alignment structs, providing better memory efficiency for large batches.
+///
+/// # Arguments
+/// * `writer` - Output writer
+/// * `soa_result` - SoA alignment results
+/// * `soa_read_batch` - Original read batch (for seq/qual data)
+/// * `opt` - Alignment options
+/// * `rg_id` - Optional read group ID
+///
+/// # Returns
+/// Number of SAM records written
+pub fn write_sam_records_soa<W: Write>(
+    writer: &mut W,
+    soa_result: &SoAAlignmentResult,
+    soa_read_batch: &SoAReadBatch,
+    opt: &MemOpt,
+    rg_id: Option<&str>,
+) -> std::io::Result<usize> {
+    let mut records_written = 0;
+
+    // Iterate through each read
+    for read_idx in 0..soa_result.num_reads() {
+        let (alignment_start_idx, num_alignments) = soa_result.read_alignment_boundaries[read_idx];
+
+        // Get original seq/qual from SoA read batch
+        let (seq_start, seq_len) = soa_read_batch.read_boundaries[read_idx];
+        let seq_bytes = &soa_read_batch.seqs[seq_start..seq_start + seq_len];
+        let seq = std::str::from_utf8(seq_bytes).unwrap_or("");
+        let qual_bytes = &soa_read_batch.quals[seq_start..seq_start + seq_len];
+        let qual = std::str::from_utf8(qual_bytes).unwrap_or("");
+
+        if num_alignments == 0 {
+            // No alignments - write unmapped record
+            let query_name = &soa_read_batch.names[read_idx];
+            let mut unmapped = create_unmapped_single_end(query_name, seq_len);
+
+            if let Some(rg) = rg_id {
+                unmapped.tags.push(("RG".to_string(), format!("Z:{rg}")));
+            }
+
+            write_sam_record(writer, &unmapped, seq, qual)?;
+            records_written += 1;
+            continue;
+        }
+
+        // Select which alignments to output
+        // We need to check scores and flags from SoA data
+        let mut best_score = i32::MIN;
+        let mut primary_idx_within_read = 0;
+
+        for i in 0..num_alignments {
+            let aln_idx = alignment_start_idx + i;
+            let is_secondary = soa_result.flags[aln_idx] & sam_flags::SECONDARY != 0;
+
+            // Find primary (not marked as SECONDARY) with highest score
+            if !is_secondary && soa_result.scores[aln_idx] > best_score {
+                best_score = soa_result.scores[aln_idx];
+                primary_idx_within_read = i;
+            }
+        }
+
+        let primary_aln_idx = alignment_start_idx + primary_idx_within_read;
+        let is_unmapped = soa_result.flags[primary_aln_idx] & sam_flags::UNMAPPED != 0;
+
+        // Check if best alignment is below threshold
+        if !is_unmapped && best_score < opt.t {
+            // Output unmapped record
+            let query_name = &soa_read_batch.names[read_idx];
+            let mut unmapped = create_unmapped_single_end(query_name, seq_len);
+
+            if let Some(rg) = rg_id {
+                unmapped.tags.push(("RG".to_string(), format!("Z:{rg}")));
+            }
+
+            write_sam_record(writer, &unmapped, seq, qual)?;
+            records_written += 1;
+            continue;
+        }
+
+        // Write selected alignments
+        for i in 0..num_alignments {
+            let aln_idx = alignment_start_idx + i;
+            let is_primary = i == primary_idx_within_read;
+            let is_unmapped = soa_result.flags[aln_idx] & sam_flags::UNMAPPED != 0;
+            let is_secondary = soa_result.flags[aln_idx] & sam_flags::SECONDARY != 0;
+            let is_supplementary = soa_result.flags[aln_idx] & sam_flags::SUPPLEMENTARY != 0;
+
+            // Determine if should output this alignment
+            let should_output = if opt.output_all_alignments {
+                is_unmapped || soa_result.scores[aln_idx] >= opt.t
+            } else {
+                is_unmapped || (!is_secondary && (is_primary || is_supplementary))
+            };
+
+            if !should_output {
+                continue;
+            }
+
+            // Write SAM record directly from SoA data
+            write_sam_record_from_soa(
+                writer,
+                soa_result,
+                aln_idx,
+                seq,
+                qual,
+                is_primary,
+                rg_id,
+            )?;
+            records_written += 1;
+        }
+    }
+
+    Ok(records_written)
+}
+
+/// Helper: Write a single SAM record from SoA data (PR4)
+///
+/// Formats a SAM record directly from SoAAlignmentResult arrays without
+/// constructing an Alignment struct. Replicates the logic from
+/// Alignment::to_sam_string_with_seq().
+#[inline]
+fn write_sam_record_from_soa<W: Write>(
+    writer: &mut W,
+    soa_result: &SoAAlignmentResult,
+    aln_idx: usize,
+    seq: &str,
+    qual: &str,
+    is_primary: bool,
+    rg_id: Option<&str>,
+) -> std::io::Result<()> {
+    let mut flag = soa_result.flags[aln_idx];
+
+    // Adjust flags for primary alignments
+    if is_primary {
+        flag &= !sam_flags::SECONDARY;
+        flag &= !sam_flags::SUPPLEMENTARY;
+    }
+
+    // Format CIGAR string
+    let (cigar_start, cigar_len) = soa_result.cigar_boundaries[aln_idx];
+    let cigar_string = format_cigar_soa(
+        &soa_result.cigar_ops[cigar_start..cigar_start + cigar_len],
+        &soa_result.cigar_lens[cigar_start..cigar_start + cigar_len],
+        flag & sam_flags::SUPPLEMENTARY != 0,
+    );
+
+    // Handle reverse complement for SEQ and QUAL
+    let (output_seq, output_qual) = if flag & sam_flags::REVERSE != 0 {
+        let rev_comp_seq: String = seq
+            .chars()
+            .rev()
+            .map(|c| match c {
+                'A' => 'T',
+                'T' => 'A',
+                'C' => 'G',
+                'G' => 'C',
+                'N' => 'N',
+                _ => c,
+            })
+            .collect();
+        let rev_qual: String = qual.chars().rev().collect();
+        (rev_comp_seq, rev_qual)
+    } else {
+        (seq.to_string(), qual.to_string())
+    };
+
+    // Handle hard/soft clips for trimming
+    let (trimmed_seq, trimmed_qual) = trim_seq_qual_for_clips(
+        &output_seq,
+        &output_qual,
+        &soa_result.cigar_ops[cigar_start..cigar_start + cigar_len],
+        &soa_result.cigar_lens[cigar_start..cigar_start + cigar_len],
+        flag & sam_flags::SUPPLEMENTARY != 0,
+    );
+
+    // Format SAM position
+    let sam_pos = if &soa_result.ref_names[aln_idx] == "*" {
+        0
+    } else {
+        soa_result.positions[aln_idx] + 1
+    };
+
+    // Write mandatory fields
+    write!(
+        writer,
+        "{}	{}	{}	{}	{}	{}	{}	{}	{}	{}	{}",
+        soa_result.query_names[aln_idx],
+        flag,
+        soa_result.ref_names[aln_idx],
+        sam_pos,
+        soa_result.mapqs[aln_idx],
+        cigar_string,
+        soa_result.rnexts[aln_idx],
+        soa_result.pnexts[aln_idx],
+        soa_result.tlens[aln_idx],
+        trimmed_seq,
+        trimmed_qual
+    )?;
+
+    // Write tags
+    let (tag_start, tag_len) = soa_result.tag_boundaries[aln_idx];
+    for i in 0..tag_len {
+        write!(
+            writer,
+            "	{}:{}",
+            soa_result.tag_names[tag_start + i],
+            soa_result.tag_values[tag_start + i]
+        )?;
+    }
+
+    // Add RG tag if specified
+    if let Some(rg) = rg_id {
+        write!(writer, "	RG:Z:{rg}")?;
+    }
+
+    writeln!(writer)?;
+
+    Ok(())
+}
+
+/// Format CIGAR string from SoA data (PR4)
+///
+/// Converts soft clips (S) to hard clips (H) for supplementary alignments.
+fn format_cigar_soa(ops: &[u8], lens: &[i32], is_supplementary: bool) -> String {
+    if ops.is_empty() {
+        return "*".to_string();
+    }
+
+    ops.iter()
+        .zip(lens.iter())
+        .map(|(&op, &len)| {
+            let op_char = if is_supplementary && op == b'S' {
+                'H'
+            } else {
+                op as char
+            };
+            format!("{len}{op_char}")
+        })
+        .collect()
+}
+
+/// Trim SEQ and QUAL for hard/soft clips (PR4)
+///
+/// For supplementary alignments, soft clips (S) are treated as clips requiring trimming.
+fn trim_seq_qual_for_clips(
+    seq: &str,
+    qual: &str,
+    ops: &[u8],
+    lens: &[i32],
+    is_supplementary: bool,
+) -> (String, String) {
+    let mut leading_clip = 0usize;
+    let mut trailing_clip = 0usize;
+
+    // Sum leading clips
+    for (&op, &len) in ops.iter().zip(lens.iter()) {
+        if op == b'H' || (is_supplementary && op == b'S') {
+            leading_clip += len as usize;
+        } else {
+            break;
+        }
+    }
+
+    // Sum trailing clips
+    for (&op, &len) in ops.iter().zip(lens.iter()).rev() {
+        if op == b'H' || (is_supplementary && op == b'S') {
+            trailing_clip += len as usize;
+        } else {
+            break;
+        }
+    }
+
+    // Trim if needed
+    if leading_clip > 0 || trailing_clip > 0 {
+        let seq_len = seq.len();
+        let start = leading_clip.min(seq_len);
+        let end = seq_len.saturating_sub(trailing_clip);
+
+        if start < end {
+            (
+                seq[start..end].to_string(),
+                qual[start..end.min(qual.len())].to_string(),
+            )
+        } else {
+            (String::new(), String::new())
+        }
+    } else {
+        (seq.to_string(), qual.to_string())
+    }
 }
 
 // ============================================================================
