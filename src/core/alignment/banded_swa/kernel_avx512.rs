@@ -28,7 +28,7 @@ where
     }
 
     // Fallback: delegate to the shared kernel.
-    sw_kernel_with_ws::<W, E>(params, ws)
+    sw_kernel_with_ws::<W, E>(params, num_jobs, ws)
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]

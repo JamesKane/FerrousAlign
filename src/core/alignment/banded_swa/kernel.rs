@@ -12,12 +12,15 @@
 /// out‑of‑bounds loads, and that `qlen/tlen/h0/w` slices have length `W`.
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
-pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(params: &KernelParams<'_>) -> Vec<OutScore>
+pub unsafe fn sw_kernel<const W: usize, E: SwSimd>(
+    params: &KernelParams<'_>,
+    num_jobs: usize,
+) -> Vec<OutScore>
 where
     <E as SwSimd>::V8: std::fmt::Debug,
 {
     // Use thread-local workspace to obtain reusable aligned rows
-    with_workspace(|ws| sw_kernel_with_ws::<W, E>(params, ws))
+    with_workspace(|ws| sw_kernel_with_ws::<W, E>(params, num_jobs, ws))
 }
 
 /// Shared banded SW kernel using a reusable `WorkspaceArena` for DP rows (int8 lanes).
@@ -25,6 +28,7 @@ where
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn sw_kernel_with_ws<const W: usize, E: SwSimd>(
     params: &KernelParams<'_>,
+    num_jobs: usize,
     ws: &mut dyn WorkspaceArena,
 ) -> Vec<OutScore>
 where
@@ -34,8 +38,9 @@ where
 
     // SIMD register width (stride) vs. number of active jobs in this batch
     let stride = W;
-    // Active lanes are bounded by actual batch size and available per-lane scalars
-    let lanes = params.batch.len().min(params.qlen.len()).min(W);
+    // Active lanes are bounded by num_jobs and available per-lane scalars
+    // Safety clamp: never exceed SIMD_WIDTH or buffer lengths
+    let lanes = num_jobs.min(params.qlen.len()).min(W);
     let qmax = params.max_qlen.max(0) as usize;
     let tmax = params.max_tlen.max(0) as usize;
 
@@ -121,7 +126,7 @@ where
     let mut end = [0i8; W];
     let mut terminated = [false; W];
     let mut terminated_count = 0;
-    for lane in 0..W {
+    for lane in 0..lanes {
         end[lane] = params.qlen[lane];
     }
 
@@ -162,7 +167,7 @@ where
         E::storeu_epi8(current_end.as_mut_ptr(), current_end_vec);
 
         let mut term_mask_vals = [0i8; W];
-        for lane in 0..W {
+        for lane in 0..lanes {
             if !terminated[lane] && i < params.tlen[lane] as usize {
                 term_mask_vals[lane] = -1i8;
             }
@@ -221,7 +226,7 @@ where
         E::storeu_epi8(max_score_vals.as_mut_ptr(), max_scores_vec);
 
         if zdrop > 0 {
-            for lane in 0..W {
+            for lane in 0..lanes {
                 if !terminated[lane] && i > 0 && i < params.tlen[lane] as usize {
                     let mut row_max = 0i8;
                     let row_beg = current_beg[lane] as usize;

@@ -133,14 +133,15 @@ fn dispatch_banded_swa_soa(
             }
         }
 
+        let actual_lanes = num_jobs.min(simd_width);
         let inputs = SoAInputs {
             query_soa: &batch.query_soa,
             target_soa: &batch.target_soa,
-            qlen: &qlen_vec,
-            tlen: &tlen_vec,
-            h0: &h0_vec,
-            w: &w_vec,
-            lanes: batch.lanes,
+            qlen: &qlen_vec[..actual_lanes],
+            tlen: &tlen_vec[..actual_lanes],
+            h0: &h0_vec[..actual_lanes],
+            w: &w_vec[..actual_lanes],
+            lanes: actual_lanes,
             max_qlen: batch.jobs.iter().map(|j| j.query_len).max().unwrap_or(0),
             max_tlen: batch.jobs.iter().map(|j| j.ref_len).max().unwrap_or(0),
         };
@@ -149,15 +150,15 @@ fn dispatch_banded_swa_soa(
             match engine {
                 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
                 SimdEngineType::Engine512 => simd_banded_swa_batch64_soa(
-                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
                 ),
                 #[cfg(target_arch = "x86_64")]
                 SimdEngineType::Engine256 => simd_banded_swa_batch32_soa(
-                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
                 ),
                 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
                 SimdEngineType::Engine128 => simd_banded_swa_batch16_soa(
-                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
                 ),
             }
         }
@@ -188,13 +189,14 @@ fn dispatch_banded_swa_soa(
             }
         }
 
+        let actual_lanes = num_jobs.min(simd_width);
         let inputs = SoAInputs16 {
             query_soa: &query_soa_i16,
             target_soa: &target_soa_i16,
-            qlen: &qlen_vec,
-            tlen: &tlen_vec,
-            h0: &h0_vec,
-            w: &w_vec,
+            qlen: &qlen_vec[..actual_lanes],
+            tlen: &tlen_vec[..actual_lanes],
+            h0: &h0_vec[..actual_lanes],
+            w: &w_vec[..actual_lanes],
             max_qlen: batch.jobs.iter().map(|j| j.query_len).max().unwrap_or(0),
             max_tlen: batch.jobs.iter().map(|j| j.ref_len).max().unwrap_or(0),
         };
@@ -203,15 +205,15 @@ fn dispatch_banded_swa_soa(
             match engine {
                 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
                 SimdEngineType::Engine128 => simd_banded_swa_batch8_int16_soa(
-                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
                 ),
                 #[cfg(target_arch = "x86_64")]
                 SimdEngineType::Engine256 => simd_banded_swa_batch16_int16_soa(
-                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
                 ),
                 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
                 SimdEngineType::Engine512 => simd_banded_swa_batch32_int16_soa(
-                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
                 ),
             }
         }

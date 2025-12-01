@@ -210,7 +210,7 @@ macro_rules! generate_swa_entry {
             };
 
             // Placeholder call; returns empty Vec until the shared kernel is implemented.
-            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params, num_jobs)
         }
     };
 }
@@ -270,7 +270,8 @@ macro_rules! generate_swa_entry_i16 {
                 mat,
                 m,
             };
-            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params)
+            let num_jobs = batch.len().min(W);
+            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params, num_jobs)
         }
     };
 }
@@ -325,7 +326,7 @@ macro_rules! generate_swa_entry_soa {
                 cfg: None,
             };
 
-            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params)
+            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params, num_jobs)
         }
     };
 }
@@ -376,7 +377,7 @@ macro_rules! generate_swa_entry_i16_soa {
                 mat,
                 m,
             };
-            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params)
+            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params, num_jobs)
         }
     };
 }

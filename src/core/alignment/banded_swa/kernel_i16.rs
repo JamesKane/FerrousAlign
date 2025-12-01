@@ -43,13 +43,17 @@ pub struct KernelParams16<'a> {
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn sw_kernel_i16<const W: usize, E: SwSimd16>(
     params: &KernelParams16<'_>,
+    num_jobs: usize,
 ) -> Vec<OutScore>
 where
     <E as SwSimd16>::V16: std::fmt::Debug,
 {
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
 
-    let lanes = W;
+    // SoA stride is always W (SIMD width), even if fewer lanes are active
+    let stride = W;
+    // Active lanes bounded by num_jobs and SIMD width
+    let lanes = num_jobs.min(W);
     let qmax = params.max_qlen.max(0) as usize;
     let tmax = params.max_tlen.max(0) as usize;
 
@@ -78,9 +82,9 @@ where
     let e_del_vec = E::set1_epi16(e_del);
     let e_ins_vec = E::set1_epi16(e_ins);
 
-    // DP buffers
-    let mut h_matrix = vec![0i16; qmax * lanes];
-    let mut e_matrix = vec![0i16; qmax * lanes];
+    // DP buffers (sized to full SIMD width for SoA addressing)
+    let mut h_matrix = vec![0i16; qmax * stride];
+    let mut e_matrix = vec![0i16; qmax * stride];
 
     // Initialize first row
     let h0_vec = E::loadu_epi16(params.h0.as_ptr());
@@ -88,13 +92,13 @@ where
 
     let h1_vec = E::subs_epi16(h0_vec, oe_ins_vec);
     let h1_vec = E::max_epi16(h1_vec, zero);
-    E::storeu_epi16(h_matrix.as_mut_ptr().add(lanes), h1_vec);
+    E::storeu_epi16(h_matrix.as_mut_ptr().add(stride), h1_vec);
 
     let mut h_prev = h1_vec;
     for j in 2..qmax {
         let h_curr = E::subs_epi16(h_prev, e_ins_vec);
         let h_curr = E::max_epi16(h_curr, zero);
-        E::storeu_epi16(h_matrix.as_mut_ptr().add(j * lanes), h_curr);
+        E::storeu_epi16(h_matrix.as_mut_ptr().add(j * stride), h_curr);
         h_prev = h_curr;
     }
 
@@ -107,13 +111,13 @@ where
     let mut end = [0i16; W];
     let mut terminated = [false; W];
     let mut terminated_count = 0;
-    for lane in 0..W {
+    for lane in 0..lanes {
         end[lane] = params.qlen[lane] as i16;
     }
 
     let qlen_i16_vec = {
         let mut qlen_i16 = [0i16; W];
-        for lane in 0..W {
+        for lane in 0..lanes {
             qlen_i16[lane] = params.qlen[lane] as i16;
         }
         E::loadu_epi16(qlen_i16.as_ptr())
@@ -121,19 +125,19 @@ where
 
     // Main DP loop
     for i in 0..tmax {
-        if terminated_count == W {
+        if terminated_count == lanes {
             break;
         }
 
         let mut f_vec = zero;
         let mut h_diag = E::loadu_epi16(h_matrix.as_ptr());
 
-        let s1 = E::loadu_epi16(params.target_soa.as_ptr().add(i * lanes));
+        let s1 = E::loadu_epi16(params.target_soa.as_ptr().add(i * stride));
 
         let i_vec = E::set1_epi16(i as i16);
         let w_vec = {
             let mut w_i16 = [0i16; W];
-            for lane in 0..W {
+            for lane in 0..lanes {
                 w_i16[lane] = params.w[lane] as i16;
             }
             E::loadu_epi16(w_i16.as_ptr())
@@ -156,7 +160,7 @@ where
         E::storeu_epi16(end.as_mut_ptr(), current_end_vec);
 
         let mut term_mask_vals = [0i16; W];
-        for lane in 0..W {
+        for lane in 0..lanes {
             if !terminated[lane] && i < params.tlen[lane] as usize {
                 term_mask_vals[lane] = -1i16; // All bits set for mask
             }
@@ -167,13 +171,13 @@ where
         let mut row_max_vec = zero;
 
         for j in 0..qmax {
-            let h_top = E::loadu_epi16(h_matrix.as_ptr().add(j * lanes));
-            let e_prev = E::loadu_epi16(e_matrix.as_ptr().add(j * lanes));
+            let h_top = E::loadu_epi16(h_matrix.as_ptr().add(j * stride));
+            let e_prev = E::loadu_epi16(e_matrix.as_ptr().add(j * stride));
 
             let h_diag_curr = h_diag;
             h_diag = h_top;
 
-            let s2 = E::loadu_epi16(params.query_soa.as_ptr().add(j * lanes));
+            let s2 = E::loadu_epi16(params.query_soa.as_ptr().add(j * stride));
 
             // Scoring logic using compare-and-blend
             let cmp_eq = E::cmpeq_epi16(s1, s2);
@@ -211,8 +215,8 @@ where
             h_val = E::and_si128(h_val, combined_mask);
             let e_val_masked = E::and_si128(e_val, combined_mask);
 
-            E::storeu_epi16(h_matrix.as_mut_ptr().add(j * lanes), h_val);
-            E::storeu_epi16(e_matrix.as_mut_ptr().add(j * lanes), e_val_masked);
+            E::storeu_epi16(h_matrix.as_mut_ptr().add(j * stride), h_val);
+            E::storeu_epi16(e_matrix.as_mut_ptr().add(j * stride), e_val_masked);
 
             let is_greater = E::cmpgt_epi16(h_val, max_scores_vec);
             max_scores_vec = E::max_epi16(h_val, max_scores_vec);
@@ -230,7 +234,7 @@ where
             let mut row_max_vals = [0i16; W];
             E::storeu_epi16(row_max_vals.as_mut_ptr(), row_max_vec);
 
-            for lane in 0..W {
+            for lane in 0..lanes {
                 if !terminated[lane]
                     && (i as i16) > 0
                     && (i as i16) < params.tlen[lane] as i16

@@ -98,7 +98,7 @@ pub unsafe fn simd_banded_swa_batch16(
 
     with_workspace(|ws| {
         // Use workspace-powered kernel variant to avoid per-call row allocations
-        sw_kernel_with_ws::<W, SwEngine128>(&params, ws)
+        sw_kernel_with_ws::<W, SwEngine128>(&params, lanes, ws)
     })
 }
 
