@@ -532,16 +532,18 @@ impl Default for BandedSoAProvider { fn default() -> Self { Self::new() } }
 
 impl SoAProvider for BandedSoAProvider {
     fn ensure_and_transpose<'a>(&'a mut self, jobs: &[AlignJob<'a>], lanes: usize) -> SwSoA<'a> {
-        let lanes = lanes.min(jobs.len());
-        // Determine maximum lengths
+        let stride_lanes = lanes; // desired SIMD stride (e.g., 16/32)
+        let job_count = jobs.len(); // actual number of active lanes
+
+        // Determine maximum lengths across provided jobs
         let mut max_q = 0usize;
         let mut max_t = 0usize;
-        for i in 0..lanes {
+        for i in 0..job_count {
             max_q = max_q.max(jobs[i].qlen);
             max_t = max_t.max(jobs[i].tlen);
         }
-        // Ensure capacities
-        self.ensure_soa_capacity(lanes, max_q, max_t);
+        // Ensure capacities using the SIMD stride (pad inactive lanes)
+        self.ensure_soa_capacity(stride_lanes, max_q, max_t);
 
         let qbuf = self.query_soa.as_mut_slice();
         let tbuf = self.target_soa.as_mut_slice();
@@ -550,34 +552,42 @@ impl SoAProvider for BandedSoAProvider {
         qbuf.fill(0xFF);
         tbuf.fill(0xFF);
 
-        // Per-lane scalars and transpose
-        for lane in 0..lanes {
-            let j = &jobs[lane];
-            let qn = j.qlen.min(max_q);
-            let tn = j.tlen.min(max_t);
-            // Write per-lane scalars (clamped to i8 range for u8 scoring path)
-            self.qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
-            self.tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
-            self.band[lane] = j.band.clamp(i32::MIN, 127) as i8;
-            self.h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
+        // Per-lane scalars and transpose for active jobs; pad the rest with zeros/defaults
+        for lane in 0..stride_lanes {
+            if lane < job_count {
+                let j = &jobs[lane];
+                let qn = j.qlen.min(max_q);
+                let tn = j.tlen.min(max_t);
+                // Write per-lane scalars (clamped to i8 range for u8 scoring path)
+                self.qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
+                self.tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
+                self.band[lane] = j.band.clamp(i32::MIN, 127) as i8;
+                self.h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
 
-            // Transpose sequences into SoA: pos*k + lane
-            for pos in 0..qn {
-                qbuf[pos * lanes + lane] = j.query[pos];
-            }
-            for pos in 0..tn {
-                tbuf[pos * lanes + lane] = j.target[pos];
+                // Transpose sequences into SoA: pos*stride + lane
+                for pos in 0..qn {
+                    qbuf[pos * stride_lanes + lane] = j.query[pos];
+                }
+                for pos in 0..tn {
+                    tbuf[pos * stride_lanes + lane] = j.target[pos];
+                }
+            } else {
+                // Inactive lanes: zero scalars; buffers already set to 0xFF
+                self.qlen[lane] = 0;
+                self.tlen[lane] = 0;
+                self.band[lane] = 0;
+                self.h0[lane]   = 0;
             }
         }
 
         SwSoA {
             query_soa: qbuf,
             target_soa: tbuf,
-            qlen: &self.qlen[..lanes],
-            tlen: &self.tlen[..lanes],
-            band: &self.band[..lanes],
-            h0:   &self.h0[..lanes],
-            lanes,
+            qlen: &self.qlen[..stride_lanes],
+            tlen: &self.tlen[..stride_lanes],
+            band: &self.band[..stride_lanes],
+            h0:   &self.h0[..stride_lanes],
+            lanes: stride_lanes,
             max_qlen: self.max_qlen,
             max_tlen: self.max_tlen,
         }

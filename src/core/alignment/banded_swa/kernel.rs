@@ -32,7 +32,14 @@ where
 {
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
 
-    let lanes = W;
+    // SIMD register width (stride) vs. number of active jobs in this batch
+    let stride = W;
+    // Active lanes are bounded by actual batch size and available per-lane scalars
+    let lanes = params
+        .batch
+        .len()
+        .min(params.qlen.len())
+        .min(W);
     let qmax = params.max_qlen.max(0) as usize;
     let tmax = params.max_tlen.max(0) as usize;
 
@@ -41,12 +48,13 @@ where
     }
 
     // Ensure reusable rows and borrow them
-    ws.ensure_rows(lanes, qmax, tmax, std::mem::size_of::<i8>());
+    // Allocate rows using full SIMD stride to keep SoA addressing stable
+    ws.ensure_rows(stride, qmax, tmax, std::mem::size_of::<i8>());
     let (h_rows, e_rows, _f_rows) = ws
         .rows_u8()
         .expect("WorkspaceArena did not provide u8 rows after ensure_rows");
-    debug_assert_eq!(h_rows.len(), qmax * lanes);
-    debug_assert_eq!(e_rows.len(), qmax * lanes);
+    debug_assert_eq!(h_rows.len(), qmax * stride);
+    debug_assert_eq!(e_rows.len(), qmax * stride);
 
     let h_ptr = h_rows.as_ptr() as *mut i8;
     let e_ptr = e_rows.as_ptr() as *mut i8;
@@ -90,13 +98,13 @@ where
 
     let h1_vec = E::subs_epi8(h0_vec, oe_ins_vec);
     let h1_vec = E::max_epi8(h1_vec, zero);
-    E::storeu_epi8(h_ptr.add(lanes), h1_vec);
+    E::storeu_epi8(h_ptr.add(stride), h1_vec);
 
     let mut h_prev = h1_vec;
     for j in 2..qmax {
         let h_curr = E::subs_epi8(h_prev, e_ins_vec);
         let h_curr = E::max_epi8(h_curr, zero);
-        E::storeu_epi8(h_ptr.add(j * lanes), h_curr);
+        E::storeu_epi8(h_ptr.add(j * stride), h_curr);
         h_prev = h_curr;
     }
 
@@ -128,7 +136,7 @@ where
         let mut f_vec = zero;
         let mut h_diag = E::loadu_epi8(h_ptr);
 
-        let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * lanes) as *const i8);
+        let s1 = E::loadu_epi8(params.target_soa.as_ptr().add(i * stride) as *const i8);
 
         let i_vec = E::set1_epi8(i as i8);
         let w_vec = E::loadu_epi8(params.w.as_ptr());
@@ -158,13 +166,13 @@ where
         let term_mask = E::loadu_epi8(term_mask_vals.as_ptr());
 
         for j in 0..qmax {
-            let h_top = E::loadu_epi8(h_ptr.add(j * lanes));
-            let e_prev = E::loadu_epi8(e_ptr.add(j * lanes));
+            let h_top = E::loadu_epi8(h_ptr.add(j * stride));
+            let e_prev = E::loadu_epi8(e_ptr.add(j * stride));
 
             let h_diag_curr = h_diag;
             h_diag = h_top;
 
-            let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * lanes) as *const i8);
+            let s2 = E::loadu_epi8(params.query_soa.as_ptr().add(j * stride) as *const i8);
             let eq_mask = E::cmpeq_epi8(s1, s2);
             let score_vec = E::blendv_epi8(mismatch_vec, match_vec, eq_mask);
 
@@ -195,8 +203,8 @@ where
             h_val = E::and_si128(h_val, combined_mask);
             let e_val_masked = E::and_si128(e_val, combined_mask);
 
-            E::storeu_epi8(h_ptr.add(j * lanes), h_val);
-            E::storeu_epi8(e_ptr.add(j * lanes), e_val_masked);
+            E::storeu_epi8(h_ptr.add(j * stride), h_val);
+            E::storeu_epi8(e_ptr.add(j * stride), e_val_masked);
 
             let is_greater = E::cmpgt_epi8(h_val, max_scores_vec);
             max_scores_vec = E::max_epi8(h_val, max_scores_vec);
@@ -217,7 +225,7 @@ where
 
                     for j in row_beg..row_end {
                         // SAFETY: indices are in range as ensured above
-                        let h_val = *h_ptr.add(j * lanes + lane);
+                        let h_val = *h_ptr.add(j * stride + lane);
                         row_max = row_max.max(h_val);
                     }
 
