@@ -701,3 +701,15 @@ mod tests {
         }
     }
 }
+
+// === SoA entry point (adapter-first) ===
+use crate::generate_ksw_entry_soa;
+
+#[cfg(target_arch = "x86_64")]
+generate_ksw_entry_soa!(
+    name = kswv_batch32_soa,
+    callee = batch_ksw_align_avx2,
+    width = 32,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "avx2",
+);

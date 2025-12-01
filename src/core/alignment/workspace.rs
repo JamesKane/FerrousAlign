@@ -382,6 +382,41 @@ impl AlignmentWorkspace {
         self.ksw_row_max_buf_sse_neon.fill(0);
     }
 
+    /// Return ISA-appropriate KSW workspace buffers (H0, H1, F, RowMax) for a given SIMD width.
+    /// The returned slices are 64-byte aligned and sized for `(KSW_MAX_SEQ_LEN+1) * lanes`.
+    #[inline]
+    pub fn ksw_buffers_for_width(
+        &mut self,
+        lanes: usize,
+    ) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+        match lanes {
+            KSW_SIMD_WIDTH_SSE_NEON => (
+                self.ksw_h0_buf_sse_neon.as_mut_slice(),
+                self.ksw_h1_buf_sse_neon.as_mut_slice(),
+                self.ksw_f_buf_sse_neon.as_mut_slice(),
+                self.ksw_row_max_buf_sse_neon.as_mut_slice(),
+            ),
+            KSW_SIMD_WIDTH_AVX2 => (
+                self.ksw_h0_buf_avx2.as_mut_slice(),
+                self.ksw_h1_buf_avx2.as_mut_slice(),
+                self.ksw_f_buf_avx2.as_mut_slice(),
+                self.ksw_row_max_buf_avx2.as_mut_slice(),
+            ),
+            KSW_SIMD_WIDTH_AVX512 => (
+                self.ksw_h0_buf_avx512.as_mut_slice(),
+                self.ksw_h1_buf_avx512.as_mut_slice(),
+                self.ksw_f_buf_avx512.as_mut_slice(),
+                self.ksw_row_max_buf_avx512.as_mut_slice(),
+            ),
+            _ => (
+                self.ksw_h0_buf_sse_neon.as_mut_slice(),
+                self.ksw_h1_buf_sse_neon.as_mut_slice(),
+                self.ksw_f_buf_sse_neon.as_mut_slice(),
+                self.ksw_row_max_buf_sse_neon.as_mut_slice(),
+            ),
+        }
+    }
+
     /// Reset KSW kernel buffers to zero for AVX2 (call before batch processing)
     #[inline]
     pub fn reset_ksw_buffers_avx2(&mut self) {

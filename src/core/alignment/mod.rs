@@ -10,6 +10,7 @@ pub mod edit_distance;
 pub mod ksw_affine_gap;
 pub mod kswv_batch; // Horizontal SIMD batching infrastructure
 pub mod kswv_sse_neon; // Baseline 128-bit horizontal SIMD kernel
+pub mod kswv; // kswv shared macros/adapters
 pub mod utils;
 pub mod workspace; // Thread-local buffer pools for allocation reuse
 pub mod shared_types; // Shared SoA carriers, config bundles, and arena traits
