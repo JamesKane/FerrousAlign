@@ -1,10 +1,32 @@
 # End-to-End Structure-of-Arrays (SoA) Pipeline
 
+## Status: ✅ **COMPLETE FOR SINGLE-END READS** (as of 2025-12-01)
+
+All PRs (PR1-PR4) have been successfully implemented and tested. The end-to-end SoA pipeline is now operational for single-end read processing with zero AoS conversions from FASTQ input through SAM output.
+
+**Completed Work:**
+- ✅ PR1: SoA-aware I/O Layer (`SoaFastqReader` in `src/core/io/soa_readers.rs`)
+- ✅ PR2: SoA Seeding and Chaining (`find_seeds_batch`, `chain_seeds_batch` in `src/pipelines/linear/`)
+- ✅ PR3: End-to-End Integration (`process_sub_batch_internal_soa` in `orchestration_soa.rs`)
+- ✅ PR4: SoA-aware Output (`SoAAlignmentResult` and `write_sam_records_soa` in `sam_output.rs`)
+- ✅ Cleanup: Removed temporary AoS bridge functions
+- ✅ Testing: Verified identical SAM output between AoS and SoA pipelines
+
+**Usage:**
+```bash
+FERROUS_SOA_PIPELINE=1 ./target/release/ferrous-align mem ref.idx reads.fq > output.sam
+```
+
+**Remaining Work:**
+- Extend SoA pipeline to paired-end mode
+- Performance benchmarking and optimization
+- Remove legacy AoS code paths (PR5)
+
 ## Objective
 This document outlines the architectural changes required to make the FerrousAlign pipeline a zero-overhead, end-to-end Structure-of-Arrays (SoA) data processing system. The goal is to stream data from disk directly into SoA buffers, process it through all pipeline stages in SoA format, and write the final output from SoA data, eliminating all AoS-to-SoA conversion overhead.
 
-## Current State
-The alignment pipeline has been successfully refactored to use SoA as its internal data representation for the core alignment kernels (`banded_swa` and `kswv`). However, the data is still read from disk and processed in the initial pipeline stages (I/O, seeding, chaining) in an Array-of-Structures (AoS) format. The conversion to SoA happens just before the alignment kernels are called, which introduces a performance overhead.
+## Original State (Before PR1)
+The alignment pipeline had been successfully refactored to use SoA as its internal data representation for the core alignment kernels (`banded_swa` and `kswv`). However, the data was still read from disk and processed in the initial pipeline stages (I/O, seeding, chaining) in an Array-of-Structures (AoS) format. The conversion to SoA happened just before the alignment kernels were called, which introduced a performance overhead.
 
 ## Proposed End-to-End SoA Architecture
 The new architecture will be SoA-native from end to end. This will involve changes in the I/O, seeding, chaining, and output layers of the pipeline.
