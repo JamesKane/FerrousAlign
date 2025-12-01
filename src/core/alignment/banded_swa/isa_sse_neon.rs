@@ -33,6 +33,14 @@ pub unsafe fn simd_banded_swa_batch16(
 ) -> Vec<OutScore> {
     const W: usize = 16;
 
+    // Follow bwa-mem2 policy: dispatch to 16-bit kernel if any sequence length > 127
+    // Upstream uses MAX_SEQ_LEN8 = 128 and routes longer reads to i16
+    let needs_i16 = batch.iter().any(|(ql, _q, tl, _t, _w, _h0)| (*ql > 127) || (*tl > 127));
+    if needs_i16 {
+        // Use the i16 AoS entry (8 lanes on 128-bit engines)
+        return simd_banded_swa_batch8_int16(batch, o_del, e_del, o_ins, e_ins, zdrop, mat, m);
+    }
+
     // Convert legacy AoS tuples into AlignJob slice
     let mut jobs: [AlignJob; W] = [AlignJob { query: &[], target: &[], qlen: 0, tlen: 0, band: 0, h0: 0 }; W];
     let lanes = batch.len().min(W);
