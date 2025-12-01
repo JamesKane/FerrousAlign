@@ -1,6 +1,7 @@
-use super::scalar::BandedPairWiseSW;
+use crate::alignment::banded_swa::{reverse_cigar, BandedPairWiseSW};
+use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 use super::shared::SoAInputs;
-use super::types::{OutScore, AlignmentResult, ExtensionDirection, reverse_cigar};
+use crate::core::alignment::banded_swa::types::{OutScore, AlignmentResult, ExtensionDirection};
 
 
 use crate::compute::simd_abstraction::simd::{SimdEngineType, detect_optimal_simd_engine};
@@ -81,7 +82,7 @@ pub fn simd_banded_swa_dispatch_soa<const W: usize>(
             if W == 64 {
                 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
                 {
-                    super::isa_avx512::simd_banded_swa_batch64_soa(
+                    super::isa_avx512_int8::simd_banded_swa_batch64_soa(
                         &inputs,
                         chunk_size,
                         sw_params.o_del(),
@@ -144,7 +145,7 @@ pub fn scalar_dispatch_from_soa(sw_params: &BandedPairWiseSW, batch: &ExtensionJ
         let job = &batch.jobs[i];
         let q_seq = batch.get_query_seq(i);
         let r_seq = batch.get_ref_seq(i);
-        let (score, _, _, _) = sw_params.scalar_banded_swa(
+        let (score, _, _, _) = scalar_banded_swa(sw_params,
             job.query_len,
             q_seq,
             job.ref_len,
@@ -215,7 +216,7 @@ pub fn simd_banded_swa_dispatch(
             SimdEngineType::Engine512 => {
                 // Use AVX-512 kernel (64-way parallelism)
                 unsafe {
-                    super::isa_avx512::simd_banded_swa_batch64(
+                    super::isa_avx512_int8::simd_banded_swa_batch64(
                         chunk, sw_params.o_del(), sw_params.e_del(), sw_params.o_ins(), sw_params.e_ins(), sw_params.zdrop(),
                         sw_params.scoring_matrix(), sw_params.alphabet_size(),
                     )
@@ -317,10 +318,10 @@ pub fn simd_banded_swa_dispatch_with_cigar(
     let mut results = Vec::with_capacity(batch.len());
     for (qlen, query, tlen, target, w, h0, direction) in batch.iter() {
         let (score, mut cigar, ref_aligned, query_aligned) =
-            sw_params.scalar_banded_swa(*qlen, query, *tlen, target, *w, *h0);
+            scalar_banded_swa(sw_params, *qlen, query, *tlen, target, *w, *h0);
 
         if *direction == Some(ExtensionDirection::Left) {
-            cigar = reverse_cigar(&cigar);
+            cigar = reverse_cigar(&cigar[..]);
         }
 
         results.push(AlignmentResult {

@@ -185,7 +185,7 @@ Phase 4 — Portable SIMD exploration and optional adoption
 - [x] SSE/NEON uses shared kernel (int8), parity and perf OK.
 - [ ] AVX‑512 (int8, int16) migrated to shared kernel (post‑SoA).
 - [x] Pipelines SoA‑first adoption; transforms removed on hot paths.
-- [ ] Core/pipelines module splits finalized; size guard enforced across new files.
+- [x] Core/pipelines module splits finalized; size guard enforced across new files.
 
 ### Next set of changes (planned work)
 1. AVX‑512 migration to shared kernel
@@ -198,3 +198,10 @@ Phase 4 — Portable SIMD exploration and optional adoption
    - Enable SoA transform‑time guard (must remain ≈0 on SIMD paths); fail CI if it regresses above threshold.
 4. Optional: Portable‑SIMD prototype behind feature flag
    - Implement a portable engine for `SwSimd`; run A/B perf and decide adoption.
+
+### Next task (immediate)
+- Implement AVX‑512 int8 migration to the shared kernel:
+  - Introduce a macro wrapper in `isa_avx512.rs`: `generate_swa_entry!(name = simd_banded_swa_batch64, width = 64, engine = SwEngine512, cfg = cfg(all(target_arch = "x86_64", feature = "avx512")), target_feature = "avx512bw,avx512f");`
+  - Add deterministic and randomized parity tests (mirror AVX2 set) comparing old vs new if the manual path remains; otherwise cross‑engine parity (AVX‑512 vs AVX2 shared kernel) on tiny cases.
+  - Run benches on an AVX‑512 host; accept ±2–3% vs baseline.
+  - Keep int16 on the manual path for now; plan a `generate_swa_entry_i16!` once the i16 shared kernel is introduced.

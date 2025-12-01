@@ -1,5 +1,3 @@
-// Rust equivalent of dnaSeqPair (C++ bandedSWA.h:90-99)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeqPair {
     /// Offset into reference sequence buffer
     pub reference_offset: i32,
@@ -98,83 +96,119 @@ pub struct AlignmentResult {
     pub query_aligned: Vec<u8>,
 }
 
-// Helper function to create scoring matrix (similar to bwa_fill_scmat in main_banded.cpp)
-pub fn bwa_fill_scmat(match_score: i8, mismatch_penalty: i8, ambig_penalty: i8) -> [i8; 25] {
-    let mut mat = [0i8; 25];
-    let mut k = 0;
+// Constants for traceback
+pub const DEFAULT_AMBIG: i8 = -1;
+pub const TB_MATCH: u8 = 0;
+pub const TB_DEL: u8 = 1; // Gap in target/reference
+pub const TB_INS: u8 = 2; // Gap in query
 
-    // Fill 5x5 matrix for A, C, G, T, N
-    for i in 0..4 {
-        for j in 0..4 {
-            mat[k] = if i == j {
-                match_score
-            } else {
-                -mismatch_penalty
-            };
-            k += 1;
+// Rust equivalent of BandedPairWiseSW class
+pub struct BandedPairWiseSW {
+    m: i32,
+    end_bonus: i32,
+    zdrop: i32,
+    /// Clipping penalty for 5' end (default: 5)
+    pen_clip5: i32,
+    /// Clipping penalty for 3' end (default: 5)
+    pen_clip3: i32,
+    o_del: i32,
+    o_ins: i32,
+    e_del: i32,
+    e_ins: i32,
+    mat: [i8; 25], // Assuming a 5x5 matrix for A,C,G,T,N
+
+    w_match: i8,
+
+    w_mismatch: i8,
+
+    w_open: i8,
+
+    w_extend: i8,
+
+    w_ambig: i8,
+}
+
+impl BandedPairWiseSW {
+    pub fn new(
+        o_del: i32,
+        e_del: i32,
+        o_ins: i32,
+        e_ins: i32,
+        zdrop: i32,
+        end_bonus: i32,
+        pen_clip5: i32,
+        pen_clip3: i32,
+        mat: [i8; 25],
+        w_match: i8,
+        w_mismatch: i8,
+    ) -> Self {
+        BandedPairWiseSW {
+            m: 5, // Assuming 5 bases (A, C, G, T, N)
+            end_bonus,
+            zdrop,
+            pen_clip5,
+            pen_clip3,
+            o_del,
+            o_ins,
+            e_del,
+            e_ins,
+            mat,
+            w_match,
+            w_mismatch, // Keep negative: caller passes -opt.b (e.g., -4), SIMD adds this to subtract
+            w_open: o_del as i8, // Cast to i8
+            w_extend: e_del as i8, // Cast to i8
+            w_ambig: DEFAULT_AMBIG,
         }
-        mat[k] = ambig_penalty; // ambiguous base (N)
-        k += 1;
     }
 
-    // Last row for N
-    for _ in 0..5 {
-        mat[k] = ambig_penalty;
-        k += 1;
+    // Getter methods for ksw_affine_gap integration
+    /// Returns the gap open penalty for deletions
+    pub fn o_del(&self) -> i32 {
+        self.o_del
     }
 
-    mat
-}
+    /// Returns the gap extension penalty for deletions
+    pub fn e_del(&self) -> i32 {
+        self.e_del
+    }
 
-// ============================================================================
-// Helper Functions for Separate Left/Right Extensions
-// ============================================================================
+    /// Returns the gap open penalty for insertions
+    pub fn o_ins(&self) -> i32 {
+        self.o_ins
+    }
 
-/// Reverse a sequence for left extension alignment
-/// C++ reference: bwamem.cpp:2278 reverses query for left extension
-#[inline]
-pub fn reverse_sequence(seq: &[u8]) -> Vec<u8> {
-    seq.iter().copied().rev().collect()
-}
+    /// Returns the gap extension penalty for insertions
+    pub fn e_ins(&self) -> i32 {
+        self.e_ins
+    }
 
-/// Reverse a CIGAR string after left extension alignment
-/// When we align reversed sequences, the CIGAR is also reversed
-/// This function reverses it back to the forward orientation
-#[inline]
-pub fn reverse_cigar(cigar: &[(u8, i32)]) -> Vec<(u8, i32)> {
-    cigar.iter().copied().rev().collect()
-}
+    /// Returns the Z-drop threshold
+    pub fn zdrop(&self) -> i32 {
+        self.zdrop
+    }
 
-/// Merge consecutive identical CIGAR operations
-/// E.g., [(M, 10), (M, 5)] → [(M, 15)]
-///
-/// **Deprecated**: Use `crate::alignment::cigar::normalize()` instead.
-/// This function is kept for internal compatibility only.
-#[inline]
-#[deprecated(
-    since = "0.5.3",
-    note = "Use crate::alignment::cigar::normalize() instead"
-)]
-pub fn merge_cigar_operations(cigar: Vec<(u8, i32)>) -> Vec<(u8, i32)> {
-    crate::alignment::cigar::normalize(cigar)
-}
+    /// Returns the end bonus
+    pub fn end_bonus(&self) -> i32 {
+        self.end_bonus
+    }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    /// Returns the alphabet size
+    pub fn alphabet_size(&self) -> i32 {
+        self.m
+    }
 
-    #[test]
-    fn test_bwa_fill_scmat() {
-        let mat = bwa_fill_scmat(1, 4, -1);
+    /// Returns the scoring matrix
+    pub fn scoring_matrix(&self) -> &[i8; 25] {
+        &self.mat
+    }
 
-        // Check diagonal (matches)
-        assert_eq!(mat[0], 1); // A-A
-        assert_eq!(mat[6], 1); // C-C
-        assert_eq!(mat[12], 1); // G-G
-        assert_eq!(mat[18], 1); // T-T
+    /// Returns the 5' clipping penalty
+    pub fn pen_clip5(&self) -> i32 {
+        self.pen_clip5
+    }
 
-        // Check mismatches
-        assert_eq!(mat[1], -4); // A-C
-        assert_eq!(mat[5], -4); // C-A
+    /// Returns the 3' clipping penalty
+    pub fn pen_clip3(&self) -> i32 {
+        self.pen_clip3
     }
 }

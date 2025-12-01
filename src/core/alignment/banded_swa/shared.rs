@@ -3,7 +3,7 @@
 //! These functions are extracted from per-ISA implementations to reduce
 //! duplication. They are designed to be aggressively inlined and cheap.
 
-use super::types::OutScore;
+use crate::core::alignment::banded_swa::OutScore;
 
 /// Carrier for pre-formatted Structure-of-Arrays (SoA) data.
 ///

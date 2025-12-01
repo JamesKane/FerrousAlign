@@ -733,14 +733,16 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
 }
 
 /// Reverse a portion of a sequence in place.
-/// Equivalent to C's `revseq`.
+/// Equivalent to C's `reverse_sequence`.
 #[inline]
-fn revseq(seq: &mut [u8], len: usize) {
+fn reverse_sequence(seq: &mut [u8], len: usize) {
     let half = len / 2;
     for i in 0..half {
         seq.swap(i, len - 1 - i);
     }
 }
+
+
 
 /// High-level alignment function with separate gap penalties for deletions and insertions.
 /// Equivalent to C's `ksw_align2`.
@@ -808,15 +810,15 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
         let qe_len = (r.qe + 1) as usize;
         let te_len = (r.te + 1) as usize;
 
-        revseq(query, qe_len);
-        revseq(target, te_len);
+        reverse_sequence(query, qe_len);
+        reverse_sequence(target, te_len);
 
         // Create new query profile for reversed sequence
         let q2_ptr = ksw_qinit(q.size as i32, r.qe + 1, query, m, mat);
         if q2_ptr.is_null() {
             // Restore original sequences
-            revseq(query, qe_len);
-            revseq(target, te_len);
+            reverse_sequence(query, qe_len);
+            reverse_sequence(target, te_len);
             ksw_qfree(q_ptr);
             return r;
         }
@@ -831,8 +833,8 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
         };
 
         // Restore original sequences
-        revseq(query, qe_len);
-        revseq(target, te_len);
+        reverse_sequence(query, qe_len);
+        reverse_sequence(target, te_len);
 
         // Free reverse query profile
         ksw_qfree(q2_ptr);
@@ -1226,23 +1228,23 @@ mod tests {
     }
 
     #[test]
-    fn test_revseq_basic() {
+    fn test_reverse_sequence_basic() {
         let mut seq = vec![0, 1, 2, 3, 4];
-        revseq(&mut seq, 5);
+        reverse_sequence(&mut seq, 5);
         assert_eq!(seq, vec![4, 3, 2, 1, 0]);
     }
 
     #[test]
-    fn test_revseq_partial() {
+    fn test_reverse_sequence_partial() {
         let mut seq = vec![0, 1, 2, 3, 4, 5, 6];
-        revseq(&mut seq, 4); // Only reverse first 4 elements
+        reverse_sequence(&mut seq, 4); // Only reverse first 4 elements
         assert_eq!(seq, vec![3, 2, 1, 0, 4, 5, 6]);
     }
 
     #[test]
-    fn test_revseq_empty() {
+    fn test_reverse_sequence_empty() {
         let mut seq: Vec<u8> = vec![];
-        revseq(&mut seq, 0);
+        reverse_sequence(&mut seq, 0);
         assert_eq!(seq, Vec::<u8>::new());
     }
 

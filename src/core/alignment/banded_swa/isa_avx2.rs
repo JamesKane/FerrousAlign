@@ -8,8 +8,9 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use super::types::OutScore; // Updated path
-use super::kernel::SwEngine256; // Updated path
+use crate::core::alignment::banded_swa::OutScore;
+use super::engines::SwEngine256;
+
 use crate::alignment::workspace::with_workspace;
 use crate::compute::simd_abstraction::SimdEngine256 as Engine;
 use crate::generate_swa_entry;

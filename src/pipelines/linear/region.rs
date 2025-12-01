@@ -21,11 +21,13 @@
 //
 // ============================================================================
 
+use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 use super::chaining::{Chain, cal_max_gap};
 use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
-use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore};
+use crate::core::alignment::banded_swa::BandedPairWiseSW;
+use crate::core::alignment::banded_swa::OutScore;
 use crate::alignment::edit_distance;
 use crate::compute::ComputeBackend;
 
@@ -720,7 +722,7 @@ fn execute_simd_scoring(
             SimdEngineType::Engine512 => {
                 // AVX-512: 32-wide batch with vectorized scoring
                 unsafe {
-                    crate::core::alignment::banded_swa::isa_avx512::simd_banded_swa_batch32_int16(
+                    crate::core::alignment::banded_swa::isa_avx512_int16::simd_banded_swa_batch32_int16(
                         &batch,
                         sw_params.o_del(),
                         sw_params.e_del(),
@@ -1036,7 +1038,7 @@ pub fn generate_cigar_from_region(
     region: &AlignmentRegion,
     opt: &MemOpt,
 ) -> Option<(Vec<(u8, i32)>, i32, String)> {
-    use crate::alignment::banded_swa::BandedPairWiseSW;
+use crate::core::alignment::banded_swa::BandedPairWiseSW;
 
     // Debug: show what query we received
     log::debug!(
@@ -1169,7 +1171,8 @@ pub fn generate_cigar_from_region(
     );
 
     // Run global alignment to generate CIGAR
-    let result = sw_params.banded_swa(
+    let result = scalar_banded_swa(
+        &sw_params,
         query_for_sw.len() as i32,
         &query_for_sw,
         rseq_for_sw.len() as i32,

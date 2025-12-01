@@ -1,25 +1,11 @@
-// bwa-mem2-rust/src/banded_swa_avx512.rs
-//
-// AVX-512 (256-bit) SIMD implementation of banded Smith-Waterman alignment
-// Processes 32 alignments in parallel (4x speedup over SSE)
-//
-// This is a port of C++ bwa-mem2's smithWaterman256_8 function
-// Reference: /Users/jkane/Applications/bwa-mem2/src/bandedSWA.cpp:722-1150
+//! AVX‑512 int16 path (placeholder/manual for now)
+// Keep minimal until an i16 shared kernel lands
 
 #![cfg(target_arch = "x86_64")]
 
-use super::types::OutScore; // Updated path
+use crate::core::alignment::banded_swa::OutScore;
 use crate::alignment::workspace::with_workspace;
-
-use crate::generate_swa_entry; // This macro is exported at crate root by shared module
-
-generate_swa_entry!(
-    name = simd_banded_swa_batch64,
-    width = 64,
-    engine = SwEngine512,
-    cfg = cfg(all(target_arch = "x86_64", feature = "avx512")),
-    target_feature = "avx512bw,avx512f",
-);
+use std::arch::x86_64::*; // For raw AVX-512 intrinsics
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 32 alignments (16-bit scores)
 ///
@@ -51,7 +37,6 @@ pub unsafe fn simd_banded_swa_batch32_int16(
     // require costly mask<->vector conversions and lose the benefits of native mask operations.
     // This is an acceptable deviation from the abstraction guideline for performance-critical
     // AVX-512-specific code paths.
-    use std::arch::x86_64::*;
 
     const SIMD_WIDTH: usize = 32; // 512-bit / 16-bit = 32 lanes
     const MAX_SEQ_LEN: usize = 512; // 16-bit supports longer sequences
@@ -225,14 +210,16 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                 _mm512_loadu_si512(target_soa_16.as_ptr().add(i * SIMD_WIDTH) as *const __m512i);
 
             // Update band bounds per lane
-            let mut current_beg = beg;
-            let mut current_end = end;
+            let mut current_beg = [0i16; SIMD_WIDTH];
+            let mut current_end = [0i16; SIMD_WIDTH];
             for lane in 0..SIMD_WIDTH {
                 if terminated[lane] {
                     continue;
                 }
                 let wi = w_arr[lane];
                 let ii = i as i16;
+                current_beg[lane] = beg[lane];
+                current_end[lane] = end[lane];
                 if current_beg[lane] < ii - wi {
                     current_beg[lane] = ii - wi;
                 }
@@ -258,8 +245,10 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                 if current_beg[lane] == 0 {
                     let h_val = h0[lane] as i32 - (o_del + e_del * (i as i32 + 1));
                     let h_val = if h_val < 0 { 0 } else { h_val as i16 };
-                    let h1_arr: &mut [i16; 32] = std::mem::transmute(&mut h1_vec);
+                    // Set lane 'lane' in h1_vec with h_val
+                    let mut h1_arr: [i16; SIMD_WIDTH] = std::mem::transmute(h1_vec);
                     h1_arr[lane] = h_val;
+                    h1_vec = std::mem::transmute(h1_arr);
                 }
             }
 
@@ -303,15 +292,14 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                 let m_vec = _mm512_add_epi16(h00_vec, match_vec);
 
                 // H(i,j) = max(M, E, F, 0)
-                let h11_vec = _mm512_max_epi16(m_vec, e_vec);
-                let h11_vec = _mm512_max_epi16(h11_vec, f_vec);
-                let h11_vec = _mm512_max_epi16(h11_vec, zero_vec);
+                let h_val_vec = _mm512_max_epi16(m_vec, e_vec);
+                let h_val_vec = _mm512_max_epi16(h_val_vec, f_vec);
+                let h_val_vec = _mm512_max_epi16(h_val_vec, zero_vec);
 
-                // Store h1_vec (H(i, j-1) from previous column) into h_matrix[j]
-                // This maintains the wavefront pattern for the next row
+                // Store H(i,j) in h_matrix
                 _mm512_storeu_si512(
                     h_matrix.as_mut_ptr().add(j * SIMD_WIDTH) as *mut __m512i,
-                    h11_vec,
+                    h_val_vec,
                 );
 
                 // Compute E(i+1, j) = max(M - oe_del, E - e_del)
@@ -330,40 +318,30 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                 f_vec = _mm512_max_epi16(f_from_m, f_from_f);
                 f_vec = _mm512_max_epi16(f_vec, zero_vec);
 
-                // VECTORIZED max score tracking (replaces scalar loop - critical for AVX-512 perf)
-                // Load current_beg and current_end as SIMD vectors
-                let beg_vec_512 = _mm512_loadu_si512(current_beg.as_ptr() as *const __m512i);
-                let end_vec_512 = _mm512_loadu_si512(current_end.as_ptr() as *const __m512i);
+                // VECTORIZED max score tracking
                 let j_vec_512 = _mm512_set1_epi16(j as i16);
                 let i_vec_512 = _mm512_set1_epi16(i as i16);
 
-                // Create masks for in-bounds check using AVX-512 comparison intrinsics
-                // j >= current_beg: true where j is at or past band start
-                let in_bounds_low: __mmask32 = _mm512_cmpge_epi16_mask(j_vec_512, beg_vec_512);
-                // j < current_end: true where j is before band end
-                let in_bounds_high: __mmask32 = _mm512_cmplt_epi16_mask(j_vec_512, end_vec_512);
-                // h11 > max_score: true where this cell beats the current best
-                let better_score: __mmask32 = _mm512_cmpgt_epi16_mask(h11_vec, max_score_vec);
+                let beg_vec_512 = _mm512_loadu_si512(current_beg.as_ptr() as *const __m512i);
+                let end_vec_512 = _mm512_loadu_si512(current_end.as_ptr() as *const __m512i);
 
-                // Combine all conditions: in_bounds AND better_score AND !terminated
-                // Note: terminated_mask has bits SET for terminated lanes, so we invert it
+                let in_bounds_low: __mmask32 = _mm512_cmpge_epi16_mask(j_vec_512, beg_vec_512);
+                let in_bounds_high: __mmask32 = _mm512_cmplt_epi16_mask(j_vec_512, end_vec_512);
+
+                let better_score: __mmask32 = _mm512_cmpgt_epi16_mask(h_val_vec, max_score_vec);
+
                 let update_mask: __mmask32 =
                     in_bounds_low & in_bounds_high & better_score & !terminated_mask;
 
-                // Conditionally update max_score_vec, max_i_vec, max_j_vec using blend
-                max_score_vec = _mm512_mask_blend_epi16(update_mask, max_score_vec, h11_vec);
+                max_score_vec = _mm512_mask_blend_epi16(update_mask, max_score_vec, h_val_vec);
                 max_i_vec = _mm512_mask_blend_epi16(update_mask, max_i_vec, i_vec_512);
                 max_j_vec = _mm512_mask_blend_epi16(update_mask, max_j_vec, j_vec_512);
-
-                // h1_vec = H(i, j) for the next column
-                h1_vec = h11_vec;
             }
 
             // Extract max scores for Z-drop check
-            let mut max_score_vals = [0i16; SIMD_WIDTH];
-            _mm512_storeu_si512(max_score_vals.as_mut_ptr() as *mut __m512i, max_score_vec);
+            _mm512_storeu_si512(max_scores.as_mut_ptr() as *mut __m512i, max_score_vec);
 
-            // Z-drop early termination (per-row, not per-cell - less critical for perf)
+            // Z-drop early termination
             if zdrop > 0 {
                 for lane in 0..SIMD_WIDTH {
                     if !terminated[lane] && i > 0 && i < tlen[lane] as usize {
@@ -376,9 +354,8 @@ pub unsafe fn simd_banded_swa_batch32_int16(
                             row_max = row_max.max(h_val);
                         }
 
-                        if max_score_vals[lane] - row_max > zdrop as i16 {
+                        if max_scores[lane] - row_max > zdrop as i16 {
                             terminated[lane] = true;
-                            // Sync terminated_mask: set bit for this lane
                             terminated_mask |= 1u32 << lane;
                         }
                     }
@@ -393,7 +370,6 @@ pub unsafe fn simd_banded_swa_batch32_int16(
         // Step 5: Result Extraction
         // ==================================================================
 
-        // Extract final values from SIMD vectors to arrays
         _mm512_storeu_si512(max_scores.as_mut_ptr() as *mut __m512i, max_score_vec);
         _mm512_storeu_si512(max_i.as_mut_ptr() as *mut __m512i, max_i_vec);
         _mm512_storeu_si512(max_j.as_mut_ptr() as *mut __m512i, max_j_vec);
@@ -441,119 +417,4 @@ mod tests {
             results[0].score
         );
     }
-
-    #[test]
-    fn test_simd_banded_swa_batch64_skeleton() {
-        // Basic test to ensure the function compiles and runs
-        let query = b"ACGT";
-        let target = b"ACGT";
-        let batch = vec![(4, &query[..], 4, &target[..], 10, 0)];
-
-        let results = unsafe {
-            simd_banded_swa_batch64(
-                &batch, 6,   // o_del
-                1,   // e_del
-                6,   // o_ins
-                1,   // e_ins
-                100, // zdrop
-                &[0i8; 25], 5,
-            )
-        };
-
-        assert_eq!(results.len(), 1);
-        // TODO: Add proper assertions once implementation is complete
-    }
-
-    /// Compare AVX-512 vs AVX2 banded SWA results for identical input
-    #[test]
-    fn test_avx512_vs_avx2_banded_swa() {
-        if !is_x86_feature_detected!("avx512bw") {
-            eprintln!("Skipping: AVX-512BW not available");
-            return;
-        }
-        if !is_x86_feature_detected!("avx2") {
-            eprintln!("Skipping: AVX2 not available");
-            return;
-        }
-
-        // Standard BWA-MEM2 scoring matrix (5x5 for A, C, G, T, N)
-        // Match = 1, Mismatch = -4, N penalty = -1
-        let mat: [i8; 25] = [
-            1, -4, -4, -4, -1, // A vs A,C,G,T,N
-            -4, 1, -4, -4, -1, // C vs A,C,G,T,N
-            -4, -4, 1, -4, -1, // G vs A,C,G,T,N
-            -4, -4, -4, 1, -1, // T vs A,C,G,T,N
-            -1, -1, -1, -1, -1, // N vs A,C,G,T,N
-        ];
-
-        // Test sequences: 100bp with 3 mismatches
-        let query: Vec<u8> = (0..100).map(|i| (i % 4) as u8).collect();
-        let mut target = query.clone();
-        target[20] = (target[20] + 1) % 4; // mismatch
-        target[50] = (target[50] + 1) % 4; // mismatch
-        target[80] = (target[80] + 1) % 4; // mismatch
-
-        let batch = vec![(
-            query.len() as i32,
-            &query[..],
-            target.len() as i32,
-            &target[..],
-            50, // bandwidth
-            0,  // h0
-        )];
-
-        // Run AVX-512
-        let results_512 = unsafe {
-            simd_banded_swa_batch64(
-                &batch, 6, 1, 6, 1,   // gap penalties
-                100, // zdrop
-                &mat, 5,
-            )
-        };
-
-        // Run AVX2
-        let results_256 = unsafe {
-            crate::core::alignment::banded_swa::isa_avx2::simd_banded_swa_batch32(
-                &batch, 6, 1, 6, 1, 100, &mat, 5,
-            )
-        };
-
-        eprintln!(
-            "AVX-512: score={}, te={}, qe={}",
-            results_512[0].score, results_512[0].target_end_pos, results_512[0].query_end_pos
-        );
-        eprintln!(
-            "AVX2:    score={}, te={}, qe={}",
-            results_256[0].score, results_256[0].target_end_pos, results_256[0].query_end_pos
-        );
-
-        // Expected: 97 matches * 1 + 3 mismatches * (-4) = 97 - 12 = 85
-        let expected_approx = 85;
-
-        // Scores should match
-        assert_eq!(
-            results_512[0].score, results_256[0].score,
-            "AVX-512 ({}) and AVX2 ({}) scores differ!",
-            results_512[0].score, results_256[0].score
-        );
-
-        // Sanity check
-        assert!(
-            (results_512[0].score - expected_approx).abs() < 15,
-            "Score {} too far from expected ~{}",
-            results_512[0].score,
-            expected_approx
-        );
-    }
 }
-
-use super::kernel::SwEngine512; // Updated path
-use crate::generate_swa_entry_soa; // This macro is exported at crate root by shared module
-
-generate_swa_entry_soa!(
-    name = simd_banded_swa_batch64_soa,
-    width = 64,
-    engine = SwEngine512,
-    cfg = cfg(all(target_arch = "x86_64", feature = "avx512")),
-    target_feature = "avx512bw",
-);

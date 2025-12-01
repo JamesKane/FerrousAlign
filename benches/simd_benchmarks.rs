@@ -1,5 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ferrous_align::core::alignment::banded_swa::{BandedPairWiseSW, bwa_fill_scmat};
+use ferrous_align::core::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 
 fn generate_random_sequence(len: usize, seed: u64) -> Vec<u8> {
     // Simple LCG random number generator for reproducible sequences
@@ -58,7 +59,8 @@ fn bench_scalar_vs_batched(c: &mut Criterion) {
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(BenchmarkId::new("scalar", seq_len), seq_len, |b, &_size| {
             b.iter(|| {
-                bsw.scalar_banded_swa(
+                scalar_banded_swa(
+                    black_box(&bsw),
                     black_box(query.len() as i32),
                     black_box(&query),
                     black_box(target.len() as i32),
@@ -118,7 +120,8 @@ fn bench_batch_sizes(c: &mut Criterion) {
     group.bench_function("scalar_128x", |b| {
         b.iter(|| {
             for (query, target) in &alignments {
-                black_box(bsw.scalar_banded_swa(
+                black_box(scalar_banded_swa(
+                    black_box(&bsw),
                     query.len() as i32,
                     query,
                     target.len() as i32,
@@ -257,7 +260,8 @@ fn bench_mutation_rates(c: &mut Criterion) {
             mutation_rate,
             |b, &_rate| {
                 b.iter(|| {
-                    bsw.scalar_banded_swa(
+                    scalar_banded_swa(
+                        black_box(&bsw),
                         black_box(query.len() as i32),
                         black_box(&query),
                         black_box(target.len() as i32),
@@ -332,7 +336,8 @@ fn bench_hybrid_with_cigar(c: &mut Criterion) {
     group.bench_function("scalar_16x_with_cigar", |b| {
         b.iter(|| {
             for i in 0..16 {
-                let _ = bsw.scalar_banded_swa(
+                let _ = scalar_banded_swa(
+                    black_box(&bsw),
                     black_box(queries[i].len() as i32),
                     black_box(&queries[i]),
                     black_box(targets[i].len() as i32),
