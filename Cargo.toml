@@ -52,6 +52,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 env_logger = "0.11"
 
 [[bench]]
+name = "align_perf"
+harness = false
+
+[[bench]]
 name = "simd_benchmarks"
 harness = false
 

@@ -175,7 +175,11 @@ unsafe fn dispatch_simd_scoring_soa_i16(
         SimdEngineType::Engine128 => {
             #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             {
-                simd_banded_swa_batch8_int16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
+                unsafe {
+                    simd_banded_swa_batch8_int16_soa(
+                        &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                    )
+                }
             }
             #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
             {
@@ -184,11 +188,19 @@ unsafe fn dispatch_simd_scoring_soa_i16(
         },
         #[cfg(target_arch = "x86_64")]
         SimdEngineType::Engine256 => {
-            simd_banded_swa_batch16_int16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
+            unsafe {
+                simd_banded_swa_batch16_int16_soa(
+                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                )
+            }
         },
         #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
         SimdEngineType::Engine512 => {
-            simd_banded_swa_batch32_int16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
+            unsafe {
+                simd_banded_swa_batch32_int16_soa(
+                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                )
+            }
         },
         _ => panic!("Unsupported SIMD engine type for i16 SoA dispatch: {:?}", engine),
     }
