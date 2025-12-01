@@ -1,8 +1,8 @@
 ## Baselines — 2025‑12‑01
 
 Host and toolchain
-- CPU: AVX‑512BW available (is_x86_feature_detected!("avx512bw") == true)
-- OS: Linux (exact distro/version omitted)
+- CPU: AMD Ryzen 9 7900X (24) @ 5.74 GHz
+- OS: Fedora Linux 42
 - Rust: edition 2024 (see Cargo.toml), stable toolchain
 - Features: benches run both without and with `--features avx512`
 
@@ -32,6 +32,31 @@ Results summary (high level)
 - kswv i8:
   - W16/W32 benches are stable and produce results.
   - W64 (AVX‑512) bench is currently unstable on this host and can segfault under load; temporarily skipped in benches via `SKIP_KSWV_W64=1` env guard while we investigate.
+
+### banded_swa_soa
+
+| benchmark | mean time |
+|---|---:|
+| i16_w16_len128_band20 | 2.671 ms |
+| i16_w16_len151_band20 | 3.701 ms |
+| i16_w16_len256_band50 | 10.642 ms |
+| i16_w16_len400_band50 | 25.796 ms |
+| i16_w16_len64_band10 | 667.199 µs |
+| i8_w16_len128_band20 | 213.919 µs |
+| i8_w16_len64_band10 | 60.789 µs |
+| i8_w32_len128_band20 | 2.829 ms |
+| i8_w32_len64_band10 | 722.462 µs |
+| i8_w64_len128_band20 | 147.323 µs |
+| i8_w64_len64_band10 | 57.254 µs |
+
+### kswv_soa
+
+| benchmark | mean time |
+|---|---:|
+| i8_w16_len128 | 100.923 µs |
+| i8_w16_len64 | 25.458 µs |
+| i8_w32_len128 | 26.572 µs |
+| i8_w32_len64 | 6.928 µs |
 
 How to reproduce
 1) Non‑AVX‑512 benches
