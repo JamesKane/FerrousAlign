@@ -67,7 +67,7 @@ fn bench_banded_swa(c: &mut Criterion) {
                 continue;
             }
             group.throughput(Throughput::Bytes((len as u64) * 16 * 2));
-            group.bench_function(format!("i8_w16_len{}_band{}", len, band), |b| {
+            group.bench_function(format!("i8_w16_len{len}_band{band}"), |b| {
                 // Prepare inputs per iteration to avoid measuring allocs repeatedly; use batch to clone refs
                 let batch_spec = make_batch(len, 16);
                 // AoS view for pad/soa helper expects borrowed slices
@@ -110,7 +110,7 @@ fn bench_banded_swa(c: &mut Criterion) {
                 continue;
             }
             group.throughput(Throughput::Bytes((len as u64) * 32 * 2));
-            group.bench_function(format!("i8_w32_len{}_band{}", len, band), |b| {
+            group.bench_function(format!("i8_w32_len{len}_band{band}"), |b| {
                 let batch_spec = make_batch(len, 32);
                 let batch_view: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_spec
                     .iter()
@@ -144,7 +144,7 @@ fn bench_banded_swa(c: &mut Criterion) {
         // i16 W16 for longer reads up to 400bp
         for (len, band) in params.iter().copied() {
             group.throughput(Throughput::Bytes((len as u64) * 16 * 2));
-            group.bench_function(format!("i16_w16_len{}_band{}", len, band), |b| {
+            group.bench_function(format!("i16_w16_len{len}_band{band}"), |b| {
                 let batch_spec = make_batch(len, 16);
                 let batch_view: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = batch_spec
                     .iter()
@@ -244,7 +244,7 @@ fn bench_kswv(c: &mut Criterion) {
             continue;
         }
         group.throughput(Throughput::Bytes((len as u64) * 16 * 2));
-        group.bench_function(format!("i8_w16_len{}", len), |b| {
+        group.bench_function(format!("i8_w16_len{len}"), |b| {
             let batch_spec = make_batch(len, 16);
             // Build KswSoA directly from the AoS buffers (already generated)
             let mut qsoa = vec![0xFFu8; len * 16];
@@ -288,7 +288,7 @@ fn bench_kswv(c: &mut Criterion) {
             continue;
         }
         group.throughput(Throughput::Bytes((len as u64) * 32 * 2));
-        group.bench_function(format!("i8_w32_len{}", len), |b| {
+        group.bench_function(format!("i8_w32_len{len}"), |b| {
             let batch_spec = make_batch(len, 32);
             let mut qsoa = vec![0xFFu8; len * 32];
             let mut rsoa = vec![0xFFu8; len * 32];

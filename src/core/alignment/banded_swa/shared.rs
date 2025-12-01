@@ -183,8 +183,8 @@ macro_rules! generate_swa_entry {
             const MAX_SEQ_LEN: usize = 128;
 
             let (qlen, tlen, h0, w_arr, max_qlen, max_tlen, padded) =
-                crate::core::alignment::banded_swa::shared::pad_batch::<SIMD_WIDTH>(batch);
-            let (query_soa, target_soa) = crate::core::alignment::banded_swa::shared::soa_transform::<
+                $crate::core::alignment::banded_swa::shared::pad_batch::<SIMD_WIDTH>(batch);
+            let (query_soa, target_soa) = $crate::core::alignment::banded_swa::shared::soa_transform::<
                 SIMD_WIDTH,
                 MAX_SEQ_LEN,
             >(&padded);
@@ -234,9 +234,9 @@ macro_rules! generate_swa_entry_i16 {
             const W: usize = $W;
             const MAX: usize = 512; // typical default for i16 path
             let (qlen, tlen, h0_i8, w_arr, max_q, max_t, padded) =
-                crate::core::alignment::banded_swa::shared::pad_batch::<W>(batch);
+                $crate::core::alignment::banded_swa::shared::pad_batch::<W>(batch);
             let (query_soa_u8, target_soa_u8) =
-                crate::core::alignment::banded_swa::shared::soa_transform::<W, MAX>(&padded);
+                $crate::core::alignment::banded_swa::shared::soa_transform::<W, MAX>(&padded);
 
             // Convert u8 SoA to i16 SoA for the i16 kernel
             let mut query_soa_i16 = Vec::with_capacity(query_soa_u8.len());
@@ -288,7 +288,7 @@ macro_rules! generate_swa_entry_soa {
         #[target_feature(enable = $tf)]
         #[allow(unsafe_op_in_unsafe_fn)]
         pub unsafe fn $name(
-            inputs: &crate::core::alignment::banded_swa::shared::SoAInputs,
+            inputs: &$crate::core::alignment::banded_swa::shared::SoAInputs,
             num_jobs: usize,
             o_del: i32,
             e_del: i32,
@@ -305,7 +305,7 @@ macro_rules! generate_swa_entry_soa {
             let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); SIMD_WIDTH];
             let dummy_batch = &dummy_batch_arr[0..num_jobs];
 
-            let params = crate::core::alignment::banded_swa::kernel::KernelParams {
+            let params = $crate::core::alignment::banded_swa::kernel::KernelParams {
                 batch: dummy_batch,
                 query_soa: inputs.query_soa,
                 target_soa: inputs.target_soa,
@@ -343,7 +343,7 @@ macro_rules! generate_swa_entry_i16_soa {
         #[allow(unsafe_op_in_unsafe_fn)]
         #[cfg_attr(any(), target_feature(enable = $tf))]
         pub unsafe fn $name(
-            inputs: &crate::core::alignment::banded_swa::shared::SoAInputs16,
+            inputs: &$crate::core::alignment::banded_swa::shared::SoAInputs16,
             num_jobs: usize,
             o_del: i32,
             e_del: i32,
@@ -358,7 +358,7 @@ macro_rules! generate_swa_entry_i16_soa {
             let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); W];
             let dummy_batch = &dummy_batch_arr[0..num_jobs];
 
-            let params = crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
+            let params = $crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
                 batch: dummy_batch,
                 query_soa: inputs.query_soa,
                 target_soa: inputs.target_soa,

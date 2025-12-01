@@ -384,7 +384,7 @@ fn process_single_end_soa(
             }
         };
 
-        if soa_read_batch.len() == 0 {
+        if soa_read_batch.is_empty() {
             break; // EOF
         }
 

@@ -5,7 +5,7 @@ use ferrous_align::compute::simd_abstraction::simd::detect_optimal_simd_engine;
 use ferrous_align::core::alignment::banded_swa::BandedPairWiseSW;
 use ferrous_align::pipelines::linear::batch_extension::dispatch::execute_batch_simd_scoring;
 use ferrous_align::pipelines::linear::batch_extension::types::{
-    BatchedExtensionJob, ExtensionDirection, ExtensionJobBatch,
+    ExtensionDirection, ExtensionJobBatch,
 };
 
 #[test]

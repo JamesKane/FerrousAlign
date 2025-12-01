@@ -1443,7 +1443,7 @@ pub fn execute_compact_batch(
 
     // Process in chunks matching SIMD batch size
     // Use Rayon to parallelize across chunks
-    let num_chunks = (jobs.len() + simd_batch_size - 1) / simd_batch_size;
+    let num_chunks = jobs.len().div_ceil(simd_batch_size);
 
     (0..num_chunks)
         .into_par_iter()

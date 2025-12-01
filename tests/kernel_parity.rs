@@ -6,7 +6,7 @@ use ferrous_align::core::alignment::banded_swa::{
 };
 use ferrous_align::pipelines::linear::batch_extension::{
     dispatch::execute_batch_simd_scoring,
-    types::{BatchedExtensionJob, ExtensionDirection, ExtensionJobBatch},
+    types::{ExtensionDirection, ExtensionJobBatch},
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -39,7 +39,7 @@ fn kernel_sw_vs_avx2_basic_parity() {
         ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
 
     let params = KernelParams {
-        batch: &vec![(8, &q[..], 8, &t[..], 10, 0)],
+        batch: &[(8, &q[..], 8, &t[..], 10, 0)],
         query_soa: &query_soa,
         target_soa: &target_soa,
         qlen: &qlen,
@@ -99,7 +99,7 @@ fn kernel_sw_vs_avx2_mismatch_case() {
         ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
 
     let params = KernelParams {
-        batch: &vec![(8, &q[..], 8, &t[..], 10, 0)],
+        batch: &[(8, &q[..], 8, &t[..], 10, 0)],
         query_soa: &query_soa,
         target_soa: &target_soa,
         qlen: &qlen,

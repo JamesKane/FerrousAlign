@@ -17,7 +17,7 @@ macro_rules! generate_ksw_entry_soa {
         #[allow(unsafe_op_in_unsafe_fn)]
         #[cfg_attr(any(), target_feature(enable = $tf))]
         pub unsafe fn $name(
-            inputs: &crate::core::alignment::shared_types::KswSoA,
+            inputs: &$crate::core::alignment::shared_types::KswSoA,
             num_jobs: usize,
             match_score: i8,
             mismatch_penalty: i8,
@@ -27,7 +27,7 @@ macro_rules! generate_ksw_entry_soa {
             e_ins: i32,
             ambig_penalty: i8,
             debug: bool,
-        ) -> Vec<crate::core::alignment::kswv_batch::KswResult> {
+        ) -> Vec<$crate::core::alignment::kswv_batch::KswResult> {
             use crate::core::alignment::kswv_batch::{KswResult, SeqPair};
             use crate::core::alignment::workspace::with_workspace;
 

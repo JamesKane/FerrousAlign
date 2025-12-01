@@ -37,7 +37,7 @@ pub fn simd_banded_swa_dispatch_soa<const W: usize>(
             // This indicates a problem with how pos_offsets was populated.
             // For now, we'll skip this chunk to avoid a panic.
             // A proper fix would be in `make_batch_soa`.
-            log::error!("Incomplete pos_offsets metadata for chunk {}", chunk_idx);
+            log::error!("Incomplete pos_offsets metadata for chunk {chunk_idx}");
             continue;
         }
         let q_offset = batch.pos_offsets[meta_offset];

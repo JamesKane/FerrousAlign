@@ -67,16 +67,13 @@ TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
     // Call the index command through the CLI binary
     let binary_path = PathBuf::from("target/release/ferrous-align");
     if !binary_path.exists() {
-        eprintln!(
-            "Binary not found at {:?}, attempting to build...",
-            binary_path
-        );
+        eprintln!("Binary not found at {binary_path:?}, attempting to build...");
         let build_output = Command::new("cargo")
             .arg("build")
             .arg("--release")
             .output()?;
         if !build_output.status.success() {
-            panic!("Failed to build project: {:?}", build_output);
+            panic!("Failed to build project: {build_output:?}");
         }
     }
 
@@ -187,8 +184,8 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
         soa_chain_batch.rid[first_chain_idx], 0,
         "First chain should be on chr1 (rid 0)"
     );
-    assert_eq!(
-        soa_chain_batch.is_rev[first_chain_idx], false,
+    assert!(
+        !soa_chain_batch.is_rev[first_chain_idx],
         "First chain should be forward strand (non-palindromic sequence)"
     );
     assert_eq!(soa_chain_batch.query_start[first_chain_idx], 0);
@@ -211,8 +208,8 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
         soa_chain_batch.rid[second_chain_idx], 0,
         "Second chain should be on chr1 (rid 0)"
     );
-    assert_eq!(
-        soa_chain_batch.is_rev[second_chain_idx], false,
+    assert!(
+        !soa_chain_batch.is_rev[second_chain_idx],
         "Second chain should be forward strand (non-palindromic sequence)"
     );
     assert_eq!(soa_chain_batch.query_start[second_chain_idx], 0);
@@ -249,16 +246,13 @@ TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
     // 2. Build the index
     let binary_path = PathBuf::from("target/release/ferrous-align");
     if !binary_path.exists() {
-        eprintln!(
-            "Binary not found at {:?}, attempting to build...",
-            binary_path
-        );
+        eprintln!("Binary not found at {binary_path:?}, attempting to build...");
         let build_output = Command::new("cargo")
             .arg("build")
             .arg("--release")
             .output()?;
         if !build_output.status.success() {
-            panic!("Failed to build project: {:?}", build_output);
+            panic!("Failed to build project: {build_output:?}");
         }
     }
 
@@ -350,8 +344,7 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
     assert!(
         stderr_contents.contains("SOA_PIPELINE")
             || stderr_contents.contains("Using end-to-end SoA pipeline"),
-        "SoA pipeline was not used. Stderr: {}",
-        stderr_contents
+        "SoA pipeline was not used. Stderr: {stderr_contents}"
     );
 
     cleanup_test_dir(&temp_dir);

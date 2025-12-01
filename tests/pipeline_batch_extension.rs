@@ -167,16 +167,16 @@ fn test_make_batch_soa() {
 
     // Check lane 0 (job 0)
     for pos in 0..q1.len() {
-        assert_eq!(batch.query_soa[pos * W + 0], q1[pos]);
+        assert_eq!(batch.query_soa[(pos * W)], q1[pos]);
     }
     for pos in q1.len()..max_q {
-        assert_eq!(batch.query_soa[pos * W + 0], 0xFF);
+        assert_eq!(batch.query_soa[(pos * W)], 0xFF);
     }
     for pos in 0..r1.len() {
-        assert_eq!(batch.target_soa[pos * W + 0], r1[pos]);
+        assert_eq!(batch.target_soa[(pos * W)], r1[pos]);
     }
     for pos in r1.len()..max_t {
-        assert_eq!(batch.target_soa[pos * W + 0], 0xFF);
+        assert_eq!(batch.target_soa[(pos * W)], 0xFF);
     }
 
     // Check lane 1 (job 1)
@@ -209,8 +209,8 @@ fn test_execute_batch_simd_scoring_i8_soa_path() {
     // Setup BandedPairWiseSW with dummy parameters
     let mut mat = [0i8; 25];
     // Set match scores (A=0, C=1, G=2, T=3, N=4)
-    mat[0 * 5 + 0] = 1; // A-A
-    mat[1 * 5 + 1] = 1; // C-C
+    mat[0] = 1; // A-A
+    mat[5 + 1] = 1; // C-C
     mat[2 * 5 + 2] = 1; // G-G
     mat[3 * 5 + 3] = 1; // T-T
     // Set mismatch scores to -2
@@ -268,8 +268,8 @@ fn test_execute_batch_simd_scoring_i16_soa_path() {
     // Setup BandedPairWiseSW with dummy parameters
     let mut mat = [0i8; 25];
     // Set match scores (A=0, C=1, G=2, T=3, N=4)
-    mat[0 * 5 + 0] = 1; // A-A
-    mat[1 * 5 + 1] = 1; // C-C
+    mat[0] = 1; // A-A
+    mat[5 + 1] = 1; // C-C
     mat[2 * 5 + 2] = 1; // G-G
     mat[3 * 5 + 3] = 1; // T-T
     // Set mismatch scores to -2

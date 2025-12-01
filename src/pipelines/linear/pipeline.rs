@@ -681,14 +681,13 @@ pub fn align_reads_batch_deferred(
         find_seeds_batch(bwa_idx, read_batch, opt);
 
     // Phase 2: Batch Chaining
-    let soa_chain_batch = build_and_filter_chains_batch(bwa_idx, &soa_seed_batch, read_batch, opt);
 
     // TODO: Integrate with existing alignment kernels and output layer
     // This will involve adapting `extend_chains_to_regions` and `generate_cigar_from_region`
     // to work with SoAChainBatch, SoASeedBatch, SoAEncodedQueryBatch.
     // Also, adapting `mark_secondary_alignments` and the final `Alignment` construction.
 
-    soa_chain_batch
+    build_and_filter_chains_batch(bwa_idx, &soa_seed_batch, read_batch, opt)
 }
 
 #[allow(dead_code)]

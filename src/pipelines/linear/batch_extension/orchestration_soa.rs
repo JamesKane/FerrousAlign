@@ -49,10 +49,7 @@ pub fn process_sub_batch_internal_soa(
         return SoAAlignmentResult::new();
     }
 
-    log::debug!(
-        "SOA_PIPELINE: Processing {} reads with end-to-end SoA",
-        batch_size
-    );
+    log::debug!("SOA_PIPELINE: Processing {batch_size} reads with end-to-end SoA");
 
     // Phase 1: SoA Seeding (PR2)
     let (soa_seed_batch, encoded_queries, encoded_queries_rc) =
@@ -83,7 +80,7 @@ pub fn process_sub_batch_internal_soa(
     filter_chains_batch(&mut soa_chain_batch, &soa_seed_batch, opt, &query_lengths);
 
     let kept_chains = soa_chain_batch.kept.iter().filter(|&&k| k > 0).count();
-    log::debug!("SOA_PIPELINE: {} chains kept after filtering", kept_chains);
+    log::debug!("SOA_PIPELINE: {kept_chains} chains kept after filtering");
 
     // Build SoAReadExtensionContext
     let mut soa_context = SoAReadExtensionContext {
