@@ -226,7 +226,7 @@ impl BntSeq {
             seq_id += 1;
         }
 
-        bns.packed_sequence_length = packed_base_count; // ALL bases including ambiguous (replaced with random)
+        bns.packed_sequence_length = packed_base_count + 1; // ALL bases including ambiguous (replaced with random) + 1 for sentinel
         bns.sequence_count = seq_id;
         bns.ambiguous_regions = current_ambs;
         bns.ambiguous_region_count = bns.ambiguous_regions.len() as i32;
