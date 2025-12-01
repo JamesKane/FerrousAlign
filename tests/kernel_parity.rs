@@ -25,14 +25,15 @@ fn kernel_sw_vs_avx2_basic_parity() {
         mat[i * 5 + i] = 1;
     }
 
-    let sw_params = BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 0, 0, &mat, 1, -4);
+    let sw_params = BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 0, 0, mat, 1, -4);
     let engine = detect_optimal_simd_engine();
 
     let soa_out = execute_batch_simd_scoring(&sw_params, &mut batch, engine);
 
     // Prepare shared-kernel params (W=32, SwEngine256)
     const W: usize = 32;
-    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&vec![(8, &q[..], 8, &t[..], 10, 0)]);
+    let batch_vec = vec![(8, &q[..], 8, &t[..], 10, 0)];
+    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&batch_vec);
     let (query_soa, target_soa) = ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
     
     let params = KernelParams {
@@ -83,13 +84,14 @@ fn kernel_sw_vs_avx2_mismatch_case() {
         mat[i * 5 + i] = 1;
     }
 
-    let sw_params = BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 0, 0, &mat, 1, -4);
+    let sw_params = BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 0, 0, mat, 1, -4);
     let engine = detect_optimal_simd_engine();
 
     let soa_out = execute_batch_simd_scoring(&sw_params, &mut batch, engine);
 
     const W: usize = 32;
-    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&vec![(8, &q[..], 8, &t[..], 10, 0)]);
+    let batch_vec = vec![(8, &q[..], 8, &t[..], 10, 0)];
+    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&batch_vec);
     let (query_soa, target_soa) = ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
 
     let params = KernelParams {

@@ -5,12 +5,12 @@ use super::super::mem_opt::MemOpt;
 use std::sync::Arc;
 use rayon::prelude::*;
 
-use crate::core::alignment::banded_swa::BandedPairWiseSW; // Corrected import
+use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore}; // Corrected import
 use crate::compute::simd_abstraction::simd::SimdEngineType; // Corrected import
 
 use super::super::finalization::{Alignment, mark_secondary_alignments}; // Corrected import
 use super::super::pipeline::{build_and_filter_chains, find_seeds}; // Corrected import
-use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions, OutScore}; // Corrected import
+use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions}; // Corrected import
 use super::dispatch::execute_batch_simd_scoring; // Corrected import
 use super::distribute::convert_batch_results_to_outscores; // Corrected import
 use super::collect::collect_extension_jobs_batch; // Corrected import
@@ -302,7 +302,7 @@ fn finalize_alignments(
     names: &[String],
     read_contexts: Vec<ReadExtensionContext>,
     context_to_read_idx: Vec<usize>,
-    mappings: Vec<super::collect::ReadExtensionMappings>,
+    mappings: Vec<super::types::ReadExtensionMappings>,
     per_read_left_scores: Vec<Vec<OutScore>>,
     per_read_right_scores: Vec<Vec<OutScore>>,
     batch_start_id: u64,

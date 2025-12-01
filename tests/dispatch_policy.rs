@@ -14,7 +14,12 @@ fn test_soa_dispatch_long_read() {
     let mut batch = ExtensionJobBatch::new();
     batch.add_job(0, 0, 0, ExtensionDirection::Right, &q, &t, 0, 10);
     
-    let sw_params = BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 0, 0, &[0; 25], 1, -4);
+        let mut mat = [0i8; 25];
+    for i in 0..4 {
+        mat[i * 5 + i] = 1;
+    }
+
+    let sw_params = BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 0, 0, mat, 1, -4);
     let engine = detect_optimal_simd_engine();
 
     let results = execute_batch_simd_scoring(&sw_params, &mut batch, engine);
