@@ -92,11 +92,13 @@ impl BwaIndex {
             };
 
             for i in 0..4 {
-                cp_occ.checkpoint_counts[i] = i64::from_le_bytes(mmap[*offset..*offset + 8].try_into().unwrap());
+                cp_occ.checkpoint_counts[i] =
+                    i64::from_le_bytes(mmap[*offset..*offset + 8].try_into().unwrap());
                 *offset += 8;
             }
             for i in 0..4 {
-                cp_occ.bwt_encoding_bits[i] = u64::from_le_bytes(mmap[*offset..*offset + 8].try_into().unwrap());
+                cp_occ.bwt_encoding_bits[i] =
+                    u64::from_le_bytes(mmap[*offset..*offset + 8].try_into().unwrap());
                 *offset += 8;
             }
             cp_occ
@@ -107,7 +109,6 @@ impl BwaIndex {
         for _ in 0..cp_occ_size {
             cp_occ.push(read_cp_occ(&mmap, &mut offset));
         }
-
 
         // In C++, SA_COMPX is 3 (defined in macro.h), so sa_intv is 8
         let sa_compx = 3;
@@ -130,7 +131,9 @@ impl BwaIndex {
         let sa_low_words_len = sa_len as usize;
         bwt.sa_low_words = Vec::with_capacity(sa_low_words_len);
         for _ in 0..sa_low_words_len {
-            bwt.sa_low_words.push(u32::from_le_bytes(mmap[offset..offset + 4].try_into().unwrap()));
+            bwt.sa_low_words.push(u32::from_le_bytes(
+                mmap[offset..offset + 4].try_into().unwrap(),
+            ));
             offset += 4;
         }
 

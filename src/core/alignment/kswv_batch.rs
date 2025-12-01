@@ -68,8 +68,6 @@ pub struct KswResult {
     pub qb: i32,
 }
 
-
-
 /// Pre-allocated memory pool for Smith-Waterman DP matrices
 /// Matches BWA-MEM2's kswv class memory allocation pattern
 #[derive(Debug)]
@@ -199,7 +197,3 @@ pub struct ThreadBuffers {
 // ============================================================================
 // BATCH KERNEL (placeholder - to be implemented with SIMD intrinsics)
 // ============================================================================
-
-
-
-

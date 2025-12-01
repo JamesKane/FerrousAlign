@@ -1,13 +1,13 @@
 // tests/kernel_parity.rs
+use ferrous_align::compute::simd_abstraction::simd::detect_optimal_simd_engine;
 use ferrous_align::core::alignment::banded_swa::{
-    kernel::{sw_kernel, KernelParams, SwEngine256}, // SwEngine256 from kernel
     BandedPairWiseSW,
+    kernel::{KernelParams, SwEngine256, sw_kernel}, // SwEngine256 from kernel
 };
 use ferrous_align::pipelines::linear::batch_extension::{
     dispatch::execute_batch_simd_scoring,
-    types::{ExtensionJobBatch, BatchedExtensionJob, ExtensionDirection},
+    types::{BatchedExtensionJob, ExtensionDirection, ExtensionJobBatch},
 };
-use ferrous_align::compute::simd_abstraction::simd::detect_optimal_simd_engine;
 
 #[cfg(target_arch = "x86_64")]
 #[test]
@@ -15,7 +15,7 @@ fn kernel_sw_vs_avx2_basic_parity() {
     // 2-bit encoded A,C,G,T = 0,1,2,3
     let q: [u8; 8] = [0, 1, 2, 3, 0, 1, 2, 3];
     let t: [u8; 8] = [0, 1, 2, 3, 0, 1, 2, 3];
-    
+
     let mut batch = ExtensionJobBatch::new();
     batch.add_job(0, 0, 0, ExtensionDirection::Right, &q, &t, 0, 10);
 
@@ -33,9 +33,11 @@ fn kernel_sw_vs_avx2_basic_parity() {
     // Prepare shared-kernel params (W=32, SwEngine256)
     const W: usize = 32;
     let batch_vec = vec![(8, &q[..], 8, &t[..], 10, 0)];
-    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&batch_vec);
-    let (query_soa, target_soa) = ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
-    
+    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) =
+        ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&batch_vec);
+    let (query_soa, target_soa) =
+        ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
+
     let params = KernelParams {
         batch: &vec![(8, &q[..], 8, &t[..], 10, 0)],
         query_soa: &query_soa,
@@ -91,8 +93,10 @@ fn kernel_sw_vs_avx2_mismatch_case() {
 
     const W: usize = 32;
     let batch_vec = vec![(8, &q[..], 8, &t[..], 10, 0)];
-    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&batch_vec);
-    let (query_soa, target_soa) = ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
+    let (qlen, tlen, h0, w_arr, max_q, max_t, padded) =
+        ferrous_align::core::alignment::banded_swa::shared::pad_batch::<W>(&batch_vec);
+    let (query_soa, target_soa) =
+        ferrous_align::core::alignment::banded_swa::shared::soa_transform::<W, 128>(&padded);
 
     let params = KernelParams {
         batch: &vec![(8, &q[..], 8, &t[..], 10, 0)],

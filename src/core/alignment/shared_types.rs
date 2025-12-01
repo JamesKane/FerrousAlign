@@ -64,7 +64,7 @@ pub struct SwSoA<'a> {
     pub qlen: &'a [i8],       // per-lane (clamped where needed)
     pub tlen: &'a [i8],
     pub band: &'a [i8],
-    pub h0:   &'a [i8],
+    pub h0: &'a [i8],
     pub lanes: usize,
     pub max_qlen: i32,
     pub max_tlen: i32,
@@ -78,7 +78,7 @@ pub struct SwSoA16<'a> {
     pub qlen: &'a [i16],
     pub tlen: &'a [i16],
     pub band: &'a [i16],
-    pub h0:   &'a [i16],
+    pub h0: &'a [i16],
     pub lanes: usize,
     pub max_qlen: i32,
     pub max_tlen: i32,
@@ -129,10 +129,14 @@ pub trait WorkspaceArena {
     fn ensure_rows(&mut self, lanes: usize, qmax: usize, tmax: usize, elem_size: usize);
 
     /// Optional typed getters (u8 scoring). Return (H,E,F) rows sized `qmax*lanes`.
-    fn rows_u8(&mut self) -> Option<(&mut [i8], &mut [i8], &mut [i8])> { None }
+    fn rows_u8(&mut self) -> Option<(&mut [i8], &mut [i8], &mut [i8])> {
+        None
+    }
 
     /// Optional typed getters (i16 scoring). Return (H,E,F) rows sized `qmax*lanes`.
-    fn rows_u16(&mut self) -> Option<(&mut [i16], &mut [i16], &mut [i16])> { None }
+    fn rows_u16(&mut self) -> Option<(&mut [i16], &mut [i16], &mut [i16])> {
+        None
+    }
 }
 
 /// Facade for a per-thread memory pool that can hand out both SoA buffers and

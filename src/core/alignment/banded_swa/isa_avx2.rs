@@ -8,15 +8,15 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::core::alignment::banded_swa::OutScore;
 use super::engines::SwEngine256;
 use crate::core::alignment::banded_swa::KernelParams;
-use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
+use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::banded_swa::engines16::SwEngine256_16;
-use crate::{generate_swa_entry_i16, generate_swa_entry_i16_soa};
-use crate::core::alignment::shared_types::{AlignJob};
+use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
+use crate::core::alignment::shared_types::AlignJob;
+use crate::core::alignment::shared_types::{Banding, GapPenalties, KernelConfig, ScoringMatrix};
 use crate::core::alignment::workspace::with_workspace;
-use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
+use crate::{generate_swa_entry_i16, generate_swa_entry_i16_soa};
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 32 alignments
 /// Uses arena-backed SoA buffers and reusable DP rows (no per-call heap allocs).
@@ -38,13 +38,22 @@ pub unsafe fn simd_banded_swa_batch32(
     const W: usize = 32;
 
     // Follow bwa-mem2 policy: dispatch to 16-bit kernel if any sequence length > 127
-    let needs_i16 = batch.iter().any(|(ql, _q, tl, _t, _w, _h0)| (*ql > 127) || (*tl > 127));
+    let needs_i16 = batch
+        .iter()
+        .any(|(ql, _q, tl, _t, _w, _h0)| (*ql > 127) || (*tl > 127));
     if needs_i16 {
         return simd_banded_swa_batch16_int16(batch, o_del, e_del, o_ins, e_ins, zdrop, mat, m);
     }
 
     // Convert legacy AoS tuples into AlignJob slice
-    let mut jobs: [AlignJob; W] = [AlignJob { query: &[], target: &[], qlen: 0, tlen: 0, band: 0, h0: 0 }; W];
+    let mut jobs: [AlignJob; W] = [AlignJob {
+        query: &[],
+        target: &[],
+        qlen: 0,
+        tlen: 0,
+        band: 0,
+        h0: 0,
+    }; W];
     let lanes = batch.len().min(W);
     for i in 0..lanes {
         let (ql, q, tl, t, w, h0) = batch[i];
@@ -58,12 +67,15 @@ pub unsafe fn simd_banded_swa_batch32(
         };
     }
 
-    let soa = with_workspace(|ws| {
-        ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W)
-    });
+    let soa = with_workspace(|ws| ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W));
 
     let cfg = KernelConfig {
-        gaps: GapPenalties { o_del, e_del, o_ins, e_ins },
+        gaps: GapPenalties {
+            o_del,
+            e_del,
+            o_ins,
+            e_ins,
+        },
         banding: Banding { band: 0, zdrop },
         scoring: ScoringMatrix { mat5x5: mat, m },
     };

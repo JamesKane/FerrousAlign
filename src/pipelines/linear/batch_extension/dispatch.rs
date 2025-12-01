@@ -1,9 +1,9 @@
-use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::core::alignment::banded_swa::shared::{SoAInputs, SoAInputs16};
-use crate::core::alignment::banded_swa::BandedPairWiseSW;
-use crate::core::alignment::banded_swa::OutScore;
 use super::soa::make_batch_soa;
 use super::types::{BatchExtensionResult, ExtensionJobBatch};
+use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::core::alignment::banded_swa::BandedPairWiseSW;
+use crate::core::alignment::banded_swa::OutScore;
+use crate::core::alignment::banded_swa::shared::{SoAInputs, SoAInputs16};
 use crate::core::alignment::kswv_batch::KswResult;
 use crate::core::alignment::shared_types::KswSoA;
 
@@ -11,20 +11,20 @@ use crate::core::alignment::shared_types::KswSoA;
 use crate::core::alignment::banded_swa::isa_avx2::{
     simd_banded_swa_batch16_int16_soa, simd_banded_swa_batch32_soa,
 };
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-use crate::core::alignment::banded_swa::isa_sse_neon::{
-    simd_banded_swa_batch16_soa, simd_banded_swa_batch8_int16_soa,
-};
-#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-use crate::core::alignment::banded_swa::isa_avx512_int16::simd_banded_swa_batch32_int16_soa;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 use crate::core::alignment::banded_swa::isa_avx512_int8::simd_banded_swa_batch64_soa;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+use crate::core::alignment::banded_swa::isa_avx512_int16::simd_banded_swa_batch32_int16_soa;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-use crate::core::alignment::kswv_sse_neon::kswv_batch16_soa;
+use crate::core::alignment::banded_swa::isa_sse_neon::{
+    simd_banded_swa_batch8_int16_soa, simd_banded_swa_batch16_soa,
+};
 #[cfg(target_arch = "x86_64")]
 use crate::core::alignment::kswv_avx2::kswv_batch32_soa;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 use crate::core::alignment::kswv_avx512::kswv_batch64_soa;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use crate::core::alignment::kswv_sse_neon::kswv_batch16_soa;
 
 /// Execute batched SIMD scoring for extension jobs.
 /// This function converts the batch to a Structure-of-Arrays (SoA) layout
@@ -148,17 +148,17 @@ fn dispatch_banded_swa_soa(
         unsafe {
             match engine {
                 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-                SimdEngineType::Engine512 => {
-                    simd_banded_swa_batch64_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
-                }
+                SimdEngineType::Engine512 => simd_banded_swa_batch64_soa(
+                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                ),
                 #[cfg(target_arch = "x86_64")]
-                SimdEngineType::Engine256 => {
-                    simd_banded_swa_batch32_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
-                }
+                SimdEngineType::Engine256 => simd_banded_swa_batch32_soa(
+                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                ),
                 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                SimdEngineType::Engine128 => {
-                    simd_banded_swa_batch16_soa(&inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m)
-                }
+                SimdEngineType::Engine128 => simd_banded_swa_batch16_soa(
+                    &inputs, num_jobs, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                ),
             }
         }
     } else {
@@ -233,15 +233,48 @@ pub fn dispatch_kswv_soa(
 ) -> Vec<KswResult> {
     match engine {
         #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => {
-            unsafe { kswv_batch64_soa(inputs, count, match_score, mismatch_penalty, o_del, e_del, o_ins, e_ins, ambig_penalty, debug) }
-        }
+        SimdEngineType::Engine512 => unsafe {
+            kswv_batch64_soa(
+                inputs,
+                count,
+                match_score,
+                mismatch_penalty,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                ambig_penalty,
+                debug,
+            )
+        },
         #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => {
-            unsafe { kswv_batch32_soa(inputs, count, match_score, mismatch_penalty, o_del, e_del, o_ins, e_ins, ambig_penalty, debug) }
-        }
-        SimdEngineType::Engine128 => {
-            unsafe { kswv_batch16_soa(inputs, count, match_score, mismatch_penalty, o_del, e_del, o_ins, e_ins, ambig_penalty, debug) }
-        }
+        SimdEngineType::Engine256 => unsafe {
+            kswv_batch32_soa(
+                inputs,
+                count,
+                match_score,
+                mismatch_penalty,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                ambig_penalty,
+                debug,
+            )
+        },
+        SimdEngineType::Engine128 => unsafe {
+            kswv_batch16_soa(
+                inputs,
+                count,
+                match_score,
+                mismatch_penalty,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                ambig_penalty,
+                debug,
+            )
+        },
     }
 }

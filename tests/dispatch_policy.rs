@@ -1,10 +1,12 @@
 // tests/dispatch_policy.rs
 // Validate the centralized SoA dispatch policy.
 
+use ferrous_align::compute::simd_abstraction::simd::detect_optimal_simd_engine;
 use ferrous_align::core::alignment::banded_swa::BandedPairWiseSW;
 use ferrous_align::pipelines::linear::batch_extension::dispatch::execute_batch_simd_scoring;
-use ferrous_align::pipelines::linear::batch_extension::types::{ExtensionJobBatch, BatchedExtensionJob, ExtensionDirection};
-use ferrous_align::compute::simd_abstraction::simd::detect_optimal_simd_engine;
+use ferrous_align::pipelines::linear::batch_extension::types::{
+    BatchedExtensionJob, ExtensionDirection, ExtensionJobBatch,
+};
 
 #[test]
 fn test_soa_dispatch_long_read() {
@@ -13,8 +15,8 @@ fn test_soa_dispatch_long_read() {
 
     let mut batch = ExtensionJobBatch::new();
     batch.add_job(0, 0, 0, ExtensionDirection::Right, &q, &t, 0, 10);
-    
-        let mut mat = [0i8; 25];
+
+    let mut mat = [0i8; 25];
     for i in 0..4 {
         mat[i * 5 + i] = 1;
     }
@@ -30,4 +32,3 @@ fn test_soa_dispatch_long_read() {
     // A more thorough test would compare with a scalar implementation.
     assert!(results[0].score > 0);
 }
-

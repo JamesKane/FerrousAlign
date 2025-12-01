@@ -3,12 +3,12 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use crate::core::alignment::banded_swa::OutScore;
+use crate::alignment::banded_swa::engines16::SwEngine512_16;
 use crate::alignment::workspace::with_workspace;
-use std::arch::x86_64::*; // For raw AVX-512 intrinsics
+use crate::core::alignment::banded_swa::OutScore;
 use crate::generate_swa_entry_i16; // Import the macro
 use crate::generate_swa_entry_i16_soa; // Import the macro
-use crate::alignment::banded_swa::engines16::SwEngine512_16; // Import SwEngine512_16
+use std::arch::x86_64::*; // For raw AVX-512 intrinsics // Import SwEngine512_16
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 32 alignments (16-bit scores)
 ///

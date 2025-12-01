@@ -1,14 +1,14 @@
 //! AVX‑512 int8 thin wrapper (64 lanes)
 #![cfg(target_arch = "x86_64")]
 
-use crate::core::alignment::banded_swa::OutScore;
-use crate::generate_swa_entry_soa;
 use super::engines::SwEngine512;
 use crate::core::alignment::banded_swa::KernelParams;
+use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::banded_swa::kernel::sw_kernel_avx512_with_ws;
-use crate::core::alignment::shared_types::{AlignJob};
-use crate::core::alignment::workspace::{with_workspace, OwnedSwSoA};
-use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
+use crate::core::alignment::shared_types::AlignJob;
+use crate::core::alignment::shared_types::{Banding, GapPenalties, KernelConfig, ScoringMatrix};
+use crate::core::alignment::workspace::{OwnedSwSoA, with_workspace};
+use crate::generate_swa_entry_soa;
 
 /// AVX-512-optimized banded Smith-Waterman for batches of up to 64 alignments
 /// Uses arena-backed SoA buffers and reusable DP rows (no per-call heap allocs).
@@ -30,7 +30,14 @@ pub unsafe fn simd_banded_swa_batch64(
     const W: usize = 64;
 
     // Convert legacy AoS tuples into AlignJob slice
-    let mut jobs: [AlignJob; W] = [AlignJob { query: &[], target: &[], qlen: 0, tlen: 0, band: 0, h0: 0 }; W];
+    let mut jobs: [AlignJob; W] = [AlignJob {
+        query: &[],
+        target: &[],
+        qlen: 0,
+        tlen: 0,
+        band: 0,
+        h0: 0,
+    }; W];
     let lanes = batch.len().min(W);
     for i in 0..lanes {
         let (ql, q, tl, t, w, h0) = batch[i];
@@ -44,12 +51,15 @@ pub unsafe fn simd_banded_swa_batch64(
         };
     }
 
-    let soa = with_workspace(|ws| {
-        ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W)
-    });
+    let soa = with_workspace(|ws| ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W));
 
     let cfg = KernelConfig {
-        gaps: GapPenalties { o_del, e_del, o_ins, e_ins },
+        gaps: GapPenalties {
+            o_del,
+            e_del,
+            o_ins,
+            e_ins,
+        },
         banding: Banding { band: 0, zdrop },
         scoring: ScoringMatrix { mat5x5: mat, m },
     };

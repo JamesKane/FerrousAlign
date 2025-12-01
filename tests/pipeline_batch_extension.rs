@@ -1,11 +1,11 @@
 // tests/pipeline_batch_extension.rs
+use ferrous_align::compute::simd_abstraction::simd::SimdEngineType;
+use ferrous_align::core::alignment::banded_swa::BandedPairWiseSW; // Also need OutScore for BatchExtensionResult
+use ferrous_align::pipelines::linear::batch_extension::soa::make_batch_soa;
 use ferrous_align::pipelines::linear::batch_extension::{
     BatchExtensionResult, ChainExtensionScores, ExtensionDirection, ExtensionJobBatch,
     execute_batch_simd_scoring,
 };
-use ferrous_align::pipelines::linear::batch_extension::soa::make_batch_soa;
-use ferrous_align::core::alignment::banded_swa::BandedPairWiseSW; // Also need OutScore for BatchExtensionResult
-use ferrous_align::compute::simd_abstraction::simd::SimdEngineType;
 
 #[test]
 fn test_extension_job_batch_add_and_retrieve() {
@@ -141,8 +141,9 @@ fn test_make_batch_soa() {
     batch.add_job(1, 0, 0, ExtensionDirection::Left, &q2, &r2, 0, 0);
 
     const W: usize = 16;
-    let (query_soa, target_soa, pos_offsets) = make_batch_soa::<W>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
-    
+    let (query_soa, target_soa, pos_offsets) =
+        make_batch_soa::<W>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+
     batch.query_soa = query_soa;
     batch.target_soa = target_soa;
     batch.pos_offsets = pos_offsets;
@@ -296,11 +297,20 @@ fn test_execute_batch_simd_scoring_i16_soa_path() {
     let r_medium = vec![1; 130]; // 130 'C's
 
     batch.add_job(0, 0, 0, ExtensionDirection::Left, &q_long, &r_long, 0, 20);
-    batch.add_job(0, 0, 1, ExtensionDirection::Right, &q_medium, &r_medium, 0, 20);
+    batch.add_job(
+        0,
+        0,
+        1,
+        ExtensionDirection::Right,
+        &q_medium,
+        &r_medium,
+        0,
+        20,
+    );
 
     // Prepare SoA data (mock what execute_batch_simd_scoring does internally)
     // The i16 path currently uses W=8 for Engine128
-    const W: usize = 8; 
+    const W: usize = 8;
     let (query_soa, target_soa, pos_offsets) =
         make_batch_soa::<W>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
     batch.query_soa = query_soa;

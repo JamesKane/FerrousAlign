@@ -5,8 +5,8 @@
 //! separate allows us to iterate on AVX-512 specific improvements without
 //! touching other ISAs.
 
+use super::kernel::{KernelParams, SwSimd, sw_kernel_with_ws};
 use crate::core::alignment::banded_swa::OutScore;
-use super::kernel::{sw_kernel_with_ws, KernelParams, SwSimd};
 use crate::core::alignment::shared_types::WorkspaceArena;
 
 /// AVX-512 fast path wrapper. Currently delegates to the shared kernel.
@@ -43,11 +43,7 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
     use crate::core::compute::simd_abstraction::types::simd_arch as avx;
 
     let stride = W;
-    let lanes = params
-        .batch
-        .len()
-        .min(params.qlen.len())
-        .min(W);
+    let lanes = params.batch.len().min(params.qlen.len()).min(W);
     let qmax = params.max_qlen.max(0) as usize;
     let tmax = params.max_tlen.max(0) as usize;
     if qmax == 0 || tmax == 0 || lanes == 0 {
@@ -130,7 +126,9 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
 
     for i in 0..tmax {
         // If all active lanes terminated, break
-        if term_mask_global.count_ones() as usize >= lanes { break; }
+        if term_mask_global.count_ones() as usize >= lanes {
+            break;
+        }
 
         let mut f_vec = zero;
         let mut h_diag = avx::_mm512_loadu_si512(h_ptr as *const _);
@@ -192,7 +190,8 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
 
             // In-band check: (j > current_beg-1) & (j < current_end)
             let j_vec = avx::_mm512_set1_epi8(j as i8);
-            let in_band_left = avx::_mm512_cmpgt_epi8_mask(j_vec, avx::_mm512_subs_epi8(current_beg_vec, one));
+            let in_band_left =
+                avx::_mm512_cmpgt_epi8_mask(j_vec, avx::_mm512_subs_epi8(current_beg_vec, one));
             let in_band_right = avx::_mm512_cmpgt_epi8_mask(current_end_vec, j_vec);
             let in_band_mask = in_band_left & in_band_right;
 
@@ -209,8 +208,10 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
             // Max tracking
             let gt_mask = avx::_mm512_cmpgt_epi8_mask(h_masked, max_scores);
             max_scores = avx::_mm512_max_epi8(h_masked, max_scores);
-            let i_blend = avx::_mm512_mask_blend_epi8(gt_mask, max_i_vec, avx::_mm512_set1_epi8(i as i8));
-            let j_blend = avx::_mm512_mask_blend_epi8(gt_mask, max_j_vec, avx::_mm512_set1_epi8(j as i8));
+            let i_blend =
+                avx::_mm512_mask_blend_epi8(gt_mask, max_i_vec, avx::_mm512_set1_epi8(i as i8));
+            let j_blend =
+                avx::_mm512_mask_blend_epi8(gt_mask, max_j_vec, avx::_mm512_set1_epi8(j as i8));
             max_i_vec = i_blend;
             max_j_vec = j_blend;
 

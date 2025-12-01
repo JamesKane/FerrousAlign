@@ -26,8 +26,8 @@
 //! (`_mm256_storeu_si256`, `_mm512_storeu_si512`). This provides ~10-15%
 //! additional performance improvement on top of Priority 1 (workspace allocation).
 
+use crate::core::alignment::shared_types::{AlignJob, KswSoA, WorkspaceArena};
 use crate::pipelines::linear::seeding::SMEM;
-use crate::core::alignment::shared_types::{WorkspaceArena, AlignJob, KswSoA};
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 use std::ptr::NonNull;
@@ -39,7 +39,7 @@ pub struct OwnedSwSoA {
     pub qlen: Vec<i8>,
     pub tlen: Vec<i8>,
     pub band: Vec<i8>,
-    pub h0:   Vec<i8>,
+    pub h0: Vec<i8>,
     pub lanes: usize,
     pub max_qlen: i32,
     pub max_tlen: i32,
@@ -237,17 +237,17 @@ pub struct AlignmentWorkspace {
 
     // SoA sequence buffers for KSWV (reused across calls; 64B aligned)
     ksw_query_soa_16: AlignedVec<u8>,
-    ksw_ref_soa_16:   AlignedVec<u8>,
+    ksw_ref_soa_16: AlignedVec<u8>,
     ksw_query_soa_32: AlignedVec<u8>,
-    ksw_ref_soa_32:   AlignedVec<u8>,
+    ksw_ref_soa_32: AlignedVec<u8>,
     ksw_query_soa_64: AlignedVec<u8>,
-    ksw_ref_soa_64:   AlignedVec<u8>,
+    ksw_ref_soa_64: AlignedVec<u8>,
 
     // Per-lane scalar arrays for KSWV SoA carrier
     ksw_qlen: Vec<i8>,
     ksw_tlen: Vec<i8>,
     ksw_band: Vec<i8>,
-    ksw_h0:   Vec<i8>,
+    ksw_h0: Vec<i8>,
     ksw_lanes: usize,
     ksw_max_qlen: i32,
     ksw_max_tlen: i32,
@@ -272,7 +272,7 @@ pub struct AlignmentWorkspace {
     banded_qlen: Vec<i8>,
     banded_tlen: Vec<i8>,
     banded_band: Vec<i8>,
-    banded_h0:   Vec<i8>,
+    banded_h0: Vec<i8>,
     banded_lanes: usize,
     banded_max_qlen: i32,
     banded_max_tlen: i32,
@@ -342,16 +342,16 @@ impl AlignmentWorkspace {
 
             // KSW SoA sequence buffers (initially empty; sized on demand)
             ksw_query_soa_16: AlignedVec::with_capacity(0),
-            ksw_ref_soa_16:   AlignedVec::with_capacity(0),
+            ksw_ref_soa_16: AlignedVec::with_capacity(0),
             ksw_query_soa_32: AlignedVec::with_capacity(0),
-            ksw_ref_soa_32:   AlignedVec::with_capacity(0),
+            ksw_ref_soa_32: AlignedVec::with_capacity(0),
             ksw_query_soa_64: AlignedVec::with_capacity(0),
-            ksw_ref_soa_64:   AlignedVec::with_capacity(0),
+            ksw_ref_soa_64: AlignedVec::with_capacity(0),
 
             ksw_qlen: Vec::new(),
             ksw_tlen: Vec::new(),
             ksw_band: Vec::new(),
-            ksw_h0:   Vec::new(),
+            ksw_h0: Vec::new(),
             ksw_lanes: 0,
             ksw_max_qlen: 0,
             ksw_max_tlen: 0,
@@ -371,7 +371,7 @@ impl AlignmentWorkspace {
             banded_qlen: Vec::new(),
             banded_tlen: Vec::new(),
             banded_band: Vec::new(),
-            banded_h0:   Vec::new(),
+            banded_h0: Vec::new(),
             banded_lanes: 0,
             banded_max_qlen: 0,
             banded_max_tlen: 0,
@@ -551,39 +551,64 @@ impl AlignmentWorkspace {
 
     #[inline]
     fn ensure_ksw_scalar_capacity(&mut self, lanes: usize) {
-        if self.ksw_qlen.len() != lanes { self.ksw_qlen.resize(lanes, 0); }
-        if self.ksw_tlen.len() != lanes { self.ksw_tlen.resize(lanes, 0); }
-        if self.ksw_band.len() != lanes { self.ksw_band.resize(lanes, 0); }
-        if self.ksw_h0.len()   != lanes { self.ksw_h0.resize(lanes, 0); }
+        if self.ksw_qlen.len() != lanes {
+            self.ksw_qlen.resize(lanes, 0);
+        }
+        if self.ksw_tlen.len() != lanes {
+            self.ksw_tlen.resize(lanes, 0);
+        }
+        if self.ksw_band.len() != lanes {
+            self.ksw_band.resize(lanes, 0);
+        }
+        if self.ksw_h0.len() != lanes {
+            self.ksw_h0.resize(lanes, 0);
+        }
         self.ksw_lanes = lanes;
     }
 
     /// Ensure KSW SoA sequence buffers for the given stride and lengths, and return mutable slices
     #[inline]
-    fn ensure_ksw_soa_buffers(&mut self, lanes: usize, max_q: usize, max_t: usize) -> (&mut [u8], &mut [u8]) {
+    fn ensure_ksw_soa_buffers(
+        &mut self,
+        lanes: usize,
+        max_q: usize,
+        max_t: usize,
+    ) -> (&mut [u8], &mut [u8]) {
         let q_needed = lanes.saturating_mul(max_q.max(1));
         let t_needed = lanes.saturating_mul(max_t.max(1));
         match lanes {
             KSW_SIMD_WIDTH_SSE_NEON => {
                 Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_query_soa_16, q_needed);
-                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_16,   t_needed);
-                (self.ksw_query_soa_16.as_mut_slice(), self.ksw_ref_soa_16.as_mut_slice())
+                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_16, t_needed);
+                (
+                    self.ksw_query_soa_16.as_mut_slice(),
+                    self.ksw_ref_soa_16.as_mut_slice(),
+                )
             }
             KSW_SIMD_WIDTH_AVX2 => {
                 Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_query_soa_32, q_needed);
-                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_32,   t_needed);
-                (self.ksw_query_soa_32.as_mut_slice(), self.ksw_ref_soa_32.as_mut_slice())
+                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_32, t_needed);
+                (
+                    self.ksw_query_soa_32.as_mut_slice(),
+                    self.ksw_ref_soa_32.as_mut_slice(),
+                )
             }
             KSW_SIMD_WIDTH_AVX512 => {
                 Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_query_soa_64, q_needed);
-                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_64,   t_needed);
-                (self.ksw_query_soa_64.as_mut_slice(), self.ksw_ref_soa_64.as_mut_slice())
+                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_64, t_needed);
+                (
+                    self.ksw_query_soa_64.as_mut_slice(),
+                    self.ksw_ref_soa_64.as_mut_slice(),
+                )
             }
             _ => {
                 // Fallback to the smallest supported width
                 Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_query_soa_16, q_needed);
-                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_16,   t_needed);
-                (self.ksw_query_soa_16.as_mut_slice(), self.ksw_ref_soa_16.as_mut_slice())
+                Self::ensure_aligned_capacity_u8_bytes(&mut self.ksw_ref_soa_16, t_needed);
+                (
+                    self.ksw_query_soa_16.as_mut_slice(),
+                    self.ksw_ref_soa_16.as_mut_slice(),
+                )
             }
         }
     }
@@ -628,14 +653,16 @@ impl WorkspaceArena for AlignmentWorkspace {
     }
 }
 
-
-
 // =========================================================================
 // KSWV SoA adapter (workspace-backed, 64B-aligned, zero per-call allocs)
 // =========================================================================
 impl AlignmentWorkspace {
     /// Ensure capacity and transpose AlignJob descriptors into an owned Banded SWA SoA view.
-    pub fn ensure_and_transpose_banded_owned(&mut self, jobs: &[AlignJob], lanes: usize) -> OwnedSwSoA {
+    pub fn ensure_and_transpose_banded_owned(
+        &mut self,
+        jobs: &[AlignJob],
+        lanes: usize,
+    ) -> OwnedSwSoA {
         let stride_lanes = lanes; // desired SIMD stride (e.g., 16/32)
         let job_count = jobs.len(); // actual number of active lanes
 
@@ -666,7 +693,7 @@ impl AlignmentWorkspace {
                 self.banded_qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
                 self.banded_tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
                 self.banded_band[lane] = j.band.clamp(i32::MIN, 127) as i8;
-                self.banded_h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
+                self.banded_h0[lane] = j.h0.clamp(i32::MIN, 127) as i8;
 
                 // Transpose sequences into SoA: pos*stride + lane
                 for pos in 0..qn {
@@ -680,7 +707,7 @@ impl AlignmentWorkspace {
                 self.banded_qlen[lane] = 0;
                 self.banded_tlen[lane] = 0;
                 self.banded_band[lane] = 0;
-                self.banded_h0[lane]   = 0;
+                self.banded_h0[lane] = 0;
             }
         }
 
@@ -690,7 +717,7 @@ impl AlignmentWorkspace {
             qlen: self.banded_qlen.clone(),
             tlen: self.banded_tlen.clone(),
             band: self.banded_band.clone(),
-            h0:   self.banded_h0.clone(),
+            h0: self.banded_h0.clone(),
             lanes: stride_lanes,
             max_qlen: self.banded_max_qlen,
             max_tlen: self.banded_max_tlen,
@@ -701,21 +728,41 @@ impl AlignmentWorkspace {
     fn ensure_banded_soa_capacity(&mut self, lanes: usize, max_q: usize, max_t: usize) {
         let q_needed = lanes.saturating_mul(max_q);
         let t_needed = lanes.saturating_mul(max_t);
-        if self.banded_query_soa.capacity < q_needed { self.banded_query_soa = AlignedVec::with_capacity(q_needed); } else { self.banded_query_soa.len = q_needed; }
-        if self.banded_target_soa.capacity < t_needed { self.banded_target_soa = AlignedVec::with_capacity(t_needed); } else { self.banded_target_soa.len = t_needed; }
+        if self.banded_query_soa.capacity < q_needed {
+            self.banded_query_soa = AlignedVec::with_capacity(q_needed);
+        } else {
+            self.banded_query_soa.len = q_needed;
+        }
+        if self.banded_target_soa.capacity < t_needed {
+            self.banded_target_soa = AlignedVec::with_capacity(t_needed);
+        } else {
+            self.banded_target_soa.len = t_needed;
+        }
         // per-lane arrays
-        if self.banded_qlen.len() != lanes { self.banded_qlen.resize(lanes, 0); }
-        if self.banded_tlen.len() != lanes { self.banded_tlen.resize(lanes, 0); }
-        if self.banded_band.len() != lanes { self.banded_band.resize(lanes, 0); }
-        if self.banded_h0.len()   != lanes { self.banded_h0.resize(lanes, 0); }
+        if self.banded_qlen.len() != lanes {
+            self.banded_qlen.resize(lanes, 0);
+        }
+        if self.banded_tlen.len() != lanes {
+            self.banded_tlen.resize(lanes, 0);
+        }
+        if self.banded_band.len() != lanes {
+            self.banded_band.resize(lanes, 0);
+        }
+        if self.banded_h0.len() != lanes {
+            self.banded_h0.resize(lanes, 0);
+        }
         self.banded_lanes = lanes;
         self.banded_max_qlen = max_q as i32;
         self.banded_max_tlen = max_t as i32;
     }
-    
+
     /// Ensure capacity and transpose AlignJob descriptors into a KSWV SoA view.
     /// Buffers are sized as `max_len * lanes` and padded with 0xFF sentinel.
-    pub fn ensure_and_transpose_ksw<'a>(&'a mut self, jobs: &[AlignJob<'a>], lanes: usize) -> KswSoA<'a> {
+    pub fn ensure_and_transpose_ksw<'a>(
+        &'a mut self,
+        jobs: &[AlignJob<'a>],
+        lanes: usize,
+    ) -> KswSoA<'a> {
         let stride_lanes = lanes;
         let job_count = jobs.len().min(lanes);
 
@@ -735,12 +782,12 @@ impl AlignmentWorkspace {
                 self.ksw_qlen[lane] = (j.qlen.min(127)).try_into().unwrap_or(127);
                 self.ksw_tlen[lane] = (j.tlen.min(127)).try_into().unwrap_or(127);
                 self.ksw_band[lane] = j.band.clamp(i32::MIN, 127) as i8;
-                self.ksw_h0[lane]   = j.h0.clamp(i32::MIN, 127) as i8;
+                self.ksw_h0[lane] = j.h0.clamp(i32::MIN, 127) as i8;
             } else {
                 self.ksw_qlen[lane] = 0;
                 self.ksw_tlen[lane] = 0;
                 self.ksw_band[lane] = 0;
-                self.ksw_h0[lane]   = 0;
+                self.ksw_h0[lane] = 0;
             }
         }
 
@@ -748,7 +795,8 @@ impl AlignmentWorkspace {
         self.ksw_max_tlen = max_t as i32;
 
         // Ensure sequence buffers and copy sequences (scope mutable borrows locally)
-        let (query_slice_len, ref_slice_len) = (stride_lanes * max_q.max(1), stride_lanes * max_t.max(1));
+        let (query_slice_len, ref_slice_len) =
+            (stride_lanes * max_q.max(1), stride_lanes * max_t.max(1));
         {
             let (qbuf, tbuf) = self.ensure_ksw_soa_buffers(stride_lanes, max_q, max_t);
             debug_assert_eq!(qbuf.len(), query_slice_len);
@@ -759,17 +807,33 @@ impl AlignmentWorkspace {
                 let j = &jobs[lane];
                 let qn = j.qlen.min(max_q);
                 let tn = j.tlen.min(max_t);
-                for pos in 0..qn { qbuf[pos * stride_lanes + lane] = j.query[pos]; }
-                for pos in 0..tn { tbuf[pos * stride_lanes + lane] = j.target[pos]; }
+                for pos in 0..qn {
+                    qbuf[pos * stride_lanes + lane] = j.query[pos];
+                }
+                for pos in 0..tn {
+                    tbuf[pos * stride_lanes + lane] = j.target[pos];
+                }
             }
         }
 
         // After the local scope, no mutable borrows remain; obtain immutable views
         let (ref_soa_slice, query_soa_slice): (&[u8], &[u8]) = match stride_lanes {
-            KSW_SIMD_WIDTH_SSE_NEON => (&self.ksw_ref_soa_16.as_mut_slice()[..ref_slice_len], &self.ksw_query_soa_16.as_mut_slice()[..query_slice_len]),
-            KSW_SIMD_WIDTH_AVX2 => (&self.ksw_ref_soa_32.as_mut_slice()[..ref_slice_len], &self.ksw_query_soa_32.as_mut_slice()[..query_slice_len]),
-            KSW_SIMD_WIDTH_AVX512 => (&self.ksw_ref_soa_64.as_mut_slice()[..ref_slice_len], &self.ksw_query_soa_64.as_mut_slice()[..query_slice_len]),
-            _ => (&self.ksw_ref_soa_16.as_mut_slice()[..ref_slice_len], &self.ksw_query_soa_16.as_mut_slice()[..query_slice_len]),
+            KSW_SIMD_WIDTH_SSE_NEON => (
+                &self.ksw_ref_soa_16.as_mut_slice()[..ref_slice_len],
+                &self.ksw_query_soa_16.as_mut_slice()[..query_slice_len],
+            ),
+            KSW_SIMD_WIDTH_AVX2 => (
+                &self.ksw_ref_soa_32.as_mut_slice()[..ref_slice_len],
+                &self.ksw_query_soa_32.as_mut_slice()[..query_slice_len],
+            ),
+            KSW_SIMD_WIDTH_AVX512 => (
+                &self.ksw_ref_soa_64.as_mut_slice()[..ref_slice_len],
+                &self.ksw_query_soa_64.as_mut_slice()[..query_slice_len],
+            ),
+            _ => (
+                &self.ksw_ref_soa_16.as_mut_slice()[..ref_slice_len],
+                &self.ksw_query_soa_16.as_mut_slice()[..query_slice_len],
+            ),
         };
 
         KswSoA {
@@ -778,7 +842,7 @@ impl AlignmentWorkspace {
             qlen: &self.ksw_qlen[..stride_lanes],
             tlen: &self.ksw_tlen[..stride_lanes],
             band: &self.ksw_band[..stride_lanes],
-            h0:   &self.ksw_h0[..stride_lanes],
+            h0: &self.ksw_h0[..stride_lanes],
             lanes: stride_lanes,
             max_qlen: self.ksw_max_qlen,
             max_tlen: self.ksw_max_tlen,

@@ -1,8 +1,6 @@
-
-
-use crate::core::alignment::banded_swa::OutScore;
 use super::engines::SwEngine128;
 use crate::core::alignment::banded_swa::KernelParams;
+use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws;
 
 use super::engines16::SwEngine128_16;
@@ -11,10 +9,8 @@ use crate::generate_swa_entry_i16_soa;
 
 // Legacy helpers no longer needed here; SoA is provided by the arena-backed provider
 use crate::core::alignment::shared_types::AlignJob;
+use crate::core::alignment::shared_types::{Banding, GapPenalties, KernelConfig, ScoringMatrix};
 use crate::core::alignment::workspace::with_workspace;
-use crate::core::alignment::shared_types::{KernelConfig, GapPenalties, Banding, ScoringMatrix};
-
-
 
 /// SSE/NEON-optimized banded Smith-Waterman for batches of up to 16 alignments
 /// Processes 16 alignments in parallel (baseline SIMD for all platforms)
@@ -37,14 +33,23 @@ pub unsafe fn simd_banded_swa_batch16(
 
     // Follow bwa-mem2 policy: dispatch to 16-bit kernel if any sequence length > 127
     // Upstream uses MAX_SEQ_LEN8 = 128 and routes longer reads to i16
-    let needs_i16 = batch.iter().any(|(ql, _q, tl, _t, _w, _h0)| (*ql > 127) || (*tl > 127));
+    let needs_i16 = batch
+        .iter()
+        .any(|(ql, _q, tl, _t, _w, _h0)| (*ql > 127) || (*tl > 127));
     if needs_i16 {
         // Use the i16 AoS entry (8 lanes on 128-bit engines)
         return simd_banded_swa_batch8_int16(batch, o_del, e_del, o_ins, e_ins, zdrop, mat, m);
     }
 
     // Convert legacy AoS tuples into AlignJob slice
-    let mut jobs: [AlignJob; W] = [AlignJob { query: &[], target: &[], qlen: 0, tlen: 0, band: 0, h0: 0 }; W];
+    let mut jobs: [AlignJob; W] = [AlignJob {
+        query: &[],
+        target: &[],
+        qlen: 0,
+        tlen: 0,
+        band: 0,
+        h0: 0,
+    }; W];
     let lanes = batch.len().min(W);
     for i in 0..lanes {
         let (ql, q, tl, t, w, h0) = batch[i];
@@ -58,12 +63,15 @@ pub unsafe fn simd_banded_swa_batch16(
         };
     }
 
-    let soa = with_workspace(|ws| {
-        ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W)
-    });
+    let soa = with_workspace(|ws| ws.ensure_and_transpose_banded_owned(&jobs[..lanes], W));
 
     let cfg = KernelConfig {
-        gaps: GapPenalties { o_del, e_del, o_ins, e_ins },
+        gaps: GapPenalties {
+            o_del,
+            e_del,
+            o_ins,
+            e_ins,
+        },
         banding: Banding { band: 0, zdrop },
         scoring: ScoringMatrix { mat5x5: mat, m },
     };
@@ -94,8 +102,6 @@ pub unsafe fn simd_banded_swa_batch16(
     })
 }
 
-
-
 use crate::generate_swa_entry_soa; // This macro is exported at crate root by shared module
 
 #[cfg(target_arch = "x86_64")]
@@ -106,7 +112,6 @@ generate_swa_entry_soa!(
     cfg = cfg(target_arch = "x86_64"),
     target_feature = "sse2",
 );
-
 
 generate_swa_entry_i16!(
     name = simd_banded_swa_batch8_int16,

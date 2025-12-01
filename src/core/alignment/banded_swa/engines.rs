@@ -1,5 +1,5 @@
-use crate::core::compute::simd_abstraction as simd;
 use super::kernel::SwSimd;
+use crate::core::compute::simd_abstraction as simd;
 use crate::core::compute::simd_abstraction::SimdEngine;
 
 /// SSE/NEON 128-bit engine adapter (16 lanes of i8)
@@ -71,7 +71,6 @@ impl SwSimd for SwEngine128 {
         unsafe { simd::SimdEngine128::min_epu8(a, b) }
     }
 }
-
 
 /// AVX2 256-bit engine adapter (32 lanes of i8)
 #[cfg(target_arch = "x86_64")]
@@ -178,31 +177,40 @@ impl SwSimd for SwEngine512 {
     #[inline(always)]
     unsafe fn subs_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::subs_epi8(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::max_epi8(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::min_epi8(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::cmpeq_epi8(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::cmpgt_epi8(b, a) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::blendv_epi8(a, b, mask) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::and_si128(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn or_si128(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::or_si128(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn cmpgt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::cmpgt_epi8(a, b) }
-    }    #[inline(always)]
+    }
+    #[inline(always)]
     unsafe fn min_epu8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::min_epu8(a, b) }
     }

@@ -48,7 +48,8 @@ fn create_fastq_file(dir: &Path, name: &str, content: &str) -> io::Result<PathBu
 }
 
 #[test]
-    fn test_soa_seeding_and_chaining_simple() -> io::Result<()> {    let test_name = "soa_simple_alignment";
+fn test_soa_seeding_and_chaining_simple() -> io::Result<()> {
+    let test_name = "soa_simple_alignment";
     let temp_dir = setup_test_dir(test_name)?;
     let ref_prefix = temp_dir.join("ref");
 
@@ -294,12 +295,12 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
         .arg(ref_prefix.to_str().unwrap())
         .arg(query_fastq_path.to_str().unwrap())
         .env("FERROUS_SOA_PIPELINE", "1") // Enable SoA pipeline
-        .stdout(std::process::Stdio::from(
-            std::fs::File::create(&output_sam_path)?
-        ))
-        .stderr(std::process::Stdio::from(
-            std::fs::File::create(&stderr_log_path)?
-        ))
+        .stdout(std::process::Stdio::from(std::fs::File::create(
+            &output_sam_path,
+        )?))
+        .stderr(std::process::Stdio::from(std::fs::File::create(
+            &stderr_log_path,
+        )?))
         .output()?;
 
     // Read stderr log for debugging
@@ -314,16 +315,10 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
     );
 
     // 6. Verify output SAM file exists and is non-empty
-    assert!(
-        output_sam_path.exists(),
-        "Output SAM file not created"
-    );
+    assert!(output_sam_path.exists(), "Output SAM file not created");
 
     let output_contents = fs::read_to_string(&output_sam_path)?;
-    assert!(
-        !output_contents.is_empty(),
-        "Output SAM file is empty"
-    );
+    assert!(!output_contents.is_empty(), "Output SAM file is empty");
 
     // 7. Verify SAM headers are present
     assert!(
@@ -353,8 +348,10 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
 
     // 9. Verify log messages indicate SoA pipeline was used
     assert!(
-        stderr_contents.contains("SOA_PIPELINE") || stderr_contents.contains("Using end-to-end SoA pipeline"),
-        "SoA pipeline was not used. Stderr: {}", stderr_contents
+        stderr_contents.contains("SOA_PIPELINE")
+            || stderr_contents.contains("Using end-to-end SoA pipeline"),
+        "SoA pipeline was not used. Stderr: {}",
+        stderr_contents
     );
 
     cleanup_test_dir(&temp_dir);

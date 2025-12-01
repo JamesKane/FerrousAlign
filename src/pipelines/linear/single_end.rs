@@ -10,7 +10,9 @@
 // - Selection: sam_output::select_single_end_alignments() filters output
 // - Output: sam_output::write_sam_record() writes to stream
 
-use super::batch_extension::{process_batch_cross_read, process_batch_parallel_subbatch, process_sub_batch_internal_soa};
+use super::batch_extension::{
+    process_batch_cross_read, process_batch_parallel_subbatch, process_sub_batch_internal_soa,
+};
 use super::finalization::Alignment;
 use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
@@ -19,11 +21,11 @@ use crate::compute::ComputeBackend;
 use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::io::fastq_reader::FastqReader;
-use crate::io::soa_readers::SoaFastqReader;
 use crate::io::sam_output::{
     create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
     write_sam_record, write_sam_records_soa,
 };
+use crate::io::soa_readers::SoaFastqReader;
 use crate::utils::cputime;
 use rayon::prelude::*;
 use std::io::Write;
@@ -168,12 +170,12 @@ fn process_single_end_aos(
     reads_per_batch: usize,
 ) {
     let mut reader = match FastqReader::new(query_file_name) {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("Error opening query file {query_file_name}: {e}");
-                return;
-            }
-        };
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Error opening query file {query_file_name}: {e}");
+            return;
+        }
+    };
 
     loop {
         // Stage 0: Read batch of reads (matching C++ kt_pipeline step 0)
@@ -322,15 +324,9 @@ fn process_single_end_aos(
             // Output selected alignments
             for idx in selection.output_indices {
                 let is_primary = idx == selection.primary_idx;
-                prepare_single_end_alignment(
-                    &mut alignment_vec[idx],
-                    is_primary,
-                    rg_id.as_deref(),
-                );
+                prepare_single_end_alignment(&mut alignment_vec[idx], is_primary, rg_id.as_deref());
 
-                if let Err(e) =
-                    write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual)
-                {
+                if let Err(e) = write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual) {
                     log::error!("Error writing SAM record: {e}");
                 }
             }

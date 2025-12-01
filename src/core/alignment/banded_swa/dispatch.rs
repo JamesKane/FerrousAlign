@@ -1,8 +1,7 @@
+use super::shared::SoAInputs;
 use crate::alignment::banded_swa::BandedPairWiseSW;
 use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
-use super::shared::SoAInputs;
-use crate::core::alignment::banded_swa::types::{OutScore, AlignmentResult, ExtensionDirection};
-
+use crate::core::alignment::banded_swa::types::{AlignmentResult, ExtensionDirection, OutScore};
 
 use crate::pipelines::linear::batch_extension::ExtensionJobBatch;
 
@@ -138,13 +137,17 @@ pub fn simd_banded_swa_dispatch_soa<const W: usize>(
 }
 
 /// Scalar fallback for SoA dispatch path.
-pub fn scalar_dispatch_from_soa(sw_params: &BandedPairWiseSW, batch: &ExtensionJobBatch) -> Vec<OutScore> {
+pub fn scalar_dispatch_from_soa(
+    sw_params: &BandedPairWiseSW,
+    batch: &ExtensionJobBatch,
+) -> Vec<OutScore> {
     let mut results = Vec::with_capacity(batch.len());
     for i in 0..batch.len() {
         let job = &batch.jobs[i];
         let q_seq = batch.get_query_seq(i);
         let r_seq = batch.get_ref_seq(i);
-        let (score, _, _, _) = scalar_banded_swa(sw_params,
+        let (score, _, _, _) = scalar_banded_swa(
+            sw_params,
             job.query_len,
             q_seq,
             job.ref_len,
@@ -175,7 +178,9 @@ pub fn simd_banded_swa_dispatch(
     _sw_params: &BandedPairWiseSW,
     _batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
 ) -> Vec<OutScore> {
-    panic!("Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points.");
+    panic!(
+        "Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points."
+    );
 }
 
 /// Runtime dispatch for 16-bit SIMD batch scoring (score-only, no CIGAR)
@@ -195,7 +200,9 @@ pub fn simd_banded_swa_dispatch_int16(
     _sw_params: &BandedPairWiseSW,
     _batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
 ) -> Vec<OutScore> {
-    panic!("Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points.");
+    panic!(
+        "Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points."
+    );
 }
 
 /// Runtime dispatch version of batch alignment with CIGAR generation
@@ -229,5 +236,7 @@ pub fn simd_banded_swa_dispatch_with_cigar(
         Option<ExtensionDirection>,
     )],
 ) -> Vec<AlignmentResult> {
-    panic!("Legacy scalar dispatch is deprecated and will be removed. Use the SoA pipeline with deferred CIGAR generation.");
+    panic!(
+        "Legacy scalar dispatch is deprecated and will be removed. Use the SoA pipeline with deferred CIGAR generation."
+    );
 }

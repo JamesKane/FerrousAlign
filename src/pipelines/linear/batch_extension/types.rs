@@ -1,10 +1,8 @@
 use std::cell::RefCell;
 
-
 use super::super::chaining::{Chain, SoAChainBatch};
-use super::super::region::{ChainExtensionMapping};
+use super::super::region::ChainExtensionMapping;
 use super::super::seeding::{Seed, SoASeedBatch};
-
 
 thread_local! {
     pub static REVERSE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
@@ -438,4 +436,3 @@ impl Default for SoAAlignmentResult {
         Self::new()
     }
 }
-

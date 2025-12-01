@@ -4,10 +4,10 @@
 // This module provides a clean separation between alignment computation
 // and I/O concerns.
 
+use crate::core::io::soa_readers::SoAReadBatch;
+use crate::pipelines::linear::batch_extension::SoAAlignmentResult;
 use crate::pipelines::linear::finalization::{Alignment, sam_flags};
 use crate::pipelines::linear::mem_opt::MemOpt;
-use crate::pipelines::linear::batch_extension::SoAAlignmentResult;
-use crate::core::io::soa_readers::SoAReadBatch;
 use std::io::Write;
 
 // ============================================================================
@@ -598,15 +598,7 @@ pub fn write_sam_records_soa<W: Write>(
             }
 
             // Write SAM record directly from SoA data
-            write_sam_record_from_soa(
-                writer,
-                soa_result,
-                aln_idx,
-                seq,
-                qual,
-                is_primary,
-                rg_id,
-            )?;
+            write_sam_record_from_soa(writer, soa_result, aln_idx, seq, qual, is_primary, rg_id)?;
             records_written += 1;
         }
     }

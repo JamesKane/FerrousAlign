@@ -28,7 +28,7 @@ macro_rules! generate_ksw_entry_soa {
             ambig_penalty: i8,
             debug: bool,
         ) -> Vec<crate::core::alignment::kswv_batch::KswResult> {
-            use crate::core::alignment::kswv_batch::{SeqPair, KswResult};
+            use crate::core::alignment::kswv_batch::{KswResult, SeqPair};
             use crate::core::alignment::workspace::with_workspace;
 
             const W: usize = $W;
@@ -70,7 +70,7 @@ macro_rules! generate_ksw_entry_soa {
                         o_ins,
                         e_ins,
                         ambig_penalty,
-                        0,         // phase (unused)
+                        0, // phase (unused)
                         debug,
                         wb,
                     )

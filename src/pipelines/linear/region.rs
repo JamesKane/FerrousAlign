@@ -21,17 +21,17 @@
 //
 // ============================================================================
 
-use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 use super::chaining::{Chain, cal_max_gap};
 use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
-use crate::core::alignment::banded_swa::BandedPairWiseSW;
-use crate::core::alignment::banded_swa::OutScore;
+use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 use crate::alignment::edit_distance;
 use crate::compute::ComputeBackend;
+use crate::core::alignment::banded_swa::BandedPairWiseSW;
+use crate::core::alignment::banded_swa::OutScore;
 use crate::pipelines::linear::batch_extension::dispatch::execute_batch_simd_scoring;
-use crate::pipelines::linear::batch_extension::types::{ExtensionJobBatch, ExtensionDirection};
+use crate::pipelines::linear::batch_extension::types::{ExtensionDirection, ExtensionJobBatch};
 
 /// Alignment region with boundaries but NO CIGAR
 ///
@@ -922,7 +922,7 @@ pub fn generate_cigar_from_region(
     region: &AlignmentRegion,
     opt: &MemOpt,
 ) -> Option<(Vec<(u8, i32)>, i32, String)> {
-use crate::core::alignment::banded_swa::BandedPairWiseSW;
+    use crate::core::alignment::banded_swa::BandedPairWiseSW;
 
     // Debug: show what query we received
     log::debug!(

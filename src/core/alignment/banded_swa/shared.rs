@@ -5,7 +5,6 @@
 
 use crate::core::alignment::banded_swa::OutScore;
 
-
 /// Carrier for pre-formatted Structure-of-Arrays (SoA) data.
 ///
 /// This is used for the SoA-first path where data transformation is skipped.
@@ -223,18 +222,21 @@ macro_rules! generate_swa_entry_i16 {
         #[allow(unsafe_op_in_unsafe_fn)]
         #[cfg_attr(any(), target_feature(enable = $tf))] // leave empty tf for NEON/SSE if desired
         pub unsafe fn $name(
-            batch: &[(i32,&[u8],i32,&[u8],i32,i32)],
-            o_del: i32, e_del: i32, o_ins: i32, e_ins: i32,
-            zdrop: i32, mat: &[i8; 25], m: i32,
+            batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
+            o_del: i32,
+            e_del: i32,
+            o_ins: i32,
+            e_ins: i32,
+            zdrop: i32,
+            mat: &[i8; 25],
+            m: i32,
         ) -> Vec<OutScore> {
             const W: usize = $W;
             const MAX: usize = 512; // typical default for i16 path
             let (qlen, tlen, h0_i8, w_arr, max_q, max_t, padded) =
                 crate::core::alignment::banded_swa::shared::pad_batch::<W>(batch);
-            let (query_soa_u8, target_soa_u8) = crate::core::alignment::banded_swa::shared::soa_transform::<
-                W,
-                MAX,
-            >(&padded);
+            let (query_soa_u8, target_soa_u8) =
+                crate::core::alignment::banded_swa::shared::soa_transform::<W, MAX>(&padded);
 
             // Convert u8 SoA to i16 SoA for the i16 kernel
             let mut query_soa_i16 = Vec::with_capacity(query_soa_u8.len());
@@ -247,7 +249,9 @@ macro_rules! generate_swa_entry_i16 {
             }
 
             let mut h0: [i16; W] = [0; W];
-            for i in 0..W { h0[i] = h0_i8[i] as i16; }
+            for i in 0..W {
+                h0[i] = h0_i8[i] as i16;
+            }
             let params = crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
                 batch,
                 query_soa: &query_soa_i16,
@@ -258,9 +262,13 @@ macro_rules! generate_swa_entry_i16 {
                 w: &w_arr,
                 max_qlen: max_q,
                 max_tlen: max_t,
-                o_del, e_del, o_ins, e_ins,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
                 zdrop,
-                mat, m,
+                mat,
+                m,
             };
             crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params)
         }
@@ -337,8 +345,13 @@ macro_rules! generate_swa_entry_i16_soa {
         pub unsafe fn $name(
             inputs: &crate::core::alignment::banded_swa::shared::SoAInputs16,
             num_jobs: usize,
-            o_del: i32, e_del: i32, o_ins: i32, e_ins: i32,
-            zdrop: i32, mat: &[i8; 25], m: i32,
+            o_del: i32,
+            e_del: i32,
+            o_ins: i32,
+            e_ins: i32,
+            zdrop: i32,
+            mat: &[i8; 25],
+            m: i32,
         ) -> Vec<$crate::alignment::banded_swa::OutScore> {
             const W: usize = $W;
             // Dummy AoS to satisfy KernelParams16::batch type; lengths come from inputs
@@ -351,12 +364,17 @@ macro_rules! generate_swa_entry_i16_soa {
                 target_soa: inputs.target_soa,
                 qlen: inputs.qlen,
                 tlen: inputs.tlen,
-                h0: inputs.h0,        // i16 h0 slice
+                h0: inputs.h0, // i16 h0 slice
                 w: inputs.w,
                 max_qlen: inputs.max_qlen,
                 max_tlen: inputs.max_tlen,
-                o_del, e_del, o_ins, e_ins,
-                zdrop, mat, m,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                zdrop,
+                mat,
+                m,
             };
             crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(&params)
         }

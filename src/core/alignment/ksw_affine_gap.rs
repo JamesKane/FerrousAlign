@@ -742,8 +742,6 @@ fn reverse_sequence(seq: &mut [u8], len: usize) {
     }
 }
 
-
-
 /// High-level alignment function with separate gap penalties for deletions and insertions.
 /// Equivalent to C's `ksw_align2`.
 ///

@@ -8,12 +8,12 @@ pub mod banded_swa;
 pub mod cigar;
 pub mod edit_distance;
 pub mod ksw_affine_gap;
+pub mod kswv; // kswv shared macros/adapters
 pub mod kswv_batch; // Horizontal SIMD batching infrastructure
 pub mod kswv_sse_neon; // Baseline 128-bit horizontal SIMD kernel
-pub mod kswv; // kswv shared macros/adapters
+pub mod shared_types;
 pub mod utils;
-pub mod workspace; // Thread-local buffer pools for allocation reuse
-pub mod shared_types; // Shared SoA carriers, config bundles, and arena traits
+pub mod workspace; // Thread-local buffer pools for allocation reuse // Shared SoA carriers, config bundles, and arena traits
 
 // AVX2-specific SIMD implementations (x86_64 only)
 #[cfg(target_arch = "x86_64")]

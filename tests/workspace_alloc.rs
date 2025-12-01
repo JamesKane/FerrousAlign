@@ -2,8 +2,8 @@
 // Validate that workspace-backed buffers are reused across calls (no reallocation)
 // for constant shapes: DP rows (banded SW) and KSWV SoA buffers.
 
-use ferrous_align::core::alignment::workspace::with_workspace;
 use ferrous_align::core::alignment::shared_types::{AlignJob, WorkspaceArena};
+use ferrous_align::core::alignment::workspace::with_workspace;
 
 #[test]
 fn workspace_rows_reuse_no_realloc_for_same_shape() {
@@ -27,9 +27,18 @@ fn workspace_rows_reuse_no_realloc_for_same_shape() {
         let e_ptr1 = e1.as_ptr();
         let f_ptr1 = f1.as_ptr();
 
-        assert_eq!(h_ptr0, h_ptr1, "H row pointer changed between identical ensure_rows calls");
-        assert_eq!(e_ptr0, e_ptr1, "E row pointer changed between identical ensure_rows calls");
-        assert_eq!(f_ptr0, f_ptr1, "F row pointer changed between identical ensure_rows calls");
+        assert_eq!(
+            h_ptr0, h_ptr1,
+            "H row pointer changed between identical ensure_rows calls"
+        );
+        assert_eq!(
+            e_ptr0, e_ptr1,
+            "E row pointer changed between identical ensure_rows calls"
+        );
+        assert_eq!(
+            f_ptr0, f_ptr1,
+            "F row pointer changed between identical ensure_rows calls"
+        );
     });
 }
 
@@ -41,7 +50,14 @@ fn ksw_soa_buffers_reuse_no_realloc_for_same_shape() {
         // Build a small job set of size 8 lanes (will be padded as needed)
         let lanes = 16usize;
         let jobs: Vec<AlignJob> = (0..8)
-            .map(|_| AlignJob { query: &[0u8; 32][..], target: &[0u8; 32][..], qlen: 32, tlen: 32, band: 0, h0: 0 })
+            .map(|_| AlignJob {
+                query: &[0u8; 32][..],
+                target: &[0u8; 32][..],
+                qlen: 32,
+                tlen: 32,
+                band: 0,
+                h0: 0,
+            })
             .collect();
 
         // First transpose
@@ -54,8 +70,14 @@ fn ksw_soa_buffers_reuse_no_realloc_for_same_shape() {
         let q_ptr2 = soa2.query_soa.as_ptr();
         let r_ptr2 = soa2.ref_soa.as_ptr();
 
-        assert_eq!(q_ptr1, q_ptr2, "KSW query_soa pointer changed between identical transposes");
-        assert_eq!(r_ptr1, r_ptr2, "KSW ref_soa pointer changed between identical transposes");
+        assert_eq!(
+            q_ptr1, q_ptr2,
+            "KSW query_soa pointer changed between identical transposes"
+        );
+        assert_eq!(
+            r_ptr1, r_ptr2,
+            "KSW ref_soa pointer changed between identical transposes"
+        );
     });
 }
 
@@ -67,7 +89,14 @@ fn banded_soa_buffers_reuse_no_realloc_for_same_shape() {
         // Build a small job set of size 8 lanes (will be padded as needed)
         let lanes = 16usize;
         let jobs: Vec<AlignJob> = (0..8)
-            .map(|_| AlignJob { query: &[0u8; 32][..], target: &[0u8; 32][..], qlen: 32, tlen: 32, band: 0, h0: 0 })
+            .map(|_| AlignJob {
+                query: &[0u8; 32][..],
+                target: &[0u8; 32][..],
+                qlen: 32,
+                tlen: 32,
+                band: 0,
+                h0: 0,
+            })
             .collect();
 
         // First transpose

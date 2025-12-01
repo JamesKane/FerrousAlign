@@ -197,8 +197,6 @@ fn test_and_merge_soa(
     false // Request to add a new chain
 }
 
-
-
 /// B-tree based seed chaining - O(n log n) complexity
 /// Implements C++ mem_chain_seeds (bwamem.cpp:806-974)
 pub fn chain_seeds(seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>) {
@@ -408,11 +406,7 @@ fn test_and_merge(
 }
 
 /// B-tree based seed chaining for a batch of reads, consuming SoASeedBatch
-pub fn chain_seeds_batch(
-    soa_seed_batch: &SoASeedBatch,
-    opt: &MemOpt,
-    l_pac: u64,
-) -> SoAChainBatch {
+pub fn chain_seeds_batch(soa_seed_batch: &SoASeedBatch, opt: &MemOpt, l_pac: u64) -> SoAChainBatch {
     let num_reads = soa_seed_batch.read_seed_boundaries.len();
     let mut soa_chain_batch = SoAChainBatch::with_capacity(num_reads * 10, num_reads); // Heuristic capacity
 
@@ -502,7 +496,7 @@ pub fn chain_seeds_batch(
             .into_iter()
             .filter(|c| c.score >= opt.min_chain_weight)
             .collect();
-        
+
         // Populate SoAChainBatch for the current read
         let current_read_chain_start_idx = soa_chain_batch.score.len();
         // Clear old total_seeds_in_chains_for_read
@@ -526,7 +520,7 @@ pub fn chain_seeds_batch(
             // The 'kept' value needs to be set by the filtering stage, not here.
             // For initial population, let's assume `kept` is initialized by `SoAChainBatch` default (0).
             soa_chain_batch.weight.push(chain.weight); // Will be 0 initially
-            soa_chain_batch.kept.push(chain.kept);     // Will be 0 initially
+            soa_chain_batch.kept.push(chain.kept); // Will be 0 initially
             soa_chain_batch.frac_rep.push(chain.frac_rep); // Will be 0.0 initially
 
             soa_chain_batch.rid.push(chain.rid);
@@ -536,17 +530,21 @@ pub fn chain_seeds_batch(
             soa_chain_batch.last_len.push(chain.last_len);
 
             let current_chain_seed_start_idx = soa_chain_batch.seeds_indices.len();
-            soa_chain_batch.seeds_indices.extend_from_slice(&chain.seeds);
-            soa_chain_batch.chain_seed_boundaries.push((current_chain_seed_start_idx, chain.seeds.len()));
+            soa_chain_batch
+                .seeds_indices
+                .extend_from_slice(&chain.seeds);
+            soa_chain_batch
+                .chain_seed_boundaries
+                .push((current_chain_seed_start_idx, chain.seeds.len()));
         }
 
         let num_chains_for_read = soa_chain_batch.score.len() - current_read_chain_start_idx;
-        soa_chain_batch.read_chain_boundaries.push((current_read_chain_start_idx, num_chains_for_read));
+        soa_chain_batch
+            .read_chain_boundaries
+            .push((current_read_chain_start_idx, num_chains_for_read));
     }
     soa_chain_batch
 }
-
-
 
 /// Calculate chain weight based on seed coverage
 /// Implements C++ mem_chain_weight (bwamem.cpp:429-448)
@@ -826,7 +824,6 @@ pub fn filter_chains(
 /// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
 /// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
 
-
 pub fn filter_chains_batch(
     soa_chain_batch: &mut SoAChainBatch,
     soa_seed_batch: &SoASeedBatch,
@@ -836,7 +833,8 @@ pub fn filter_chains_batch(
     let num_reads = soa_chain_batch.read_chain_boundaries.len();
 
     for read_idx in 0..num_reads {
-        let (chain_start_idx, num_chains_for_read) = soa_chain_batch.read_chain_boundaries[read_idx];
+        let (chain_start_idx, num_chains_for_read) =
+            soa_chain_batch.read_chain_boundaries[read_idx];
         let current_read_query_length = query_lengths[read_idx];
 
         if num_chains_for_read == 0 {
@@ -846,7 +844,8 @@ pub fn filter_chains_batch(
         // 1. Calculate weights and frac_rep for all chains of the current read
         for i in 0..num_chains_for_read {
             let global_chain_idx = chain_start_idx + i;
-            let (weight, l_rep) = calculate_chain_weight_soa(global_chain_idx, soa_chain_batch, soa_seed_batch, opt);
+            let (weight, l_rep) =
+                calculate_chain_weight_soa(global_chain_idx, soa_chain_batch, soa_seed_batch, opt);
             soa_chain_batch.weight[global_chain_idx] = weight;
             soa_chain_batch.frac_rep[global_chain_idx] = if current_read_query_length > 0 {
                 l_rep as f32 / current_read_query_length as f32
@@ -861,9 +860,8 @@ pub fn filter_chains_batch(
             .map(|i| chain_start_idx + i)
             .collect();
 
-        chain_global_indices_for_read.sort_unstable_by(|&a, &b| {
-            soa_chain_batch.weight[b].cmp(&soa_chain_batch.weight[a])
-        });
+        chain_global_indices_for_read
+            .sort_unstable_by(|&a, &b| soa_chain_batch.weight[b].cmp(&soa_chain_batch.weight[a]));
 
         // Use a vector to store the global indices of chains that are "kept" for this read.
         // This simulates the `kept_chains: Vec<Chain>` in the original function.
@@ -882,28 +880,39 @@ pub fn filter_chains_batch(
             // Check overlap with already-kept chains
             for &kept_global_chain_idx in kept_chain_global_indices.iter() {
                 // Check if chains overlap on query
-                let qb_max = soa_chain_batch.query_start[global_chain_idx].max(soa_chain_batch.query_start[kept_global_chain_idx]);
-                let qe_min = soa_chain_batch.query_end[global_chain_idx].min(soa_chain_batch.query_end[kept_global_chain_idx]);
+                let qb_max = soa_chain_batch.query_start[global_chain_idx]
+                    .max(soa_chain_batch.query_start[kept_global_chain_idx]);
+                let qe_min = soa_chain_batch.query_end[global_chain_idx]
+                    .min(soa_chain_batch.query_end[kept_global_chain_idx]);
 
                 if qe_min > qb_max {
                     let overlap = qe_min - qb_max;
-                    let min_len = (soa_chain_batch.query_end[global_chain_idx] - soa_chain_batch.query_start[global_chain_idx])
-                        .min(soa_chain_batch.query_end[kept_global_chain_idx] - soa_chain_batch.query_start[kept_global_chain_idx]);
+                    let min_len = (soa_chain_batch.query_end[global_chain_idx]
+                        - soa_chain_batch.query_start[global_chain_idx])
+                        .min(
+                            soa_chain_batch.query_end[kept_global_chain_idx]
+                                - soa_chain_batch.query_start[kept_global_chain_idx],
+                        );
 
                     if overlap >= (min_len as f32 * opt.mask_level) as i32 {
                         overlaps = true;
                         // Mark as shadowed, but don't commit until final decision
-                        // soa_chain_batch.kept[global_chain_idx] = 1; 
+                        // soa_chain_batch.kept[global_chain_idx] = 1;
 
-                        let weight_threshold = (soa_chain_batch.weight[kept_global_chain_idx] as f32 * opt.drop_ratio) as i32;
-                        let weight_diff = soa_chain_batch.weight[kept_global_chain_idx] - soa_chain_batch.weight[global_chain_idx];
+                        let weight_threshold = (soa_chain_batch.weight[kept_global_chain_idx]
+                            as f32
+                            * opt.drop_ratio) as i32;
+                        let weight_diff = soa_chain_batch.weight[kept_global_chain_idx]
+                            - soa_chain_batch.weight[global_chain_idx];
 
-                        if soa_chain_batch.weight[global_chain_idx] < weight_threshold && weight_diff >= (opt.min_seed_len << 1) {
+                        if soa_chain_batch.weight[global_chain_idx] < weight_threshold
+                            && weight_diff >= (opt.min_seed_len << 1)
+                        {
                             should_discard = true;
                             break;
                         } else {
                             // It overlaps but is not discarded by drop_ratio, so it is shadowed
-                            soa_chain_batch.kept[global_chain_idx] = 1; 
+                            soa_chain_batch.kept[global_chain_idx] = 1;
                         }
                     }
                 }
@@ -944,7 +953,8 @@ pub fn calculate_chain_weight_soa(
     soa_seed_batch: &SoASeedBatch,
     opt: &MemOpt,
 ) -> (i32, i32) {
-    let (chain_seed_start_idx, num_seeds_in_chain) = soa_chain_batch.chain_seed_boundaries[chain_global_idx];
+    let (chain_seed_start_idx, num_seeds_in_chain) =
+        soa_chain_batch.chain_seed_boundaries[chain_global_idx];
 
     if num_seeds_in_chain == 0 {
         return (0, 0);
@@ -1006,4 +1016,3 @@ pub fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
 
     if l < (opt.w << 1) { l } else { opt.w << 1 }
 }
-

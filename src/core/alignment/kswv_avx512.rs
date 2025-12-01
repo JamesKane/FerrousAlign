@@ -15,7 +15,6 @@
 
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
 
-
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
 
 // Raw AVX-512 intrinsics - faithful to C++

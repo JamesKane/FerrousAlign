@@ -1,20 +1,19 @@
-use super::types::ReadExtensionContext;
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
+use super::types::ReadExtensionContext;
 
-use std::sync::Arc;
 use rayon::prelude::*;
+use std::sync::Arc;
 
-use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore}; // Corrected import
-use crate::compute::simd_abstraction::simd::SimdEngineType; // Corrected import
+use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore}; // Corrected import // Corrected import
 
 use super::super::finalization::{Alignment, mark_secondary_alignments}; // Corrected import
 use super::super::pipeline::{build_and_filter_chains, find_seeds}; // Corrected import
 use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions}; // Corrected import
+use super::collect::collect_extension_jobs_batch;
 use super::dispatch::execute_batch_simd_scoring; // Corrected import
-use super::distribute::convert_batch_results_to_outscores; // Corrected import
-use super::collect::collect_extension_jobs_batch; // Corrected import
-
+use super::distribute::convert_batch_results_to_outscores; // Corrected import // Corrected import
 
 /// Sub-batch size for parallel processing
 ///
@@ -62,7 +61,7 @@ pub fn process_batch_cross_read(
     let bwa_idx_arc = Arc::new(bwa_idx);
     let pac_data_arc = Arc::new(pac_data);
     let opt_arc = Arc::new(opt);
-    
+
     process_sub_batch_internal(
         &bwa_idx_arc,
         &pac_data_arc,
@@ -103,8 +102,6 @@ pub fn create_unmapped_alignment_internal(query_name: &str) -> Alignment {
         frac_rep: 0.0,
     }
 }
-
-
 
 /// Process a batch of reads using parallel sub-batches with cross-read SIMD batching
 ///
@@ -418,4 +415,3 @@ fn finalize_alignments(
 
     all_alignments
 }
-

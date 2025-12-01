@@ -1,16 +1,15 @@
-/// SoA-native extension job collection (PR3)
-///
-/// Collects extension jobs directly from SoA chains and seeds,
-/// eliminating per-read AoS intermediate representations.
-
-use super::types::{
-    ExtensionDirection, ExtensionJobBatch, ReadExtensionMappings, SoAReadExtensionContext,
-    REVERSE_BUF,
-};
 use super::super::chaining::cal_max_gap;
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::super::region::{ChainExtensionMapping, SeedExtensionMapping};
+/// SoA-native extension job collection (PR3)
+///
+/// Collects extension jobs directly from SoA chains and seeds,
+/// eliminating per-read AoS intermediate representations.
+use super::types::{
+    ExtensionDirection, ExtensionJobBatch, REVERSE_BUF, ReadExtensionMappings,
+    SoAReadExtensionContext,
+};
 
 /// Collect extension jobs from all reads in the SoA batch
 ///
@@ -53,11 +52,12 @@ pub fn collect_extension_jobs_batch_soa(
         let query_len = soa_context.query_lengths[read_idx];
         let (encoded_query_start, encoded_query_len) =
             soa_context.encoded_query_boundaries[read_idx];
-        let encoded_query =
-            &soa_context.encoded_queries[encoded_query_start..encoded_query_start + encoded_query_len];
+        let encoded_query = &soa_context.encoded_queries
+            [encoded_query_start..encoded_query_start + encoded_query_len];
 
         // Get chains for this read
-        let (chain_start_idx, num_chains) = soa_context.soa_chain_batch.read_chain_boundaries[read_idx];
+        let (chain_start_idx, num_chains) =
+            soa_context.soa_chain_batch.read_chain_boundaries[read_idx];
 
         let mut mappings = ReadExtensionMappings {
             chain_mappings: Vec::with_capacity(num_chains),
@@ -190,7 +190,8 @@ pub fn collect_extension_jobs_batch_soa(
                 if seed_query_end < query_len {
                     let tmp = (seed_ref_pos + seed_len as u64 - rmax_0) as usize;
                     if tmp < rseq.len() {
-                        let current_query_seg = &encoded_query[seed_query_end as usize..query_len as usize];
+                        let current_query_seg =
+                            &encoded_query[seed_query_end as usize..query_len as usize];
                         let current_target_seg = &rseq[tmp..];
 
                         right_job_idx = Some(right_local_idx);
@@ -215,7 +216,9 @@ pub fn collect_extension_jobs_batch_soa(
                 });
             }
 
-            mappings.chain_mappings.push(ChainExtensionMapping { seed_mappings });
+            mappings
+                .chain_mappings
+                .push(ChainExtensionMapping { seed_mappings });
         }
 
         all_mappings.push(mappings);

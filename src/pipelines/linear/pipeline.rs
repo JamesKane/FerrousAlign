@@ -1,3 +1,6 @@
+use super::chaining::{
+    Chain, SoAChainBatch, chain_seeds, chain_seeds_batch, filter_chains, filter_chains_batch,
+};
 use super::finalization::Alignment;
 use super::finalization::mark_secondary_alignments;
 use super::finalization::sam_flags;
@@ -8,13 +11,12 @@ use super::seeding::Seed;
 use super::seeding::forward_only_seed_strategy;
 use super::seeding::generate_smems_for_strand;
 use super::seeding::generate_smems_from_position;
+use super::seeding::{SoASeedBatch, find_seeds_batch};
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::alignment::workspace::with_workspace;
 use crate::compute::ComputeBackend;
 use crate::core::io::soa_readers::SoAReadBatch;
-use super::seeding::{SoASeedBatch, find_seeds_batch};
-use super::chaining::{SoAChainBatch, chain_seeds_batch, filter_chains_batch, chain_seeds, Chain, filter_chains};
 
 // ============================================================================
 // SEED GENERATION (SMEM EXTRACTION)
@@ -567,8 +569,6 @@ pub fn find_seeds(
     (seeds, encoded_query, encoded_query_rc)
 }
 
-
-
 /// Stage 2: Chaining
 ///
 /// Chains seeds together using O(n²) DP and filters by score.
@@ -656,7 +656,11 @@ pub fn build_and_filter_chains_batch(
     let mut soa_chain_batch = chain_seeds_batch(soa_seed_batch, opt, l_pac);
 
     // Prepare query lengths for filtering
-    let query_lengths: Vec<i32> = read_batch.read_boundaries.iter().map(|(_, len)| *len as i32).collect();
+    let query_lengths: Vec<i32> = read_batch
+        .read_boundaries
+        .iter()
+        .map(|(_, len)| *len as i32)
+        .collect();
 
     // Filter chains
     filter_chains_batch(&mut soa_chain_batch, soa_seed_batch, opt, &query_lengths);
@@ -677,8 +681,7 @@ pub fn align_reads_batch_deferred(
         find_seeds_batch(bwa_idx, read_batch, opt);
 
     // Phase 2: Batch Chaining
-    let soa_chain_batch =
-        build_and_filter_chains_batch(bwa_idx, &soa_seed_batch, read_batch, opt);
+    let soa_chain_batch = build_and_filter_chains_batch(bwa_idx, &soa_seed_batch, read_batch, opt);
 
     // TODO: Integrate with existing alignment kernels and output layer
     // This will involve adapting `extend_chains_to_regions` and `generate_cigar_from_region`

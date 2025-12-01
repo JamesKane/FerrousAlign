@@ -1,12 +1,10 @@
-use super::types::{
-    ExtensionDirection, ExtensionJobBatch, ReadExtensionContext,
-    ReadExtensionMappings, REVERSE_BUF,
-};
-use super::super::chaining::{cal_max_gap};
+use super::super::chaining::cal_max_gap;
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::super::region::{ChainExtensionMapping, SeedExtensionMapping};
-
+use super::types::{
+    ExtensionDirection, ExtensionJobBatch, REVERSE_BUF, ReadExtensionContext, ReadExtensionMappings,
+};
 
 // ============================================================================
 // CROSS-READ BATCHING - COLLECTION INFRASTRUCTURE

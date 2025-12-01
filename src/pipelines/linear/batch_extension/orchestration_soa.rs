@@ -1,20 +1,19 @@
-/// SoA-native sub-batch processing (PR3)
-///
-/// This is the end-to-end SoA implementation that eliminates AoS-to-SoA conversion.
-/// Data flows: SoAReadBatch → find_seeds_batch → chain_seeds_batch → extension → finalization
-
-use super::types::{SoAReadExtensionContext, ExtensionJobBatch, SoAAlignmentResult};
+use super::super::chaining::{chain_seeds_batch, filter_chains_batch};
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::super::seeding::find_seeds_batch;
-use super::super::chaining::{chain_seeds_batch, filter_chains_batch};
 use super::collect_soa::collect_extension_jobs_batch_soa;
 use super::dispatch::execute_batch_simd_scoring;
 use super::distribute::convert_batch_results_to_outscores;
 use super::finalize_soa::finalize_alignments_soa;
-use crate::core::io::soa_readers::SoAReadBatch;
-use crate::core::alignment::banded_swa::BandedPairWiseSW;
+/// SoA-native sub-batch processing (PR3)
+///
+/// This is the end-to-end SoA implementation that eliminates AoS-to-SoA conversion.
+/// Data flows: SoAReadBatch → find_seeds_batch → chain_seeds_batch → extension → finalization
+use super::types::{ExtensionJobBatch, SoAAlignmentResult, SoAReadExtensionContext};
 use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::core::alignment::banded_swa::BandedPairWiseSW;
+use crate::core::io::soa_readers::SoAReadBatch;
 use std::sync::Arc;
 
 /// Process a sub-batch using end-to-end SoA pipeline (PR3/PR4)
@@ -50,7 +49,10 @@ pub fn process_sub_batch_internal_soa(
         return SoAAlignmentResult::new();
     }
 
-    log::debug!("SOA_PIPELINE: Processing {} reads with end-to-end SoA", batch_size);
+    log::debug!(
+        "SOA_PIPELINE: Processing {} reads with end-to-end SoA",
+        batch_size
+    );
 
     // Phase 1: SoA Seeding (PR2)
     let (soa_seed_batch, encoded_queries, encoded_queries_rc) =
@@ -81,10 +83,7 @@ pub fn process_sub_batch_internal_soa(
     filter_chains_batch(&mut soa_chain_batch, &soa_seed_batch, opt, &query_lengths);
 
     let kept_chains = soa_chain_batch.kept.iter().filter(|&&k| k > 0).count();
-    log::debug!(
-        "SOA_PIPELINE: {} chains kept after filtering",
-        kept_chains
-    );
+    log::debug!("SOA_PIPELINE: {} chains kept after filtering", kept_chains);
 
     // Build SoAReadExtensionContext
     let mut soa_context = SoAReadExtensionContext {

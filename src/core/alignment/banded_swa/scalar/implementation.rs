@@ -1,6 +1,6 @@
-use crate::alignment::banded_swa::{EhT, OutScore};
-use crate::alignment::banded_swa::{BandedPairWiseSW};
+use crate::alignment::banded_swa::BandedPairWiseSW;
 use crate::alignment::banded_swa::types::{TB_DEL, TB_INS, TB_MATCH};
+use crate::alignment::banded_swa::{EhT, OutScore};
 
 pub fn scalar_banded_swa(
     sw_params: &BandedPairWiseSW,
@@ -63,7 +63,8 @@ pub fn scalar_banded_swa(
             // CRITICAL: Clamp query[j] to valid range [0, 4] to prevent out-of-bounds access to sw_params.mat
             // Query values should be 0=A, 1=C, 2=G, 3=T, 4=N, but clamp to be safe
             let base_code = (query[j] as i32).min(4);
-            qp[p_row_start + j] = sw_params.scoring_matrix()[(k * sw_params.alphabet_size() + base_code) as usize];
+            qp[p_row_start + j] =
+                sw_params.scoring_matrix()[(k * sw_params.alphabet_size() + base_code) as usize];
         }
     }
 
@@ -206,17 +207,15 @@ pub fn scalar_banded_swa(
                 if max_score - m_val - (diff_i - diff_j) * sw_params.e_del() > sw_params.zdrop() {
                     break;
                 }
-            } else if max_score - m_val - (diff_j - diff_i) * sw_params.e_ins() > sw_params.zdrop() {
+            } else if max_score - m_val - (diff_j - diff_i) * sw_params.e_ins() > sw_params.zdrop()
+            {
                 break;
             }
         }
 
         // Update beg and end for the next round
         let mut new_beg = current_beg;
-        while new_beg < current_end
-            && eh[new_beg as usize].h == 0
-            && eh[new_beg as usize].e == 0
-        {
+        while new_beg < current_end && eh[new_beg as usize].h == 0 && eh[new_beg as usize].e == 0 {
             new_beg += 1;
         }
         beg = new_beg;
@@ -252,8 +251,8 @@ pub fn scalar_banded_swa(
         // Safety check: prevent infinite loops
         if iteration_count >= MAX_TRACEBACK_ITERATIONS {
             log::error!(
-                    "Traceback exceeded MAX_TRACEBACK_ITERATIONS ({MAX_TRACEBACK_ITERATIONS}) - possible infinite loop!"
-                );
+                "Traceback exceeded MAX_TRACEBACK_ITERATIONS ({MAX_TRACEBACK_ITERATIONS}) - possible infinite loop!"
+            );
             log::error!("  curr_i={curr_i}, curr_j={curr_j}, qlen={qlen}, tlen={tlen}");
             break;
         }
@@ -270,10 +269,7 @@ pub fn scalar_banded_swa(
                 // Also capture the aligned bases for MD tag generation
                 let mut alignment_count = 0;
 
-                while curr_i > 0
-                    && curr_j > 0
-                    && tb[curr_i as usize][curr_j as usize] == TB_MATCH
-                {
+                while curr_i > 0 && curr_j > 0 && tb[curr_i as usize][curr_j as usize] == TB_MATCH {
                     alignment_count += 1;
                     // Capture aligned bases (1-indexed in arrays, so subtract 1)
                     // Note: bases are added in reverse order, will be reversed later
@@ -322,8 +318,8 @@ pub fn scalar_banded_swa(
         // Safety check: ensure we made progress
         if curr_i == prev_i && curr_j == prev_j {
             log::warn!(
-                    "Traceback made no progress at curr_i={curr_i}, curr_j={curr_j}, tb_code={tb_code}"
-                );
+                "Traceback made no progress at curr_i={curr_i}, curr_j={curr_j}, tb_code={tb_code}"
+            );
             break; // Exit to prevent infinite loop
         }
     }
@@ -378,13 +374,13 @@ pub fn scalar_banded_swa(
         // Use local alignment: soft-clip the 3' end
         final_cigar.push((b'S', qlen - query_end));
         log::debug!(
-                "3' clipping: gscore={} <= score={} - pen_clip3={} = {}, soft-clipping {} bases",
-                current_gscore,
-                max_score,
-                sw_params.pen_clip3(),
-                max_score - sw_params.pen_clip3(),
-                qlen - query_end
-            );
+            "3' clipping: gscore={} <= score={} - pen_clip3={} = {}, soft-clipping {} bases",
+            current_gscore,
+            max_score,
+            sw_params.pen_clip3(),
+            max_score - sw_params.pen_clip3(),
+            qlen - query_end
+        );
     } else if query_end < qlen {
         // ==================================================================
         // GLOBAL EXTENSION: Use M operations instead of soft-clipping
@@ -404,13 +400,13 @@ pub fn scalar_banded_swa(
         // ==================================================================
         let remaining_bases = qlen - query_end;
         log::debug!(
-                "3' global extension: gscore={} > score={} - pen_clip3={} = {}, extending {} bases as M",
-                current_gscore,
-                max_score,
-                sw_params.pen_clip3(),
-                max_score - sw_params.pen_clip3(),
-                remaining_bases
-            );
+            "3' global extension: gscore={} > score={} - pen_clip3={} = {}, extending {} bases as M",
+            current_gscore,
+            max_score,
+            sw_params.pen_clip3(),
+            max_score - sw_params.pen_clip3(),
+            remaining_bases
+        );
         // Use M operations for global extension (covers matches/mismatches)
         final_cigar.push((b'M', remaining_bases));
     }
@@ -418,14 +414,14 @@ pub fn scalar_banded_swa(
     // Debug logging for problematic CIGARs (all insertions)
     if cigar.len() == 1 && cigar[0].0 == b'I' {
         log::warn!(
-                "PATHOLOGICAL CIGAR: Single insertion of {} bases! qlen={}, tlen={}, max_i={}, max_j={}, score={}",
-                cigar[0].1,
-                qlen,
-                tlen,
-                max_i,
-                max_j,
-                max_score
-            );
+            "PATHOLOGICAL CIGAR: Single insertion of {} bases! qlen={}, tlen={}, max_i={}, max_j={}, score={}",
+            cigar[0].1,
+            qlen,
+            tlen,
+            max_i,
+            max_j,
+            max_score
+        );
         log::warn!("  Query preview: {:?}", &query[..10.min(query.len())]);
         log::warn!("  Target preview: {:?}", &target[..10.min(target.len())]);
         log::warn!("  query_start={query_start}, query_end={query_end}, qlen={qlen}");

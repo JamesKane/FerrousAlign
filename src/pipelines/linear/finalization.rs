@@ -207,14 +207,6 @@ impl Alignment {
             .sum()
     }
 
-
-
-
-
-
-
-
-
     /// Generate XA tag entry for this alignment (alternative alignment format)
     /// Format: RNAME,STRAND+POS,CIGAR,NM
     /// Example: chr1,+1000,50M,2

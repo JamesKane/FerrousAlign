@@ -1,16 +1,15 @@
+use super::super::chaining::Chain;
+use super::super::finalization::Alignment;
+use super::super::index::index::BwaIndex;
+use super::super::mem_opt::MemOpt;
+use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions};
+use super::super::seeding::Seed;
 /// SoA-native finalization (PR3/PR4)
 ///
 /// Converts extension results to final alignments while working with SoA structures.
 /// Extracts per-read data from SoA batches to call existing finalization logic.
 /// PR4: Returns SoAAlignmentResult instead of Vec<Vec<Alignment>>
-
-use super::types::{ReadExtensionMappings, SoAReadExtensionContext, SoAAlignmentResult};
-use super::super::chaining::Chain;
-use super::super::finalization::Alignment;
-use super::super::index::index::BwaIndex;
-use super::super::mem_opt::MemOpt;
-use super::super::region::{merge_extension_scores_to_regions, generate_cigar_from_region};
-use super::super::seeding::Seed;
+use super::types::{ReadExtensionMappings, SoAAlignmentResult, SoAReadExtensionContext};
 use crate::core::alignment::banded_swa::OutScore;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -55,7 +54,9 @@ fn convert_alignments_to_soa(all_alignments: Vec<Vec<Alignment>>) -> SoAAlignmen
                 result.cigar_ops.push(*op);
                 result.cigar_lens.push(*len);
             }
-            result.cigar_boundaries.push((cigar_start_idx, alignment.cigar.len()));
+            result
+                .cigar_boundaries
+                .push((cigar_start_idx, alignment.cigar.len()));
 
             // Mate information
             result.rnexts.push(alignment.rnext);
@@ -66,7 +67,9 @@ fn convert_alignments_to_soa(all_alignments: Vec<Vec<Alignment>>) -> SoAAlignmen
             let seq_start_offset = result.seqs.len();
             result.seqs.extend_from_slice(alignment.seq.as_bytes());
             result.quals.extend_from_slice(alignment.qual.as_bytes());
-            result.seq_boundaries.push((seq_start_offset, alignment.seq.len()));
+            result
+                .seq_boundaries
+                .push((seq_start_offset, alignment.seq.len()));
 
             // Tags (flattened with boundaries)
             let tag_start_idx = result.tag_names.len();
@@ -74,7 +77,9 @@ fn convert_alignments_to_soa(all_alignments: Vec<Vec<Alignment>>) -> SoAAlignmen
                 result.tag_names.push(tag_name.clone());
                 result.tag_values.push(tag_value.clone());
             }
-            result.tag_boundaries.push((tag_start_idx, alignment.tags.len()));
+            result
+                .tag_boundaries
+                .push((tag_start_idx, alignment.tags.len()));
 
             // Internal fields
             result.query_starts.push(alignment.query_start);
@@ -85,7 +90,9 @@ fn convert_alignments_to_soa(all_alignments: Vec<Vec<Alignment>>) -> SoAAlignmen
         }
 
         // Record per-read boundary
-        result.read_alignment_boundaries.push((alignment_start_idx, num_alignments));
+        result
+            .read_alignment_boundaries
+            .push((alignment_start_idx, num_alignments));
     }
 
     result
@@ -140,11 +147,13 @@ pub fn finalize_alignments_soa(
                 [encoded_query_start..encoded_query_start + encoded_query_len];
 
             // Extract per-read seeds from SoA
-            let (seed_start_idx, num_seeds) = soa_context.soa_seed_batch.read_seed_boundaries[read_idx];
+            let (seed_start_idx, num_seeds) =
+                soa_context.soa_seed_batch.read_seed_boundaries[read_idx];
             let mut seeds = Vec::with_capacity(num_seeds);
 
             // Build mapping from global seed index to local seed index
-            let mut global_to_local_seed: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+            let mut global_to_local_seed: std::collections::HashMap<usize, usize> =
+                std::collections::HashMap::new();
 
             for local_seed_idx in 0..num_seeds {
                 let global_seed_idx = seed_start_idx + local_seed_idx;
@@ -229,7 +238,8 @@ pub fn finalize_alignments_soa(
             };
 
             for chain_mapping in &original_mapping.chain_mappings {
-                let mut remapped_seed_mappings = Vec::with_capacity(chain_mapping.seed_mappings.len());
+                let mut remapped_seed_mappings =
+                    Vec::with_capacity(chain_mapping.seed_mappings.len());
 
                 for seed_mapping in &chain_mapping.seed_mappings {
                     let local_seed_idx = global_to_local_seed
@@ -244,9 +254,11 @@ pub fn finalize_alignments_soa(
                     });
                 }
 
-                remapped_mapping.chain_mappings.push(super::super::region::ChainExtensionMapping {
-                    seed_mappings: remapped_seed_mappings,
-                });
+                remapped_mapping
+                    .chain_mappings
+                    .push(super::super::region::ChainExtensionMapping {
+                        seed_mappings: remapped_seed_mappings,
+                    });
             }
 
             // Merge extension scores into alignment regions
@@ -265,7 +277,9 @@ pub fn finalize_alignments_soa(
             if regions.is_empty() {
                 return (
                     read_idx,
-                    vec![super::orchestration::create_unmapped_alignment_internal(query_name)],
+                    vec![super::orchestration::create_unmapped_alignment_internal(
+                        query_name,
+                    )],
                 );
             }
 
@@ -276,7 +290,9 @@ pub fn finalize_alignments_soa(
             if filtered_regions.is_empty() {
                 return (
                     read_idx,
-                    vec![super::orchestration::create_unmapped_alignment_internal(query_name)],
+                    vec![super::orchestration::create_unmapped_alignment_internal(
+                        query_name,
+                    )],
                 );
             }
 
@@ -332,7 +348,9 @@ pub fn finalize_alignments_soa(
             if alignments.is_empty() {
                 return (
                     read_idx,
-                    vec![super::orchestration::create_unmapped_alignment_internal(query_name)],
+                    vec![super::orchestration::create_unmapped_alignment_internal(
+                        query_name,
+                    )],
                 );
             }
 
@@ -347,7 +365,11 @@ pub fn finalize_alignments_soa(
     let mut all_alignments: Vec<Vec<Alignment>> = soa_context
         .query_names
         .iter()
-        .map(|name| vec![super::orchestration::create_unmapped_alignment_internal(name)])
+        .map(|name| {
+            vec![super::orchestration::create_unmapped_alignment_internal(
+                name,
+            )]
+        })
         .collect();
 
     for (read_idx, alignments) in valid_alignments {

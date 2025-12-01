@@ -146,7 +146,9 @@ impl SoaFastqReader {
                     if qual.len() < seq.len() {
                         // Pad with 'I' (quality 40, common default)
                         batch.quals.extend_from_slice(qual);
-                        batch.quals.resize(batch.quals.len() + (seq.len() - qual.len()), b'I');
+                        batch
+                            .quals
+                            .resize(batch.quals.len() + (seq.len() - qual.len()), b'I');
                     } else {
                         // Truncate qual to seq length
                         batch.quals.extend_from_slice(&qual[..seq.len()]);
@@ -188,7 +190,7 @@ mod tests {
         // 3. Assert that the SoAReadBatch contains the correct data
         assert_eq!(batch.len(), 2);
         assert_eq!(batch.names, vec!["read1", "read2"]);
-        
+
         assert_eq!(batch.seqs, b"ACGTTGCA");
         assert_eq!(batch.quals, b"IIIIJJJJ");
 
@@ -196,12 +198,12 @@ mod tests {
 
         // Test reconstruction of first read
         let (start1, len1) = batch.read_boundaries[0];
-        assert_eq!(&batch.seqs[start1..start1+len1], b"ACGT");
-        assert_eq!(&batch.quals[start1..start1+len1], b"IIII");
+        assert_eq!(&batch.seqs[start1..start1 + len1], b"ACGT");
+        assert_eq!(&batch.quals[start1..start1 + len1], b"IIII");
 
         // Test reconstruction of second read
         let (start2, len2) = batch.read_boundaries[1];
-        assert_eq!(&batch.seqs[start2..start2+len2], b"TGCA");
-        assert_eq!(&batch.quals[start2..start2+len2], b"JJJJ");
+        assert_eq!(&batch.seqs[start2..start2 + len2], b"TGCA");
+        assert_eq!(&batch.quals[start2..start2 + len2], b"JJJJ");
     }
 }

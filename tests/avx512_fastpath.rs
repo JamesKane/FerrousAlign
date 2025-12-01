@@ -3,9 +3,9 @@
 
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
 
-use ferrous_align::core::alignment::banded_swa::kernel::{sw_kernel, KernelParams, SwEngine512};
-use ferrous_align::core::alignment::banded_swa::shared::{pad_batch, soa_transform, SoAInputs};
 use ferrous_align::core::alignment::banded_swa::isa_avx512_int8::simd_banded_swa_batch64_soa;
+use ferrous_align::core::alignment::banded_swa::kernel::{KernelParams, SwEngine512, sw_kernel};
+use ferrous_align::core::alignment::banded_swa::shared::{SoAInputs, pad_batch, soa_transform};
 
 #[test]
 fn avx512_fastpath_parity_small() {
@@ -26,7 +26,9 @@ fn avx512_fastpath_parity_small() {
 
     // Scoring: match=1, mismatch=0
     let mut mat = [0i8; 25];
-    for i in 0..4 { mat[i * 5 + i] = 1; }
+    for i in 0..4 {
+        mat[i * 5 + i] = 1;
+    }
 
     // Prepare SoA inputs
     let (qlen, tlen, h0, w_arr, max_q, max_t, padded) = pad_batch::<W>(&batch);
@@ -44,9 +46,7 @@ fn avx512_fastpath_parity_small() {
     };
 
     // AVX-512 fast path via SoA entry
-    let fast = unsafe {
-        simd_banded_swa_batch64_soa(&inputs, W, 6, 1, 6, 1, 100, &mat, 5)
-    };
+    let fast = unsafe { simd_banded_swa_batch64_soa(&inputs, W, 6, 1, 6, 1, 100, &mat, 5) };
 
     // Generic shared kernel (engine 512) on same inputs
     let params = KernelParams {

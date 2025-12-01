@@ -4,11 +4,11 @@ use super::index::fm_index::backward_ext;
 use super::index::fm_index::forward_ext;
 use super::index::fm_index::get_occ;
 use super::index::index::BwaIndex;
-use crate::core::compute::simd_abstraction::portable_intrinsics;
-pub use crate::core::io::soa_readers::SoAReadBatch;
 use super::mem_opt::MemOpt;
 use crate::alignment::utils::{base_to_code, reverse_complement_code};
 use crate::alignment::workspace::with_workspace;
+use crate::core::compute::simd_abstraction::portable_intrinsics;
+pub use crate::core::io::soa_readers::SoAReadBatch;
 
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]
@@ -91,7 +91,6 @@ impl SoASeedBatch {
         // For now, it's a direct push, boundary management will be done at batching
     }
 }
-
 
 // Define a struct to represent a batch of encoded queries in SoA format
 #[derive(Debug, Clone, Default)]
@@ -992,8 +991,10 @@ pub fn find_seeds_batch(
     let total_query_len: usize = read_batch.read_boundaries.iter().map(|(_, len)| *len).sum();
 
     let mut soa_seed_batch = SoASeedBatch::with_capacity(num_reads * 50, num_reads); // Heuristic capacity
-    let mut soa_encoded_query_batch = SoAEncodedQueryBatch::with_capacity(total_query_len, num_reads);
-    let mut soa_encoded_query_rc_batch = SoAEncodedQueryBatch::with_capacity(total_query_len, num_reads);
+    let mut soa_encoded_query_batch =
+        SoAEncodedQueryBatch::with_capacity(total_query_len, num_reads);
+    let mut soa_encoded_query_rc_batch =
+        SoAEncodedQueryBatch::with_capacity(total_query_len, num_reads);
 
     for read_idx in 0..num_reads {
         let (seq_start, query_len) = read_batch.read_boundaries[read_idx];
@@ -1012,16 +1013,25 @@ pub fn find_seeds_batch(
 
         // Store encoded queries in SoA batches
         let current_encoded_query_start = soa_encoded_query_batch.encoded_seqs.len();
-        soa_encoded_query_batch.encoded_seqs.extend_from_slice(&encoded_query);
-        soa_encoded_query_batch.query_boundaries.push((current_encoded_query_start, query_len));
+        soa_encoded_query_batch
+            .encoded_seqs
+            .extend_from_slice(&encoded_query);
+        soa_encoded_query_batch
+            .query_boundaries
+            .push((current_encoded_query_start, query_len));
 
         let current_encoded_query_rc_start = soa_encoded_query_rc_batch.encoded_seqs.len();
-        soa_encoded_query_rc_batch.encoded_seqs.extend_from_slice(&encoded_query_rc);
-        soa_encoded_query_rc_batch.query_boundaries.push((current_encoded_query_rc_start, query_len));
-
+        soa_encoded_query_rc_batch
+            .encoded_seqs
+            .extend_from_slice(&encoded_query_rc);
+        soa_encoded_query_rc_batch
+            .query_boundaries
+            .push((current_encoded_query_rc_start, query_len));
 
         if query_len == 0 {
-            soa_seed_batch.read_seed_boundaries.push((soa_seed_batch.query_pos.len(), 0));
+            soa_seed_batch
+                .read_seed_boundaries
+                .push((soa_seed_batch.query_pos.len(), 0));
             continue;
         }
 
@@ -1274,10 +1284,14 @@ pub fn find_seeds_batch(
                     }
                 }
             } else {
-                log::debug!("SMEM_VALIDATION {query_name}: Pass 3 (forward-only) added 0 new SMEMs");
+                log::debug!(
+                    "SMEM_VALIDATION {query_name}: Pass 3 (forward-only) added 0 new SMEMs"
+                );
             }
         } else {
-            log::debug!("SMEM_VALIDATION {query_name}: Pass 3 (forward-only) skipped (max_mem_intv=0)");
+            log::debug!(
+                "SMEM_VALIDATION {query_name}: Pass 3 (forward-only) skipped (max_mem_intv=0)"
+            );
         }
 
         // Filter SMEMs
@@ -1550,10 +1564,16 @@ pub fn find_seeds_batch(
             soa_seed_batch.rid.push(seed.rid);
         }
         let num_seeds_for_read = soa_seed_batch.query_pos.len() - current_read_seed_start_idx;
-        soa_seed_batch.read_seed_boundaries.push((current_read_seed_start_idx, num_seeds_for_read));
+        soa_seed_batch
+            .read_seed_boundaries
+            .push((current_read_seed_start_idx, num_seeds_for_read));
     }
 
-    (soa_seed_batch, soa_encoded_query_batch, soa_encoded_query_rc_batch)
+    (
+        soa_seed_batch,
+        soa_encoded_query_batch,
+        soa_encoded_query_rc_batch,
+    )
 }
 
 #[cfg(test)]

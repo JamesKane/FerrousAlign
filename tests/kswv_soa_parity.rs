@@ -8,9 +8,9 @@ use ferrous_align::core::alignment::workspace::with_workspace;
 #[test]
 fn kswv_sse_neon_soa_vs_direct_parity() {
     use ferrous_align::core::alignment::kswv_sse_neon::batch_ksw_align_sse_neon as direct;
-    
-    use ferrous_align::core::alignment::shared_types::KswSoA;
+
     use ferrous_align::core::alignment::kswv_sse_neon::kswv_batch16_soa as soa_entry;
+    use ferrous_align::core::alignment::shared_types::KswSoA;
 
     // Build two simple identical sequences across lanes
     let q = vec![0u8; 16 * 16]; // 16 positions * 16 lanes
@@ -18,7 +18,12 @@ fn kswv_sse_neon_soa_vs_direct_parity() {
 
     // Setup pairs
     let pairs: Vec<SeqPair> = (0..16)
-        .map(|id| SeqPair { ref_len: 16, query_len: 16, id, ..Default::default() })
+        .map(|id| SeqPair {
+            ref_len: 16,
+            query_len: 16,
+            id,
+            ..Default::default()
+        })
         .collect();
     let mut results_direct = vec![KswResult::default(); 16];
 
@@ -34,12 +39,14 @@ fn kswv_sse_neon_soa_vs_direct_parity() {
                 16, // ncol
                 &pairs,
                 results_direct.as_mut_slice(),
-                1,    // match
-                0,    // mismatch penalty
-                6, 1, // o_del, e_del
-                6, 1, // o_ins, e_ins
-                -1,   // ambig penalty
-                0,    // phase
+                1, // match
+                0, // mismatch penalty
+                6,
+                1, // o_del, e_del
+                6,
+                1,  // o_ins, e_ins
+                -1, // ambig penalty
+                0,  // phase
                 false,
                 Some((h0, h1, f, row_max)),
             )
@@ -88,7 +95,12 @@ fn kswv_avx2_soa_vs_direct_parity() {
     let t = vec![0u8; 32 * 16];
 
     let pairs: Vec<SeqPair> = (0..32)
-        .map(|id| SeqPair { ref_len: 16, query_len: 16, id, ..Default::default() })
+        .map(|id| SeqPair {
+            ref_len: 16,
+            query_len: 16,
+            id,
+            ..Default::default()
+        })
         .collect();
     let mut results_direct = vec![KswResult::default(); 32];
 
@@ -96,8 +108,22 @@ fn kswv_avx2_soa_vs_direct_parity() {
         let (h0, h1, f, row_max) = ws.ksw_buffers_for_width(32);
         unsafe {
             direct(
-                t.as_ptr(), q.as_ptr(), 16, 16, &pairs, results_direct.as_mut_slice(),
-                1, 0, 6, 1, 6, 1, -1, 0, false, Some((h0, h1, f, row_max)),
+                t.as_ptr(),
+                q.as_ptr(),
+                16,
+                16,
+                &pairs,
+                results_direct.as_mut_slice(),
+                1,
+                0,
+                6,
+                1,
+                6,
+                1,
+                -1,
+                0,
+                false,
+                Some((h0, h1, f, row_max)),
             )
         }
     });

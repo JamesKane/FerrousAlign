@@ -22,7 +22,7 @@ use super::super::finalization::sam_flags;
 use super::super::index::index::BwaIndex;
 use super::insert_size::InsertSizeStats;
 use crate::core::alignment::edit_distance;
-use crate::core::alignment::ksw_affine_gap::{ksw_align2, KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr};
+use crate::core::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
 
 use crate::compute::simd_abstraction::SimdEngine128;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
@@ -742,7 +742,7 @@ fn execute_mate_rescue_batch_simd(
 
             let batch_results = with_workspace(|ws| {
                 let ksw_soa = ws.ensure_and_transpose_ksw(&align_jobs, batch_size);
-                
+
                 dispatch_kswv_soa(
                     &ksw_soa,
                     chunk_len,
@@ -1483,14 +1483,14 @@ pub fn execute_compact_batch(
                 dispatch_kswv_soa(
                     &ksw_soa,
                     chunk_size,
-                    5, 
+                    5,
                     o_del,
                     e_del as i32,
                     o_ins as i32,
                     e_ins as i32,
-                    0,     
-                    -1,    
-                    false, 
+                    0,
+                    -1,
+                    false,
                     engine,
                 )
             });
@@ -1833,7 +1833,8 @@ mod tests {
         let anchor_rb = 1800i64; // In reverse region
         let mate_rb = 200i64; // Forward strand, p2 = 1799 < 1800
 
-                    let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);        assert_eq!(dir, 2); // RF orientation (different strands, mate projected behind anchor)
+        let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+        assert_eq!(dir, 2); // RF orientation (different strands, mate projected behind anchor)
     }
 
     #[test]

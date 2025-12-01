@@ -35,11 +35,7 @@ where
     // SIMD register width (stride) vs. number of active jobs in this batch
     let stride = W;
     // Active lanes are bounded by actual batch size and available per-lane scalars
-    let lanes = params
-        .batch
-        .len()
-        .min(params.qlen.len())
-        .min(W);
+    let lanes = params.batch.len().min(params.qlen.len()).min(W);
     let qmax = params.max_qlen.max(0) as usize;
     let tmax = params.max_tlen.max(0) as usize;
 
@@ -71,7 +67,15 @@ where
             cfg.scoring.m,
         )
     } else {
-        (params.o_del, params.e_del, params.o_ins, params.e_ins, params.zdrop, params.mat, params.m)
+        (
+            params.o_del,
+            params.e_del,
+            params.o_ins,
+            params.e_ins,
+            params.zdrop,
+            params.mat,
+            params.m,
+        )
     };
 
     // Score constants (match/mismatch)
@@ -270,8 +274,8 @@ where
     out_scores
 }
 
-use crate::core::alignment::banded_swa::OutScore;
 pub use super::engines::{SwEngine128, SwEngine256};
+use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::shared_types::WorkspaceArena;
 use crate::core::alignment::workspace::with_workspace;
 
