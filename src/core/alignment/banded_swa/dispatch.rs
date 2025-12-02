@@ -1,7 +1,7 @@
 use super::shared::SoAInputs;
 use crate::alignment::banded_swa::BandedPairWiseSW;
 use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
-use crate::core::alignment::banded_swa::types::{AlignmentResult, ExtensionDirection, OutScore};
+use crate::core::alignment::banded_swa::types::OutScore;
 
 use crate::pipelines::linear::batch_extension::ExtensionJobBatch;
 
@@ -158,85 +158,4 @@ pub fn scalar_dispatch_from_soa(
         results.push(score);
     }
     results
-}
-
-/// Runtime dispatch to optimal SIMD implementation based on CPU features
-///
-/// **Current Status**:
-/// - ✅ SSE/NEON (128-bit, 16-way): Fully implemented
-/// - ⏳ AVX2 (256-bit, 32-way): Infrastructure ready, kernel TODO
-/// - ⏳ AVX-512 (512-bit, 64-way): Infrastructure ready, kernel TODO
-///
-/// **Performance Expectations**:
-/// - AVX2: ~1.8-2.2x speedup over SSE (memory-bound workload)
-/// - AVX-512: ~2.5-3.0x speedup over SSE (on compatible CPUs)
-#[deprecated(
-    since = "0.7.0",
-    note = "Legacy AoS dispatch; will be removed. Benches should be updated to use SoA entry points."
-)]
-pub fn simd_banded_swa_dispatch(
-    _sw_params: &BandedPairWiseSW,
-    _batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
-) -> Vec<OutScore> {
-    panic!(
-        "Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points."
-    );
-}
-
-/// Runtime dispatch for 16-bit SIMD batch scoring (score-only, no CIGAR)
-///
-/// Uses i16 arithmetic to handle sequences where max score > 127.
-/// For typical 150bp reads with match=1, max score = 150 which overflows i8.
-///
-/// **Important**: This processes 8 alignments in parallel (vs 16 for 8-bit).
-/// Use this function when:
-/// - seq_len * match_score >= 127
-/// - For 150bp reads with match=1, always use this version
-#[deprecated(
-    since = "0.7.0",
-    note = "Legacy AoS dispatch; will be removed. Benches should be updated to use SoA entry points."
-)]
-pub fn simd_banded_swa_dispatch_int16(
-    _sw_params: &BandedPairWiseSW,
-    _batch: &[(i32, &[u8], i32, &[u8], i32, i32)],
-) -> Vec<OutScore> {
-    panic!(
-        "Legacy AoS dispatch is deprecated and will be removed. Benches should be updated to use SoA entry points."
-    );
-}
-
-/// Runtime dispatch version of batch alignment with CIGAR generation
-///
-/// **Current Implementation**: Uses scalar Smith-Waterman for both scoring and CIGAR.
-/// This matches the proven C++ bwa-mem2 approach where CIGAR generation is done
-/// via scalar traceback (not SIMD).
-///
-/// **Future Optimization (TODO)**:
-/// To achieve BWA-MEM2 performance, we need to implement deferred CIGAR generation:
-/// 1. Extension phase: SIMD batch scoring only (scores for ALL chains)
-/// 2. Finalization phase: Filter chains by score
-/// 3. SAM output phase: Generate CIGARs only for surviving alignments
-///
-/// This would eliminate ~80-90% of CIGAR generation work (which is 46% of CPU time).
-/// The 16-bit SIMD batch scoring function (simd_banded_swa_batch8_int16) is ready
-/// for this optimization but requires architectural changes to defer CIGAR generation.
-#[deprecated(
-    since = "0.7.0",
-    note = "Legacy scalar dispatch; will be removed. Use the SoA pipeline with deferred CIGAR generation."
-)]
-pub fn simd_banded_swa_dispatch_with_cigar(
-    _sw_params: &BandedPairWiseSW,
-    _batch: &[(
-        i32,
-        Vec<u8>,
-        i32,
-        Vec<u8>,
-        i32,
-        i32,
-        Option<ExtensionDirection>,
-    )],
-) -> Vec<AlignmentResult> {
-    panic!(
-        "Legacy scalar dispatch is deprecated and will be removed. Use the SoA pipeline with deferred CIGAR generation."
-    );
 }
