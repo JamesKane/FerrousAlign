@@ -529,7 +529,7 @@ pub unsafe fn batch_ksw_align_avx2(
     }
 
     if live == 0 {
-        return 1;
+        return pairs.len().min(SIMD_WIDTH8);
     }
 
     // ========================================================================
@@ -648,7 +648,7 @@ pub unsafe fn batch_ksw_align_avx2(
         }
     }
 
-    1
+    pairs.len().min(SIMD_WIDTH8)
 }
 
 #[cfg(test)]

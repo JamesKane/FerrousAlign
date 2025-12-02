@@ -18,6 +18,7 @@ macro_rules! generate_ksw_entry_soa {
         #[cfg_attr(any(), target_feature(enable = $tf))]
         pub unsafe fn $name(
             inputs: &$crate::core::alignment::shared_types::KswSoA,
+            ws: &mut $crate::core::alignment::workspace::AlignmentWorkspace,
             num_jobs: usize,
             match_score: i8,
             mismatch_penalty: i8,
@@ -29,7 +30,6 @@ macro_rules! generate_ksw_entry_soa {
             debug: bool,
         ) -> Vec<$crate::core::alignment::kswv_batch::KswResult> {
             use crate::core::alignment::kswv_batch::{KswResult, SeqPair};
-            use crate::core::alignment::workspace::with_workspace;
 
             const W: usize = $W;
             let lanes = num_jobs.min(W);
@@ -46,39 +46,44 @@ macro_rules! generate_ksw_entry_soa {
                 pairs[lane].h0 = inputs.h0[lane] as i32;
             }
 
-            let used = with_workspace(|ws| {
-                // Provide ISA‑appropriate workspace buffers for the batch kernel
-                let wb = Some(ws.ksw_buffers_for_width(W));
+            // Provide ISA‑appropriate workspace buffers for the batch kernel
+            // SAFETY: We use unsafe pointer casting here because `inputs` already borrows
+            // from `ws`, but the KSW buffers are disjoint from the SoA buffers. The Rust
+            // borrow checker can't prove this disjoint access, so we use raw pointers.
+            let wb = unsafe {
+                let ws_ptr = ws as *mut $crate::core::alignment::workspace::AlignmentWorkspace;
+                Some((*ws_ptr).ksw_buffers_for_width(W))
+            };
 
-                // nrow = max_tlen, ncol = max_qlen
-                let nrow = inputs.max_tlen as i16;
-                let ncol = inputs.max_qlen as i16;
+            // nrow = max_tlen, ncol = max_qlen
+            let nrow = inputs.max_tlen as i16;
+            let ncol = inputs.max_qlen as i16;
 
-                // SAFETY: Call into the per‑ISA batch kernel provided by the module
-                unsafe {
-                    $callee(
-                        inputs.ref_soa.as_ptr(),
-                        inputs.query_soa.as_ptr(),
-                        nrow,
-                        ncol,
-                        &pairs,
-                        results.as_mut_slice(),
-                        match_score,
-                        mismatch_penalty,
-                        o_del,
-                        e_del,
-                        o_ins,
-                        e_ins,
-                        ambig_penalty,
-                        0, // phase (unused)
-                        debug,
-                        wb,
-                    )
-                }
-            });
+            // SAFETY: Call into the per‑ISA batch kernel provided by the module
+            let used = unsafe {
+                $callee(
+                    inputs.ref_soa.as_ptr(),
+                    inputs.query_soa.as_ptr(),
+                    nrow,
+                    ncol,
+                    &pairs,
+                    results.as_mut_slice(),
+                    match_score,
+                    mismatch_penalty,
+                    o_del,
+                    e_del,
+                    o_ins,
+                    e_ins,
+                    ambig_penalty,
+                    0, // phase (unused)
+                    debug,
+                    wb,
+                )
+            };
 
-            let out_len = core::cmp::min(used, lanes);
-            results[..out_len].to_vec()
+            // Return exactly num_jobs results (what the caller expects)
+            // The kernel fills results[0..lanes], we return num_jobs of them
+            results[..num_jobs].to_vec()
         }
     };
 }

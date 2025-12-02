@@ -48,6 +48,38 @@ impl SoAReadBatch {
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }
+
+    /// Convert to tuple refs for compatibility with mate rescue
+    /// Returns Vec<(&str, &[u8], &str)> - (name, seq, qual)
+    pub fn as_tuple_refs(&self) -> Vec<(&str, &[u8], &str)> {
+        self.names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let (seq_start, seq_len) = self.read_boundaries[i];
+                let seq = &self.seqs[seq_start..seq_start + seq_len];
+                let qual = &self.quals[seq_start..seq_start + seq_len];
+                let qual_str = std::str::from_utf8(qual).unwrap_or("");
+                (name.as_str(), seq, qual_str)
+            })
+            .collect()
+    }
+
+    /// Convert to owned tuples for SAM output
+    /// Returns Vec<(String, Vec<u8>, String)> - (name, seq, qual)
+    pub fn into_owned_tuples(self) -> Vec<(String, Vec<u8>, String)> {
+        self.names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let (seq_start, seq_len) = self.read_boundaries[i];
+                let seq = self.seqs[seq_start..seq_start + seq_len].to_vec();
+                let qual = self.quals[seq_start..seq_start + seq_len].to_vec();
+                let qual_str = String::from_utf8_lossy(&qual).to_string();
+                (name, seq, qual_str)
+            })
+            .collect()
+    }
 }
 
 /// FASTQ reader with automatic gzip/bgzip detection that reads into SoA buffers.

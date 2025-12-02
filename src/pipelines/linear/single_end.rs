@@ -10,24 +10,15 @@
 // - Selection: sam_output::select_single_end_alignments() filters output
 // - Output: sam_output::write_sam_record() writes to stream
 
-use super::batch_extension::{
-    process_batch_cross_read, process_batch_parallel_subbatch, process_sub_batch_internal_soa,
-};
-use super::finalization::Alignment;
+use super::batch_extension::process_sub_batch_internal_soa;
 use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
-use super::pipeline::align_read_deferred;
 use crate::compute::ComputeBackend;
 use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::io::fastq_reader::FastqReader;
-use crate::io::sam_output::{
-    create_unmapped_single_end, prepare_single_end_alignment, select_single_end_alignments,
-    write_sam_record, write_sam_records_soa,
-};
+use crate::io::sam_output::write_sam_records_soa;
 use crate::io::soa_readers::SoaFastqReader;
 use crate::utils::cputime;
-use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -104,44 +95,22 @@ pub fn process_single_end(
         CHUNK_SIZE_BASES / 1_000_000
     );
 
-    // Check for SoA pipeline mode (PR3 end-to-end SoA)
-    let use_soa_pipeline = std::env::var("FERROUS_SOA_PIPELINE").is_ok_and(|v| v == "1");
-
-    if use_soa_pipeline {
-        log::info!("Using end-to-end SoA pipeline (PR3)");
-    }
+    // Pure SoA pipeline - no AoS paths
+    log::info!("Using end-to-end SoA pipeline");
 
     for query_file_name in query_files {
-        // Branch on reader type based on pipeline mode
-        if use_soa_pipeline {
-            // SoA pipeline: Use SoaFastqReader
-            process_single_end_soa(
-                &bwa_idx,
-                &pac_data,
-                &opt,
-                query_file_name,
-                writer,
-                compute_ctx,
-                &mut reads_processed,
-                &mut total_reads,
-                &mut total_bases,
-                reads_per_batch,
-            );
-        } else {
-            // AoS pipeline: Use FastqReader (existing code)
-            process_single_end_aos(
-                &bwa_idx,
-                &pac_data,
-                &opt,
-                query_file_name,
-                writer,
-                compute_ctx,
-                &mut reads_processed,
-                &mut total_reads,
-                &mut total_bases,
-                reads_per_batch,
-            );
-        }
+        process_single_end_soa(
+            &bwa_idx,
+            &pac_data,
+            &opt,
+            query_file_name,
+            writer,
+            compute_ctx,
+            &mut reads_processed,
+            &mut total_reads,
+            &mut total_bases,
+            reads_per_batch,
+        );
     }
 
     // Print summary statistics with total CPU + wall time
@@ -154,198 +123,6 @@ pub fn process_single_end(
         total_cpu,
         elapsed.as_secs_f64()
     );
-}
-
-/// Process single-end reads using AoS pipeline (existing implementation)
-fn process_single_end_aos(
-    bwa_idx: &Arc<&BwaIndex>,
-    pac_data: &Arc<Vec<u8>>,
-    opt: &Arc<&MemOpt>,
-    query_file_name: &str,
-    writer: &mut Box<dyn Write>,
-    compute_ctx: &ComputeContext,
-    reads_processed: &mut u64,
-    total_reads: &mut usize,
-    total_bases: &mut usize,
-    reads_per_batch: usize,
-) {
-    let mut reader = match FastqReader::new(query_file_name) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Error opening query file {query_file_name}: {e}");
-            return;
-        }
-    };
-
-    loop {
-        // Stage 0: Read batch of reads (matching C++ kt_pipeline step 0)
-        let batch = match reader.read_batch(reads_per_batch) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("Error reading batch from {query_file_name}: {e}");
-                break;
-            }
-        };
-
-        if batch.names.is_empty() {
-            break; // EOF
-        }
-
-        let batch_size = batch.names.len();
-
-        // Calculate batch base pairs
-        let batch_bp: usize = batch.seqs.iter().map(|s| s.len()).sum();
-        *total_reads += batch_size;
-        *total_bases += batch_bp;
-
-        log::info!(
-            "read_chunk: {reads_per_batch}, work_chunk_size: {batch_bp}, nseq: {batch_size}"
-        );
-
-        // Track per-batch timing
-        let batch_start_cpu = cputime();
-        let batch_start_wall = std::time::Instant::now();
-
-        // Stage 1: Process batch (matching C++ kt_pipeline step 1)
-        let bwa_idx_clone = Arc::clone(bwa_idx);
-        let pac_data_clone = Arc::clone(pac_data);
-        let opt_clone = Arc::clone(opt);
-        let batch_start_id = *reads_processed; // Capture for closure
-        let compute_backend = compute_ctx.backend;
-
-        // Check batching mode via environment variables:
-        // - FERROUS_CROSS_READ_BATCH=1: Global cross-read batching (experimental, slow)
-        // - FERROUS_PARALLEL_SUBBATCH=1: Parallel sub-batch processing (optimized)
-        // - Default: Per-read processing with rayon
-        let use_cross_read_batching =
-            std::env::var("FERROUS_CROSS_READ_BATCH").is_ok_and(|v| v == "1");
-        let use_parallel_subbatch =
-            std::env::var("FERROUS_PARALLEL_SUBBATCH").is_ok_and(|v| v == "1");
-
-        let alignments: Vec<Vec<Alignment>> = if use_parallel_subbatch {
-            // OPTIMIZED: Parallel sub-batch processing (BWA-MEM2 style)
-            // Processes ~512-read sub-batches in parallel, with cross-read batching
-            // within each sub-batch for better SIMD utilization
-            let engine = match &compute_backend {
-                ComputeBackend::CpuSimd(e) => *e,
-                _ => SimdEngineType::Engine128,
-            };
-
-            process_batch_parallel_subbatch(
-                *bwa_idx_clone, // Deref Arc<&BwaIndex> -> &BwaIndex
-                &pac_data_clone,
-                *opt_clone, // Deref Arc<&MemOpt> -> &MemOpt
-                &batch.names,
-                &batch.seqs,
-                &batch.quals,
-                batch_start_id,
-                engine,
-            )
-        } else if use_cross_read_batching {
-            // EXPERIMENTAL: Global cross-read batching (slow due to sequential phases)
-            let engine = match &compute_backend {
-                ComputeBackend::CpuSimd(e) => *e,
-                _ => SimdEngineType::Engine128,
-            };
-
-            process_batch_cross_read(
-                *bwa_idx_clone, // Deref Arc<&BwaIndex> -> &BwaIndex
-                &pac_data_clone,
-                *opt_clone, // Deref Arc<&MemOpt> -> &MemOpt
-                &batch.names,
-                &batch.seqs,
-                &batch.quals,
-                batch_start_id,
-                engine,
-            )
-        } else {
-            // ORIGINAL: Per-read processing (reference implementation)
-            batch
-                .names
-                .par_iter()
-                .zip(batch.seqs.par_iter())
-                .zip(batch.quals.par_iter())
-                .enumerate()
-                .map(|(i, ((name, seq), qual))| {
-                    // Global read ID for deterministic hash tie-breaking (matches C++ bwamem.cpp:1325)
-                    let read_id = batch_start_id + i as u64;
-
-                    align_read_deferred(
-                        &bwa_idx_clone,
-                        &pac_data_clone,
-                        name,
-                        seq,
-                        qual,
-                        &opt_clone,
-                        compute_backend,
-                        read_id,
-                        false, // don't skip secondary marking
-                    )
-                })
-                .collect()
-        };
-
-        // Update global read counter for next batch
-        *reads_processed += batch_size as u64;
-
-        // Stage 2: Write output sequentially (matching C++ kt_pipeline step 2)
-        // Uses sam_output module for clean separation of concerns
-        let rg_id = opt
-            .read_group
-            .as_ref()
-            .and_then(|rg| super::mem_opt::MemOpt::extract_rg_id(rg));
-
-        for (read_idx, mut alignment_vec) in alignments.into_iter().enumerate() {
-            // Get original seq/qual from batch
-            let orig_seq = std::str::from_utf8(&batch.seqs[read_idx]).unwrap_or("");
-            let orig_qual = &batch.quals[read_idx];
-
-            // Select which alignments to output
-            let selection = select_single_end_alignments(&alignment_vec, opt);
-
-            if selection.output_as_unmapped {
-                // Output unmapped record
-                let query_name = alignment_vec
-                    .first()
-                    .map(|a| a.query_name.as_str())
-                    .unwrap_or("unknown");
-                let mut unmapped = create_unmapped_single_end(query_name, orig_seq.len());
-
-                if let Some(ref rg) = rg_id {
-                    unmapped.tags.push(("RG".to_string(), format!("Z:{rg}")));
-                }
-
-                if let Err(e) = write_sam_record(writer, &unmapped, orig_seq, orig_qual) {
-                    log::error!("Error writing SAM record: {e}");
-                }
-                continue;
-            }
-
-            // Output selected alignments
-            for idx in selection.output_indices {
-                let is_primary = idx == selection.primary_idx;
-                prepare_single_end_alignment(&mut alignment_vec[idx], is_primary, rg_id.as_deref());
-
-                if let Err(e) = write_sam_record(writer, &alignment_vec[idx], orig_seq, orig_qual) {
-                    log::error!("Error writing SAM record: {e}");
-                }
-            }
-        }
-
-        // Log per-batch timing (matches BWA-MEM2 format)
-        let batch_cpu_elapsed = cputime() - batch_start_cpu;
-        let batch_wall_elapsed = batch_start_wall.elapsed();
-        log::info!(
-            "Processed {} reads in {:.3} CPU sec, {:.3} real sec",
-            batch_size,
-            batch_cpu_elapsed,
-            batch_wall_elapsed.as_secs_f64()
-        );
-
-        if batch_size < reads_per_batch {
-            break; // Last incomplete batch
-        }
-    }
 }
 
 /// Process single-end reads using SoA pipeline (PR3 end-to-end)
