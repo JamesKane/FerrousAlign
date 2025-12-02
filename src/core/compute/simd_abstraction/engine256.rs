@@ -5,9 +5,9 @@
 //! operations, mapping directly to `_mm256_*` intrinsics where possible.
 //!
 //! Highlights
-//! - Variable byte shifts and `alignr` are implemented via small match‑table
-//!   macros to satisfy the x86 immediate‑only requirement while accepting a
-//!   runtime `num_bytes` parameter.
+//! - Variable byte shifts and `alignr` are implemented via generic match‑table
+//!   macros from portable_intrinsics to satisfy the x86 immediate‑only requirement
+//!   while accepting a runtime `num_bytes` parameter.
 //! - `movemask_epi16` is derived from two 128‑bit `movemask_epi8` calls on the
 //!   low/high halves and folded into a 16‑bit mask.
 //! - All functions are `unsafe` and additionally annotated with
@@ -24,59 +24,11 @@ use super::SimdEngine;
 #[cfg(target_arch = "x86_64")]
 use super::types::simd_arch;
 
-// ===== Internal helper macros (AVX2) =====
-// These macros de-duplicate the repeated 0..=15 match tables needed for
-// byte-wise variable shifts and alignr operations, which require immediate
-// operands at the intrinsic level.
-#[cfg(target_arch = "x86_64")]
-macro_rules! mm256_match_shift_bytes {
-    ($a:expr, $n:expr, $op:ident) => {{
-        match $n {
-            0 => $a,
-            1 => simd_arch::$op($a, 1),
-            2 => simd_arch::$op($a, 2),
-            3 => simd_arch::$op($a, 3),
-            4 => simd_arch::$op($a, 4),
-            5 => simd_arch::$op($a, 5),
-            6 => simd_arch::$op($a, 6),
-            7 => simd_arch::$op($a, 7),
-            8 => simd_arch::$op($a, 8),
-            9 => simd_arch::$op($a, 9),
-            10 => simd_arch::$op($a, 10),
-            11 => simd_arch::$op($a, 11),
-            12 => simd_arch::$op($a, 12),
-            13 => simd_arch::$op($a, 13),
-            14 => simd_arch::$op($a, 14),
-            15 => simd_arch::$op($a, 15),
-            _ => simd_arch::_mm256_setzero_si256(),
-        }
-    }};
-}
-
-#[cfg(target_arch = "x86_64")]
-macro_rules! mm256_alignr_bytes_match {
-    ($a:expr, $b:expr, $n:expr) => {{
-        match $n {
-            0 => simd_arch::_mm256_alignr_epi8($a, $b, 0),
-            1 => simd_arch::_mm256_alignr_epi8($a, $b, 1),
-            2 => simd_arch::_mm256_alignr_epi8($a, $b, 2),
-            3 => simd_arch::_mm256_alignr_epi8($a, $b, 3),
-            4 => simd_arch::_mm256_alignr_epi8($a, $b, 4),
-            5 => simd_arch::_mm256_alignr_epi8($a, $b, 5),
-            6 => simd_arch::_mm256_alignr_epi8($a, $b, 6),
-            7 => simd_arch::_mm256_alignr_epi8($a, $b, 7),
-            8 => simd_arch::_mm256_alignr_epi8($a, $b, 8),
-            9 => simd_arch::_mm256_alignr_epi8($a, $b, 9),
-            10 => simd_arch::_mm256_alignr_epi8($a, $b, 10),
-            11 => simd_arch::_mm256_alignr_epi8($a, $b, 11),
-            12 => simd_arch::_mm256_alignr_epi8($a, $b, 12),
-            13 => simd_arch::_mm256_alignr_epi8($a, $b, 13),
-            14 => simd_arch::_mm256_alignr_epi8($a, $b, 14),
-            15 => simd_arch::_mm256_alignr_epi8($a, $b, 15),
-            _ => simd_arch::_mm256_alignr_epi8($a, $b, 0),
-        }
-    }};
-}
+// ===== Generic match-immediate macros from portable_intrinsics =====
+// We use the generic match_shift_immediate! and match_alignr_immediate! macros
+// instead of defining engine-specific versions. This eliminates ~50 lines of
+// duplication per engine while maintaining zero runtime overhead.
+use crate::{match_shift_immediate, match_alignr_immediate};
 
 #[cfg(target_arch = "x86_64")]
 /// 256-bit SIMD engine (AVX2 on x86_64)
@@ -204,7 +156,7 @@ impl SimdEngine for SimdEngine256 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn slli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        mm256_match_shift_bytes!(a, num_bytes, _mm256_slli_si256)
+        match_shift_immediate!(a, num_bytes, simd_arch::_mm256_slli_si256, simd_arch::_mm256_setzero_si256())
     }
 
     #[inline]
@@ -216,7 +168,7 @@ impl SimdEngine for SimdEngine256 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn srli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        mm256_match_shift_bytes!(a, num_bytes, _mm256_srli_si256)
+        match_shift_immediate!(a, num_bytes, simd_arch::_mm256_srli_si256, simd_arch::_mm256_setzero_si256())
     }
 
     #[inline]
@@ -228,13 +180,13 @@ impl SimdEngine for SimdEngine256 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn alignr_bytes(a: Self::Vec8, b: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        mm256_alignr_bytes_match!(a, b, num_bytes)
+        match_alignr_immediate!(a, b, num_bytes, simd_arch::_mm256_alignr_epi8)
     }
 
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn alignr_bytes_16(a: Self::Vec16, b: Self::Vec16, num_bytes: i32) -> Self::Vec16 {
-        mm256_alignr_bytes_match!(a, b, num_bytes)
+        match_alignr_immediate!(a, b, num_bytes, simd_arch::_mm256_alignr_epi8)
     }
 
     // ===== 8-bit Integer Arithmetic =====
