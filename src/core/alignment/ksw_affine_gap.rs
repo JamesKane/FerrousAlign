@@ -337,15 +337,17 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
             S::store_si128(q.h1.add(j) as *mut S::Vec8, h); // Save H'(i,j) to H1
 
             // E (deletion) calculation for E(i+1,j)
-            let mut e_new = S::subs_epu8(e, e_del); // E'(i,j) - e_del
-            let t_del = S::subs_epu8(h, oe_del); // H'(i,j) - o_del - e_del
-            e_new = S::max_epu8(e_new, t_del); // e_new = E'(i+1,j)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
+            let e_extend = S::subs_epu8(e, e_del); // E'(i,j) - e_del
+            let e_open = S::subs_epu8(h, oe_del); // H'(i,j) - o_del - e_del
+            let e_new = S::max_epu8(e_extend, e_open); // e_new = E'(i+1,j)
             S::store_si128(q.e.add(j) as *mut S::Vec8, e_new); // Save E'(i+1,j)
 
             // F (insertion) calculation for F(i,j+1)
-            f = S::subs_epu8(f, e_ins); // F'(i,j) - e_ins
-            let t_ins = S::subs_epu8(h, oe_ins); // H'(i,j) - o_ins - e_ins
-            f = S::max_epu8(f, t_ins); // f = F'(i,j+1)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
+            let f_extend = S::subs_epu8(f, e_ins); // F'(i,j) - e_ins
+            let f_open = S::subs_epu8(h, oe_ins); // H'(i,j) - o_ins - e_ins
+            f = S::max_epu8(f_extend, f_open); // f = F'(i,j+1)
 
             // Prepare for next segment: h becomes H(i-1,j)
             h = S::load_si128(q.h0.add(j) as *const S::Vec8);
@@ -367,7 +369,6 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
                 current_f_loop_h_val = S::max_epu8(current_f_loop_h_val, f); // h = H'(i,j) update
                 S::store_si128(q.h1.add(j) as *mut S::Vec8, current_f_loop_h_val);
 
-                let _h_minus_oe_ins = S::subs_epu8(current_f_loop_h_val, oe_ins);
                 f = S::subs_epu8(f, e_ins);
 
                 // Check if any lane value was different after max(h,f) operation
@@ -584,15 +585,17 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
             S::store_si128_16(q.h1.add(j) as *mut S::Vec16, h); // Save H'(i,j) to H1
 
             // E (deletion) calculation for E(i+1,j)
-            let mut e_new = S::subs_epi16(e, e_del_v); // E'(i,j) - e_del
-            let t_del = S::subs_epi16(h, oe_del_v); // H'(i,j) - o_del - e_del
-            e_new = S::max_epi16(e_new, t_del); // e_new = E'(i+1,j)
+            // Note: subs_epi16 is saturating - clamps to 0, so max_epi16 chooses between opening new gap or extending
+            let e_extend = S::subs_epi16(e, e_del_v); // E'(i,j) - e_del
+            let e_open = S::subs_epi16(h, oe_del_v); // H'(i,j) - o_del - e_del
+            let e_new = S::max_epi16(e_extend, e_open); // e_new = E'(i+1,j)
             S::store_si128_16(q.e.add(j) as *mut S::Vec16, e_new); // Save E'(i+1,j)
 
             // F (insertion) calculation for F(i,j+1)
-            f = S::subs_epi16(f, e_ins_v); // F'(i,j) - e_ins
-            let t_ins = S::subs_epi16(h, oe_ins_v); // H'(i,j) - o_ins - e_ins
-            f = S::max_epi16(f, t_ins); // f = F'(i,j+1)
+            // Note: subs_epi16 is saturating - clamps to 0, so max_epi16 chooses between opening new gap or extending
+            let f_extend = S::subs_epi16(f, e_ins_v); // F'(i,j) - e_ins
+            let f_open = S::subs_epi16(h, oe_ins_v); // H'(i,j) - o_ins - e_ins
+            f = S::max_epi16(f_extend, f_open); // f = F'(i,j+1)
 
             // Prepare for next segment: h becomes H(i-1,j)
             h = S::load_si128_16(q.h0.add(j) as *const S::Vec16);
@@ -614,7 +617,6 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
                 current_f_loop_h_val = S::max_epi16(current_f_loop_h_val, f); // h = H'(i,j) update
                 S::store_si128_16(q.h1.add(j) as *mut S::Vec16, current_f_loop_h_val);
 
-                let _h_minus_oe_ins = S::subs_epi16(current_f_loop_h_val, oe_ins_v);
                 f = S::subs_epi16(f, e_ins_v);
 
                 // Check if any lane value was different after max(h,f) operation
