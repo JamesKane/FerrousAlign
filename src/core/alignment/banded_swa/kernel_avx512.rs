@@ -14,6 +14,7 @@ use crate::core::alignment::shared_types::WorkspaceArena;
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn sw_kernel_avx512_with_ws<const W: usize, E: SwSimd>(
     params: &KernelParams<'_>,
+    num_jobs: usize,
     ws: &mut dyn WorkspaceArena,
 ) -> Vec<OutScore>
 where
@@ -23,7 +24,7 @@ where
     #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
     {
         if W == 64 {
-            return unsafe { sw_kernel_avx512_impl::<W>(params, ws) };
+            return unsafe { sw_kernel_avx512_impl::<W>(params, num_jobs, ws) };
         }
     }
 
@@ -36,6 +37,7 @@ where
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn sw_kernel_avx512_impl<const W: usize>(
     params: &KernelParams<'_>,
+    num_jobs: usize,
     ws: &mut dyn WorkspaceArena,
 ) -> Vec<OutScore> {
     debug_assert_eq!(W, 64, "AVX-512 fast path expects 64 lanes for i8");
@@ -43,7 +45,7 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
     use crate::core::compute::simd_abstraction::types::simd_arch as avx;
 
     let stride = W;
-    let lanes = params.batch.len().min(params.qlen.len()).min(W);
+    let lanes = num_jobs.min(params.qlen.len()).min(W);
     let qmax = params.max_qlen.max(0) as usize;
     let tmax = params.max_tlen.max(0) as usize;
     if qmax == 0 || tmax == 0 || lanes == 0 {

@@ -4,7 +4,7 @@
 use super::engines::SwEngine512;
 use crate::core::alignment::banded_swa::KernelParams;
 use crate::core::alignment::banded_swa::OutScore;
-use crate::core::alignment::banded_swa::kernel::sw_kernel_avx512_with_ws;
+use crate::core::alignment::banded_swa::kernel_avx512::sw_kernel_avx512_with_ws;
 use crate::core::alignment::shared_types::AlignJob;
 use crate::core::alignment::shared_types::{Banding, GapPenalties, KernelConfig, ScoringMatrix};
 use crate::core::alignment::workspace::{OwnedSwSoA, with_workspace};
@@ -86,7 +86,7 @@ pub unsafe fn simd_banded_swa_batch64(
 
     with_workspace(|ws| {
         // Use AVX-512 fast path (falls back to generic kernel internally for now)
-        sw_kernel_avx512_with_ws::<W, SwEngine512>(&params, ws)
+        sw_kernel_avx512_with_ws::<W, SwEngine512>(&params, lanes, ws)
     })
 }
 
