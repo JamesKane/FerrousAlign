@@ -283,7 +283,7 @@ pub unsafe fn batch_ksw_align_avx2(
         let mut e11 = zero256;
         let mut imax256 = zero256;
         let mut iqe256 = SimdEngine256::set1_epi8(-1);
-        let mut i256_vec = SimdEngine256::set1_epi16(i as i16);
+        let i256_vec = SimdEngine256::set1_epi16(i as i16);
         let mut l256 = zero256;
 
         // Load reference base for this row (use unaligned load for safety)
@@ -331,14 +331,16 @@ pub unsafe fn batch_ksw_align_avx2(
             iqe256 = SimdEngine256::blendv_epi8(iqe256, l256, cmp0);
 
             // Update E (gap in query)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
             let gap_e256 = SimdEngine256::subs_epu8(h11, oe_ins256);
-            e11 = SimdEngine256::subs_epu8(e11, e_ins256);
-            e11 = SimdEngine256::max_epu8(gap_e256, e11);
+            let e_extend = SimdEngine256::subs_epu8(e11, e_ins256);
+            e11 = SimdEngine256::max_epu8(gap_e256, e_extend);
 
             // Update F (gap in reference)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
             let gap_d256 = SimdEngine256::subs_epu8(h11, oe_del256);
-            let mut f21 = SimdEngine256::subs_epu8(f11, e_del256);
-            f21 = SimdEngine256::max_epu8(gap_d256, f21);
+            let f_extend = SimdEngine256::subs_epu8(f11, e_del256);
+            let f21 = SimdEngine256::max_epu8(gap_d256, f_extend);
 
             // Store updated DP values (unaligned for Vec buffers)
             SimdEngine256::storeu_si128(
@@ -357,10 +359,6 @@ pub unsafe fn batch_ksw_align_avx2(
             let msk = SimdEngine256::or_si128(msk, mask256);
 
             let mut pimax256_tmp = SimdEngine256::blendv_epi8(pimax256, zero256, msk);
-
-            // Apply minsc threshold mask
-            let minsc_mask_vec = SimdEngine256::set1_epi8(-1);
-            pimax256_tmp = SimdEngine256::blendv_epi8(pimax256_tmp, zero256, minsc_mask_vec);
 
             // Apply exit mask
             pimax256_tmp = SimdEngine256::blendv_epi8(pimax256_tmp, zero256, exit0_vec);
@@ -444,18 +442,11 @@ pub unsafe fn batch_ksw_align_avx2(
 
         // Swap buffers (h0_buf and h1_buf are already &mut [u8])
         std::ptr::swap(&mut h0_buf, &mut h1_buf);
-
-        // Increment row index (final value unused after last iteration)
-        let one256_16 = SimdEngine256::set1_epi16(1);
-        #[allow(unused_assignments)]
-        {
-            i256_vec = SimdEngine256::add_epi16(i256_vec, one256_16);
-        }
     }
 
     // Final row max update (unaligned for Vec buffers)
-    let msk = SimdEngine256::or_si128(mask256, SimdEngine256::set1_epi8(0));
-    let pimax256_final = SimdEngine256::blendv_epi8(pimax256, zero256, msk);
+    // Note: OR with zero is identity, so we use mask256 directly
+    let pimax256_final = SimdEngine256::blendv_epi8(pimax256, zero256, mask256);
     SimdEngine256::storeu_si128(
         row_max_buf[((limit - 1) as usize) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
         pimax256_final,
