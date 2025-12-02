@@ -5,7 +5,6 @@ use crate::core::alignment::banded_swa::BandedPairWiseSW;
 use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::banded_swa::shared::{SoAInputs, SoAInputs16};
 use crate::core::alignment::kswv_batch::KswResult;
-use crate::core::alignment::shared_types::KswSoA;
 
 #[cfg(target_arch = "x86_64")]
 use crate::core::alignment::banded_swa::isa_avx2::{

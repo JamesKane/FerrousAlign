@@ -782,9 +782,6 @@ pub fn finalize_pairs_soa(
 
         // Calculate TLEN (template length) only if both reads are mapped on same reference
         if soa_r1.ref_ids[r1_idx] == soa_r2.ref_ids[r2_idx] {
-            let r1_is_rev = (soa_r1.flags[r1_idx] & sam_flags::REVERSE) != 0;
-            let r2_is_rev = (soa_r2.flags[r2_idx] & sam_flags::REVERSE) != 0;
-
             let r1_ref_len = reference_length_from_cigar_soa_pairing(soa_r1, r1_idx) as i64;
             let r2_ref_len = reference_length_from_cigar_soa_pairing(soa_r2, r2_idx) as i64;
 
