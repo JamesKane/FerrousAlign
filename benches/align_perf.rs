@@ -27,6 +27,7 @@ use ferrous_align::core::alignment::kswv_batch::KswResult;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use ferrous_align::core::alignment::kswv_sse_neon::kswv_batch16_soa as kswv16_soa;
 use ferrous_align::core::alignment::shared_types::KswSoA;
+use ferrous_align::core::alignment::workspace::AlignmentWorkspace;
 
 fn make_scoring_matrix() -> [i8; 25] {
     // Simple 5x5 matrix: match=1 on diagonal, mismatch=0 elsewhere
@@ -271,9 +272,9 @@ fn bench_kswv(c: &mut Criterion) {
                 max_tlen: len as i32,
             };
             b.iter_batched(
-                || (),
-                |_| unsafe {
-                    let _r: Vec<KswResult> = kswv16_soa(&inputs, 16, 1, 0, 6, 1, 6, 1, -1, false);
+                || AlignmentWorkspace::new(),
+                |mut ws| unsafe {
+                    let _r: Vec<KswResult> = kswv16_soa(&inputs, &mut ws, 16, 1, 0, 6, 1, 6, 1, -1, false);
                     black_box(_r)
                 },
                 BatchSize::SmallInput,
@@ -314,9 +315,9 @@ fn bench_kswv(c: &mut Criterion) {
                 max_tlen: len as i32,
             };
             b.iter_batched(
-                || (),
-                |_| unsafe {
-                    let _r: Vec<KswResult> = kswv32_soa(&inputs, 32, 1, 0, 6, 1, 6, 1, -1, false);
+                || AlignmentWorkspace::new(),
+                |mut ws| unsafe {
+                    let _r: Vec<KswResult> = kswv32_soa(&inputs, &mut ws, 32, 1, 0, 6, 1, 6, 1, -1, false);
                     black_box(_r)
                 },
                 BatchSize::SmallInput,
@@ -363,10 +364,10 @@ fn bench_kswv(c: &mut Criterion) {
                         max_tlen: len as i32,
                     };
                     b.iter_batched(
-                        || (),
-                        |_| unsafe {
+                        || AlignmentWorkspace::new(),
+                        |mut ws| unsafe {
                             let _r: Vec<KswResult> =
-                                kswv64_soa(&inputs, 64, 1, 0, 6, 1, 6, 1, -1, false);
+                                kswv64_soa(&inputs, &mut ws, 64, 1, 0, 6, 1, 6, 1, -1, false);
                             black_box(_r)
                         },
                         BatchSize::SmallInput,
