@@ -741,10 +741,10 @@ fn execute_mate_rescue_batch_simd(
                 .collect();
 
             let batch_results = with_workspace(|ws| {
-                let ksw_soa = ws.ensure_and_transpose_ksw(&align_jobs, batch_size);
-
                 dispatch_kswv_soa(
-                    &ksw_soa,
+                    &align_jobs,
+                    ws,
+                    batch_size,
                     chunk_len,
                     match_score,
                     mismatch_penalty,
@@ -1479,9 +1479,10 @@ pub fn execute_compact_batch(
                 .collect();
 
             let results = with_workspace(|ws| {
-                let ksw_soa = ws.ensure_and_transpose_ksw(&align_jobs, simd_batch_size);
                 dispatch_kswv_soa(
-                    &ksw_soa,
+                    &align_jobs,
+                    ws,
+                    simd_batch_size,
                     chunk_size,
                     5,
                     o_del,
@@ -1847,6 +1848,425 @@ mod tests {
         let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
         assert_eq!(dir, 3); // RR orientation
     }
+}
+
+// ============================================================================
+// SoA-NATIVE MATE RESCUE (Pure SoA Pipeline - Phase 3)
+// ============================================================================
+
+/// SoA-native mate rescue for paired-end reads
+///
+/// This function performs mate rescue entirely in SoA format, without converting
+/// to Alignment structs. It:
+/// 1. Collects rescue jobs from SoA alignment results
+/// 2. Executes them in batches using horizontal SIMD
+/// 3. Appends rescued alignments back to SoA buffers
+///
+/// # Arguments
+/// * `soa_r1` - Mutable SoA alignment results for read 1
+/// * `soa_r2` - Mutable SoA alignment results for read 2
+/// * `reads_r1` - SoA read batch for read 1 (for sequences)
+/// * `reads_r2` - SoA read batch for read 2 (for sequences)
+/// * `primary_r1` - Indices of primary alignments for read 1
+/// * `primary_r2` - Indices of primary alignments for read 2
+/// * `pac` - PAC data for reference sequence fetching
+/// * `bwa_idx` - BWA index for coordinate conversion
+/// * `stats` - Insert size statistics for each orientation [FF, FR, RF, RR]
+/// * `simd_engine` - SIMD engine type for batch execution
+///
+/// # Returns
+/// Number of alignments rescued (total across both reads)
+pub fn mate_rescue_soa(
+    soa_r1: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_r2: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    reads_r1: &crate::core::io::soa_readers::SoAReadBatch,
+    reads_r2: &crate::core::io::soa_readers::SoAReadBatch,
+    primary_r1: &[usize],
+    primary_r2: &[usize],
+    pac: &[u8],
+    bwa_idx: &BwaIndex,
+    stats: &[InsertSizeStats; 4],
+    simd_engine: Option<SimdEngineType>,
+) -> usize {
+    let num_reads = soa_r1.num_reads();
+
+    // Phase 1: Collect rescue jobs from all read pairs
+    let mut jobs: Vec<MateRescueJob> = Vec::new();
+
+    for read_idx in 0..num_reads {
+        // Get primary alignments for this pair
+        let r1_primary_idx = primary_r1[read_idx];
+        let r2_primary_idx = primary_r2[read_idx];
+
+        // Try to rescue R1 using R2 as anchor
+        collect_rescue_jobs_for_read_soa(
+            soa_r1,
+            soa_r2,
+            reads_r1,
+            read_idx,
+            r1_primary_idx,
+            r2_primary_idx,
+            true, // rescuing R1
+            pac,
+            bwa_idx,
+            stats,
+            &mut jobs,
+        );
+
+        // Try to rescue R2 using R1 as anchor
+        collect_rescue_jobs_for_read_soa(
+            soa_r2,
+            soa_r1,
+            reads_r2,
+            read_idx,
+            r2_primary_idx,
+            r1_primary_idx,
+            false, // rescuing R2
+            pac,
+            bwa_idx,
+            stats,
+            &mut jobs,
+        );
+    }
+
+    if jobs.is_empty() {
+        return 0;
+    }
+
+    log::debug!("[PE] Executing {} mate rescue alignments", jobs.len());
+
+    // Phase 2: Execute all rescue jobs in batch
+    let results = execute_mate_rescue_batch_with_engine(&mut jobs, simd_engine);
+
+    // Phase 3: Append rescued alignments to SoA buffers
+    let mut rescued_count = 0;
+    for result in results {
+        let job = &jobs[result.job_index];
+
+        // Check if alignment is good enough
+        if result.aln.score < job.min_seed_len || result.aln.qb < 0 {
+            continue;
+        }
+
+        // Convert SW result to SoA format and append
+        if append_rescue_result_to_soa(
+            job,
+            &result.aln,
+            if job.rescuing_read1 { soa_r1 } else { soa_r2 },
+            job.pair_index,
+            bwa_idx,
+        ) {
+            rescued_count += 1;
+        }
+    }
+
+    rescued_count
+}
+
+/// Collect rescue jobs for a single read using its mate as anchor
+#[allow(clippy::too_many_arguments)]
+fn collect_rescue_jobs_for_read_soa(
+    soa_rescued: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_anchor: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    reads_rescued: &crate::core::io::soa_readers::SoAReadBatch,
+    read_idx: usize,
+    rescued_primary_idx: usize,
+    anchor_primary_idx: usize,
+    rescuing_read1: bool,
+    pac: &[u8],
+    bwa_idx: &BwaIndex,
+    stats: &[InsertSizeStats; 4],
+    jobs: &mut Vec<MateRescueJob>,
+) {
+    // Check if this read needs rescue (unmapped or low MAPQ)
+    let rescued_mapq = soa_rescued.mapqs[rescued_primary_idx];
+    if rescued_mapq >= 20 {
+        return; // Good enough alignment, no rescue needed
+    }
+
+    // Get anchor alignment info
+    let anchor_flag = soa_anchor.flags[anchor_primary_idx];
+    let anchor_pos = soa_anchor.positions[anchor_primary_idx];
+    let anchor_ref_id = soa_anchor.ref_ids[anchor_primary_idx];
+    let anchor_ref_len =
+        reference_length_from_cigar_soa_rescue(soa_anchor, anchor_primary_idx) as i64;
+
+    // Get mate sequence
+    let (seq_start, seq_len) = reads_rescued.read_boundaries[read_idx];
+    let mate_seq = &reads_rescued.seqs[seq_start..seq_start + seq_len];
+    let mate_name = &reads_rescued.names[read_idx];
+
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
+    let min_seed_len = bwa_idx.min_seed_len;
+    let match_score = 1i32;
+
+    // Convert anchor position to bidirectional coordinates
+    let anchor_is_rev = (anchor_flag & sam_flags::REVERSE) != 0;
+    let chr_offset = bwa_idx.bns.annotations[anchor_ref_id].offset as i64;
+    let genome_pos = chr_offset + anchor_pos as i64;
+
+    let anchor_rb = if anchor_is_rev {
+        let rightmost = genome_pos + anchor_ref_len - 1;
+        (l_pac << 1) - 1 - rightmost
+    } else {
+        genome_pos
+    };
+
+    // Initialize skip array from failed orientations
+    let mut skip = [false; 4];
+    for r in 0..4 {
+        skip[r] = stats[r].failed;
+    }
+
+    // Check which orientations already have consistent pairs
+    let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
+    for offset in 0..rescued_count {
+        let idx = rescued_start + offset;
+        if soa_rescued.ref_ids[idx] == anchor_ref_id {
+            let mate_is_rev = (soa_rescued.flags[idx] & sam_flags::REVERSE) != 0;
+            let mate_ref_len = reference_length_from_cigar_soa_rescue(soa_rescued, idx) as i64;
+            let mate_genome_pos = chr_offset + soa_rescued.positions[idx] as i64;
+
+            let mate_rb = if mate_is_rev {
+                let rightmost = mate_genome_pos + mate_ref_len - 1;
+                (l_pac << 1) - 1 - rightmost
+            } else {
+                mate_genome_pos
+            };
+
+            let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+            if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
+                skip[dir] = true;
+            }
+        }
+    }
+
+    // Early exit if all orientations already have pairs
+    if skip.iter().all(|&x| x) {
+        return;
+    }
+
+    let l_ms = mate_seq.len() as i32;
+
+    // Try each non-skipped orientation
+    for r in 0..4 {
+        if skip[r] {
+            continue;
+        }
+
+        // Decode orientation bits
+        let is_rev = (r >> 1) != (r & 1);
+        let is_larger = (r >> 1) == 0;
+
+        // Prepare mate sequence (reverse complement if needed)
+        let query_seq: Vec<u8> = if is_rev {
+            mate_seq
+                .iter()
+                .rev()
+                .map(|&b| if b < 4 { 3 - b } else { 4 })
+                .collect()
+        } else {
+            mate_seq.to_vec()
+        };
+
+        // Calculate search region using FULL insert size range [low, high]
+        let (rb, re) = if !is_rev {
+            let rb = if is_larger {
+                anchor_rb + stats[r].low as i64
+            } else {
+                anchor_rb - stats[r].high as i64
+            };
+            let re = if is_larger {
+                anchor_rb + stats[r].high as i64
+            } else {
+                anchor_rb - stats[r].low as i64
+            } + l_ms as i64;
+            (rb, re)
+        } else {
+            let rb = if is_larger {
+                anchor_rb + stats[r].low as i64
+            } else {
+                anchor_rb - stats[r].high as i64
+            } - l_ms as i64;
+            let re = if is_larger {
+                anchor_rb + stats[r].high as i64
+            } else {
+                anchor_rb - stats[r].low as i64
+            };
+            (rb, re)
+        };
+
+        // Clamp to valid range
+        let rb = rb.max(0);
+        let re = re.min(l_pac << 1);
+
+        if rb >= re {
+            continue;
+        }
+
+        // Fetch reference sequence
+        let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
+
+        // Check if on same reference and region is large enough
+        if rid as usize != anchor_ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
+            continue;
+        }
+
+        // Create rescue job
+        jobs.push(MateRescueJob {
+            pair_index: read_idx,
+            rescuing_read1,
+            query_seq,
+            ref_seq,
+            adj_rb,
+            is_rev,
+            orientation: r,
+            anchor_ref_id,
+            anchor_ref_name: soa_anchor.ref_names[anchor_primary_idx].clone(),
+            mate_name: mate_name.clone(),
+            mate_len: l_ms,
+            min_seed_len,
+            match_score,
+        });
+    }
+}
+
+/// Append a rescued alignment result to SoA buffers
+fn append_rescue_result_to_soa(
+    job: &MateRescueJob,
+    aln: &Kswr,
+    soa: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    read_idx: usize,
+    bwa_idx: &BwaIndex,
+) -> bool {
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
+    let l_ms = job.mate_len;
+
+    // Convert coordinates
+    let (rescued_rb, _rescued_re, query_start, query_end) = if job.is_rev {
+        let rb_result = (l_pac << 1) - (job.adj_rb + aln.te as i64 + 1);
+        let re_result = (l_pac << 1) - (job.adj_rb + aln.tb as i64);
+        let qb_result = l_ms - (aln.qe + 1);
+        let qe_result = l_ms - aln.qb;
+        (rb_result, re_result, qb_result, qe_result)
+    } else {
+        let rb_result = job.adj_rb + aln.tb as i64;
+        let re_result = job.adj_rb + aln.te as i64 + 1;
+        (rb_result, re_result, aln.qb, aln.qe + 1)
+    };
+
+    // Convert bidirectional position to chromosome-relative
+    let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(rescued_rb);
+    let rescued_rid = bwa_idx.bns.bns_pos2rid(pos_f);
+
+    if rescued_rid < 0 || rescued_rid as usize != job.anchor_ref_id {
+        return false;
+    }
+
+    let chr_pos = (pos_f - bwa_idx.bns.annotations[rescued_rid as usize].offset as i64) as u64;
+
+    // Build CIGAR
+    let ref_aligned_len = (aln.te - aln.tb + 1).max(0);
+    let query_aligned = (query_end - query_start).max(0);
+
+    let mut cigar_ops = Vec::new();
+    let mut cigar_lens = Vec::new();
+
+    if query_start > 0 {
+        cigar_ops.push(b'S');
+        cigar_lens.push(query_start);
+    }
+    if ref_aligned_len > 0 && query_aligned > 0 {
+        cigar_ops.push(b'M');
+        cigar_lens.push(ref_aligned_len.min(query_aligned));
+    }
+    if query_end < l_ms {
+        cigar_ops.push(b'S');
+        cigar_lens.push(l_ms - query_end);
+    }
+
+    // Set flags
+    let mut flag: u16 = 0;
+    if job.is_rev {
+        flag |= sam_flags::REVERSE;
+    }
+
+    // Append to SoA buffers
+    let _aln_idx = soa.positions.len();
+
+    soa.query_names.push(job.mate_name.clone());
+    soa.flags.push(flag);
+    soa.ref_names.push(job.anchor_ref_name.clone());
+    soa.ref_ids.push(job.anchor_ref_id);
+    soa.positions.push(chr_pos);
+    soa.mapqs.push(0); // Rescued alignments get MAPQ 0 initially
+    soa.scores.push(aln.score);
+
+    // Append CIGAR
+    let cigar_start = soa.cigar_ops.len();
+    soa.cigar_ops.extend_from_slice(&cigar_ops);
+    soa.cigar_lens.extend_from_slice(&cigar_lens);
+    soa.cigar_boundaries.push((cigar_start, cigar_ops.len()));
+
+    // Mate info (will be filled in finalization phase)
+    soa.rnexts.push("*".to_string());
+    soa.pnexts.push(0);
+    soa.tlens.push(0);
+
+    // Sequence and quality (get from original read)
+    // Note: For rescued alignments, we don't have the original sequence easily accessible
+    // We'll use empty for now and fill in during finalization if needed
+    let seq_start = soa.seqs.len();
+    soa.seq_boundaries.push((seq_start, 0));
+
+    // Tags (minimal set for rescued alignments)
+    let tag_start = soa.tag_names.len();
+    soa.tag_names.push("AS".to_string());
+    soa.tag_values.push(format!("i:{}", aln.score));
+    soa.tag_boundaries.push((tag_start, 1));
+
+    // Internal fields
+    soa.query_starts.push(query_start);
+    soa.query_ends.push(query_end);
+    soa.seed_coverages
+        .push((ref_aligned_len.min(query_aligned) >> 1) as i32);
+    soa.hashes.push(0);
+    soa.frac_reps.push(0.0);
+
+    // Update read_alignment_boundaries
+    let (old_start, old_count) = soa.read_alignment_boundaries[read_idx];
+    soa.read_alignment_boundaries[read_idx] = (old_start, old_count + 1);
+
+    true
+}
+
+/// Calculate reference length from CIGAR string in SoA format (for mate rescue module)
+///
+/// Duplicate to avoid circular dependencies between modules.
+fn reference_length_from_cigar_soa_rescue(
+    soa: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    aln_idx: usize,
+) -> i32 {
+    let (cigar_start, cigar_count) = soa.cigar_boundaries[aln_idx];
+    let mut ref_len = 0i32;
+
+    for offset in 0..cigar_count {
+        let idx = cigar_start + offset;
+        let op = soa.cigar_ops[idx];
+        let len = soa.cigar_lens[idx];
+
+        // M, D, N, =, X consume reference
+        if op == b'M' || op == b'D' || op == b'N' || op == b'=' || op == b'X' {
+            ref_len += len;
+        }
+    }
+
+    ref_len
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     /// Test scoring matrix
     #[test]
