@@ -703,16 +703,35 @@ fn find_best_pair_soa(
                     continue;
                 }
 
-                // Extract fwd_normalized positions from sort_key for distance calculation
-                // These are in the same coordinate system as bootstrap insert size stats
-                // (projected to forward strand, similar to BWA-MEM2's approach)
-                let current_pos = (current.sort_key & 0xFFFFFFFF) as i64;
-                let mate_pos = (candidate_mate.sort_key & 0xFFFFFFFF) as i64;
-                let distance = (current_pos - mate_pos).abs();
+                // Convert fwd_normalized positions back to bidirectional coordinates
+                // to match the distance calculation used in bootstrap (infer_orientation)
+                let current_fwd_norm = (current.sort_key & 0xFFFFFFFF) as i64;
+                let mate_fwd_norm = (candidate_mate.sort_key & 0xFFFFFFFF) as i64;
+
+                let current_is_rev_half = ((current.packed_info >> 1) & 1) != 0;
+                let mate_is_rev_half = ((candidate_mate.packed_info >> 1) & 1) != 0;
+
+                // Convert fwd_normalized back to bidirectional
+                // If in reverse half: bidir = (l_pac << 1) - 1 - fwd_norm
+                // If in forward half: bidir = fwd_norm
+                let current_bidir = if current_is_rev_half {
+                    (l_pac << 1) - 1 - current_fwd_norm
+                } else {
+                    current_fwd_norm
+                };
+
+                let mate_bidir = if mate_is_rev_half {
+                    (l_pac << 1) - 1 - mate_fwd_norm
+                } else {
+                    mate_fwd_norm
+                };
+
+                // Use infer_orientation to compute distance (same as bootstrap)
+                let (_orientation, distance) = super::insert_size::infer_orientation(l_pac, current_bidir, mate_bidir);
 
                 if read_idx == 10 && current_idx < 5 {
-                    eprintln!("      search_idx={}: ref={} current_pos={} mate_pos={} distance={} (low={} high={})",
-                        search_idx, current_ref, current_pos, mate_pos, distance, stats[orientation_idx].low, stats[orientation_idx].high);
+                    eprintln!("      search_idx={}: ref={} current_bidir={} mate_bidir={} distance={} (low={} high={})",
+                        search_idx, current_ref, current_bidir, mate_bidir, distance, stats[orientation_idx].low, stats[orientation_idx].high);
                 }
 
                 if distance > stats[orientation_idx].high as i64 {
