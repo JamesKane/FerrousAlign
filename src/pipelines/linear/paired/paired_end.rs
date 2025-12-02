@@ -380,6 +380,8 @@ pub fn process_paired_end(
         pac,
         &bwa_idx,
         &current_stats,
+        opt.pen_unpaired,
+        opt.max_matesw,
         Some(simd_engine),
     );
     log::info!("First batch: {rescued_first} pairs rescued");
@@ -602,6 +604,8 @@ pub fn process_paired_end(
             pac,
             &bwa_idx,
             &current_stats,
+            opt.pen_unpaired,
+            opt.max_matesw,
             Some(simd_engine),
         );
         total_rescued += rescued;

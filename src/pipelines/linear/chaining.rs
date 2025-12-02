@@ -852,6 +852,33 @@ pub fn filter_chains_batch(
                 0.0
             };
             soa_chain_batch.kept[global_chain_idx] = 0; // Initialize as discarded
+
+            // DEBUG: Detailed chain logging for analysis
+            let (seed_start_idx_in_chain, num_seeds_in_chain) =
+                soa_chain_batch.chain_seed_boundaries[global_chain_idx];
+            log::debug!(
+                "FERROUS_CHAIN read_idx={} chain_local_idx={} weight={} n_seeds={} q=[{},{}] r=[{},{}] is_rev={}",
+                read_idx, i, weight, num_seeds_in_chain,
+                soa_chain_batch.query_start[global_chain_idx],
+                soa_chain_batch.query_end[global_chain_idx],
+                soa_chain_batch.ref_start[global_chain_idx],
+                soa_chain_batch.ref_end[global_chain_idx],
+                soa_chain_batch.is_rev[global_chain_idx]
+            );
+
+            // Log each seed in the chain
+            for j in 0..num_seeds_in_chain {
+                let seed_idx_in_soa = soa_chain_batch.seeds_indices[seed_start_idx_in_chain + j];
+                log::debug!(
+                    "  FERROUS_SEED chain={} seed_idx={} q=[{},{}] r=[{},{}] len={}",
+                    i, j,
+                    soa_seed_batch.query_pos[seed_idx_in_soa],
+                    soa_seed_batch.query_pos[seed_idx_in_soa] + soa_seed_batch.len[seed_idx_in_soa],
+                    soa_seed_batch.ref_pos[seed_idx_in_soa],
+                    soa_seed_batch.ref_pos[seed_idx_in_soa] + soa_seed_batch.len[seed_idx_in_soa] as u64,
+                    soa_seed_batch.len[seed_idx_in_soa]
+                );
+            }
         }
 
         // 2. Sort chains for the current read by weight (descending)
@@ -859,15 +886,33 @@ pub fn filter_chains_batch(
             .map(|i| chain_start_idx + i)
             .collect();
 
+        // CRITICAL FIX: Use stable sort (sort_by) instead of sort_unstable_by
+        // to match main branch (AoS) and BWA-MEM2 behavior.
+        //
+        // Issue: sort_unstable_by provides no guarantee about relative order of
+        // equal-weight chains, causing non-deterministic chain selection after
+        // the SoA refactor changed data structure layout and iteration order.
+        //
+        // Main branch uses sort_by (stable), BWA-MEM2 uses ks_introsort (stable).
+        // When multiple chains have equal weight (common in repetitive regions),
+        // stable sort preserves insertion order, ensuring deterministic behavior.
         chain_global_indices_for_read
-            .sort_unstable_by(|&a, &b| soa_chain_batch.weight[b].cmp(&soa_chain_batch.weight[a]));
+            .sort_by(|&a, &b| soa_chain_batch.weight[b].cmp(&soa_chain_batch.weight[a]));
 
         // Use a vector to store the global indices of chains that are "kept" for this read.
         // This simulates the `kept_chains: Vec<Chain>` in the original function.
         let mut kept_chain_global_indices: Vec<usize> = Vec::new();
 
+        // DEBUG: Log chain filtering for read_idx=10 (our problem read R1)
+        if read_idx == 10 {
+            log::debug!(
+                "FERROUS_FILTER_START read_idx=10 n_chains={} mask_level={:.2} drop_ratio={:.2}",
+                num_chains_for_read, opt.mask_level, opt.drop_ratio
+            );
+        }
+
         // 3. Apply filtering logic
-        for &global_chain_idx in chain_global_indices_for_read.iter() {
+        for (chain_iter_idx, &global_chain_idx) in chain_global_indices_for_read.iter().enumerate() {
             // Check if below minimum weight
             if soa_chain_batch.weight[global_chain_idx] < opt.min_chain_weight {
                 continue; // Discard
@@ -904,9 +949,24 @@ pub fn filter_chains_batch(
                         let weight_diff = soa_chain_batch.weight[kept_global_chain_idx]
                             - soa_chain_batch.weight[global_chain_idx];
 
-                        if soa_chain_batch.weight[global_chain_idx] < weight_threshold
-                            && weight_diff >= (opt.min_seed_len << 1)
-                        {
+                        let will_discard = soa_chain_batch.weight[global_chain_idx] < weight_threshold
+                            && weight_diff >= (opt.min_seed_len << 1);
+
+                        // DEBUG: Log overlap decision for read_idx=10
+                        if read_idx == 10 {
+                            let chain_local_idx = global_chain_idx - chain_start_idx;
+                            let kept_local_idx = kept_global_chain_idx - chain_start_idx;
+                            log::debug!(
+                                "  Chain[{}] vs Chain[{}]: ovlp={} min_l={} w_curr={} w_kept={} thresh={} diff={} DROP={}",
+                                chain_local_idx, kept_local_idx, overlap, min_len,
+                                soa_chain_batch.weight[global_chain_idx],
+                                soa_chain_batch.weight[kept_global_chain_idx],
+                                weight_threshold, weight_diff,
+                                if will_discard { "YES" } else { "NO" }
+                            );
+                        }
+
+                        if will_discard {
                             should_discard = true;
                             break;
                         } else {
@@ -918,6 +978,14 @@ pub fn filter_chains_batch(
             }
 
             if should_discard {
+                // DEBUG: Log dropped chain for read_idx=10
+                if read_idx == 10 {
+                    let chain_local_idx = global_chain_idx - chain_start_idx;
+                    log::debug!(
+                        "  Chain[{}] DROPPED weight={}",
+                        chain_local_idx, soa_chain_batch.weight[global_chain_idx]
+                    );
+                }
                 continue; // This chain is discarded
             }
 
@@ -926,6 +994,21 @@ pub fn filter_chains_batch(
                 soa_chain_batch.kept[global_chain_idx] = 3; // Primary
             }
             // If overlaps is true, and it wasn't discarded, kept is already set to 1.
+
+            // DEBUG: Log kept decision for read_idx=10
+            if read_idx == 10 {
+                let chain_local_idx = global_chain_idx - chain_start_idx;
+                let kept_status = if soa_chain_batch.kept[global_chain_idx] == 3 {
+                    "PRIMARY"
+                } else {
+                    "SHADOWED"
+                };
+                log::debug!(
+                    "  Chain[{}] kept={} ({}) weight={}",
+                    chain_local_idx, soa_chain_batch.kept[global_chain_idx],
+                    kept_status, soa_chain_batch.weight[global_chain_idx]
+                );
+            }
 
             kept_chain_global_indices.push(global_chain_idx);
 

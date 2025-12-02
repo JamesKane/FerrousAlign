@@ -1676,6 +1676,8 @@ pub fn compact_result_to_alignment(
 /// * `pac` - PAC data for reference sequence fetching
 /// * `bwa_idx` - BWA index for coordinate conversion
 /// * `stats` - Insert size statistics for each orientation [FF, FR, RF, RR]
+/// * `pen_unpaired` - Score penalty threshold for rescue attempts (default 17)
+/// * `max_matesw` - Maximum number of rescue attempts per read (default 50)
 /// * `simd_engine` - SIMD engine type for batch execution
 ///
 /// # Returns
@@ -1690,6 +1692,8 @@ pub fn mate_rescue_soa(
     pac: &[u8],
     bwa_idx: &BwaIndex,
     stats: &[InsertSizeStats; 4],
+    pen_unpaired: i32,
+    max_matesw: i32,
     simd_engine: Option<SimdEngineType>,
 ) -> usize {
     let num_reads = soa_r1.num_reads();
@@ -1714,6 +1718,8 @@ pub fn mate_rescue_soa(
             pac,
             bwa_idx,
             stats,
+            pen_unpaired,
+            max_matesw,
             &mut jobs,
         );
 
@@ -1729,6 +1735,8 @@ pub fn mate_rescue_soa(
             pac,
             bwa_idx,
             stats,
+            pen_unpaired,
+            max_matesw,
             &mut jobs,
         );
     }
@@ -1744,11 +1752,20 @@ pub fn mate_rescue_soa(
 
     // Phase 3: Append rescued alignments to SoA buffers
     let mut rescued_count = 0;
+    let mut failed_score = 0;
+    let mut failed_qb = 0;
+    let mut max_score_seen = 0;
     for result in results {
         let job = &jobs[result.job_index];
+        max_score_seen = max_score_seen.max(result.aln.score);
 
         // Check if alignment is good enough
-        if result.aln.score < job.min_seed_len || result.aln.qb < 0 {
+        if result.aln.score < job.min_seed_len {
+            failed_score += 1;
+            continue;
+        }
+        if result.aln.qb < 0 {
+            failed_qb += 1;
             continue;
         }
 
@@ -1762,6 +1779,17 @@ pub fn mate_rescue_soa(
         ) {
             rescued_count += 1;
         }
+    }
+
+    if failed_score > 0 || failed_qb > 0 {
+        log::debug!(
+            "[PE] Rescue filtering: {} failed score check (min_seed_len={}), {} failed qb check, {} succeeded (max_score_seen={})",
+            failed_score,
+            if !jobs.is_empty() { jobs[0].min_seed_len } else { 0 },
+            failed_qb,
+            rescued_count,
+            max_score_seen
+        );
     }
 
     rescued_count
@@ -1780,13 +1808,70 @@ fn collect_rescue_jobs_for_read_soa(
     pac: &[u8],
     bwa_idx: &BwaIndex,
     stats: &[InsertSizeStats; 4],
+    pen_unpaired: i32,
+    max_matesw: i32,
     jobs: &mut Vec<MateRescueJob>,
 ) {
-    // Check if this read needs rescue (unmapped or low MAPQ)
-    let rescued_mapq = soa_rescued.mapqs[rescued_primary_idx];
-    if rescued_mapq >= 20 {
-        return; // Good enough alignment, no rescue needed
+    // BWA-MEM2 approach: Find alignments within score threshold and attempt rescue
+    // First, find the best score for this read
+    let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
+
+    let best_score = (rescued_start..rescued_start + rescued_count)
+        .map(|idx| soa_rescued.scores[idx])
+        .max()
+        .unwrap_or(0);
+
+    // Compute rescue threshold: best_score - pen_unpaired
+    let rescue_threshold = best_score.saturating_sub(pen_unpaired);
+
+    log::debug!(
+        "read_idx={} best_score={} rescue_threshold={} (pen_unpaired={})",
+        read_idx,
+        best_score,
+        rescue_threshold,
+        pen_unpaired
+    );
+
+    // Count how many rescue attempts we'll make for this read
+    // BWA-MEM2 attempts rescue for all alignments above threshold, up to max_matesw
+    let alignments_above_threshold = (rescued_start..rescued_start + rescued_count)
+        .filter(|&idx| soa_rescued.scores[idx] >= rescue_threshold)
+        .take(max_matesw as usize)
+        .count();
+
+    log::debug!(
+        "read_idx={} alignments_above_threshold={} (total={} primary_score={})",
+        read_idx,
+        alignments_above_threshold,
+        rescued_count,
+        soa_rescued.scores[rescued_primary_idx]
+    );
+
+    // If no alignments are above threshold, skip rescue
+    if alignments_above_threshold == 0 {
+        return;
     }
+
+    // NOTE: Currently we only process rescue from the primary alignment.
+    // BWA-MEM2 attempts rescue from multiple alignments, but this requires
+    // restructuring the loop. For now, check if primary is above threshold.
+    let rescued_score = soa_rescued.scores[rescued_primary_idx];
+    if rescued_score < rescue_threshold {
+        log::debug!(
+            "read_idx={} primary_score={} < threshold={}, skipping rescue",
+            read_idx,
+            rescued_score,
+            rescue_threshold
+        );
+        return; // Primary score too low, no rescue from this alignment
+    }
+
+    log::debug!(
+        "read_idx={} attempting rescue (primary_score={} >= threshold={})",
+        read_idx,
+        rescued_score,
+        rescue_threshold
+    );
 
     // Get anchor alignment info
     let anchor_flag = soa_anchor.flags[anchor_primary_idx];
@@ -1840,6 +1925,12 @@ fn collect_rescue_jobs_for_read_soa(
 
             let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
             if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
+                log::debug!(
+                    "read_idx={} orientation={} already has consistent pair (dist={})",
+                    read_idx,
+                    dir,
+                    dist
+                );
                 skip[dir] = true;
             }
         }
@@ -1847,8 +1938,19 @@ fn collect_rescue_jobs_for_read_soa(
 
     // Early exit if all orientations already have pairs
     if skip.iter().all(|&x| x) {
+        log::debug!(
+            "read_idx={} all orientations have pairs, skipping rescue (skip={:?})",
+            read_idx,
+            skip
+        );
         return;
     }
+
+    log::debug!(
+        "read_idx={} creating rescue jobs for orientations (skip={:?})",
+        read_idx,
+        skip
+    );
 
     let l_ms = mate_seq.len() as i32;
 
