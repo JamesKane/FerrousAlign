@@ -177,6 +177,8 @@ pub fn finalize_alignments_soa(
                 soa_context.soa_seed_batch.read_seed_boundaries[read_idx];
             let mut seeds = Vec::with_capacity(num_seeds);
 
+            log::debug!("[FINALIZE] Read {}: {} seeds", query_name, num_seeds);
+
             // Build mapping from global seed index to local seed index
             let mut global_to_local_seed: std::collections::HashMap<usize, usize> =
                 std::collections::HashMap::new();
@@ -199,6 +201,8 @@ pub fn finalize_alignments_soa(
             let (chain_start_idx, num_chains) =
                 soa_context.soa_chain_batch.read_chain_boundaries[read_idx];
             let mut chains = Vec::with_capacity(num_chains);
+
+            log::debug!("[FINALIZE] Read {}: {} chains", query_name, num_chains);
 
             for local_chain_idx in 0..num_chains {
                 let global_chain_idx = chain_start_idx + local_chain_idx;
@@ -300,7 +304,17 @@ pub fn finalize_alignments_soa(
                 query_len,
             );
 
+            log::debug!(
+                "[FINALIZE] Read {}: {} regions generated",
+                query_name,
+                regions.len()
+            );
+
             if regions.is_empty() {
+                log::debug!(
+                    "[FINALIZE] Read {}: NO REGIONS - returning unmapped",
+                    query_name
+                );
                 return (
                     read_idx,
                     vec![create_unmapped_alignment_internal(query_name)],
@@ -311,7 +325,18 @@ pub fn finalize_alignments_soa(
             let mut filtered_regions: Vec<_> =
                 regions.into_iter().filter(|r| r.score >= opt.t).collect();
 
+            log::debug!(
+                "[FINALIZE] Read {}: {} regions after score filter (threshold={})",
+                query_name,
+                filtered_regions.len(),
+                opt.t
+            );
+
             if filtered_regions.is_empty() {
+                log::debug!(
+                    "[FINALIZE] Read {}: NO REGIONS after filtering - returning unmapped",
+                    query_name
+                );
                 return (
                     read_idx,
                     vec![create_unmapped_alignment_internal(query_name)],
@@ -367,7 +392,17 @@ pub fn finalize_alignments_soa(
                 });
             }
 
+            log::debug!(
+                "[FINALIZE] Read {}: {} alignments created from regions",
+                query_name,
+                alignments.len()
+            );
+
             if alignments.is_empty() {
+                log::debug!(
+                    "[FINALIZE] Read {}: NO ALIGNMENTS after CIGAR generation - returning unmapped",
+                    query_name
+                );
                 return (
                     read_idx,
                     vec![create_unmapped_alignment_internal(query_name)],
@@ -376,6 +411,17 @@ pub fn finalize_alignments_soa(
 
             // Mark secondary alignments
             super::super::finalization::mark_secondary_alignments(&mut alignments, opt);
+
+            log::debug!(
+                "[FINALIZE] Read {}: {} alignments after secondary marking (flags: {})",
+                query_name,
+                alignments.len(),
+                alignments
+                    .iter()
+                    .map(|a| format!("{}", a.flag))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
 
             (read_idx, alignments)
         })

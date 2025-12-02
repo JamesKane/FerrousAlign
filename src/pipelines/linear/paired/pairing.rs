@@ -452,17 +452,23 @@ pub fn pair_alignments_soa(
             soa_r1.flags[best_r1_idx] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
             soa_r2.flags[best_r2_idx] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
 
-            // Mark all other alignments as secondary
+            // Mark all other alignments as secondary (unless already supplementary)
             for offset in 0..r1_count {
                 let idx = r1_start + offset;
                 if idx != best_r1_idx {
-                    soa_r1.flags[idx] |= sam_flags::SECONDARY;
+                    // Don't mark as secondary if already supplementary
+                    if soa_r1.flags[idx] & sam_flags::SUPPLEMENTARY == 0 {
+                        soa_r1.flags[idx] |= sam_flags::SECONDARY;
+                    }
                 }
             }
             for offset in 0..r2_count {
                 let idx = r2_start + offset;
                 if idx != best_r2_idx {
-                    soa_r2.flags[idx] |= sam_flags::SECONDARY;
+                    // Don't mark as secondary if already supplementary
+                    if soa_r2.flags[idx] & sam_flags::SUPPLEMENTARY == 0 {
+                        soa_r2.flags[idx] |= sam_flags::SECONDARY;
+                    }
                 }
             }
 
@@ -473,14 +479,20 @@ pub fn pair_alignments_soa(
             soa_r1.flags[r1_start] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
             soa_r2.flags[r2_start] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
 
-            // Mark others as secondary
+            // Mark others as secondary (unless already supplementary)
             for offset in 1..r1_count {
                 let idx = r1_start + offset;
-                soa_r1.flags[idx] |= sam_flags::SECONDARY;
+                // Don't mark as secondary if already supplementary
+                if soa_r1.flags[idx] & sam_flags::SUPPLEMENTARY == 0 {
+                    soa_r1.flags[idx] |= sam_flags::SECONDARY;
+                }
             }
             for offset in 1..r2_count {
                 let idx = r2_start + offset;
-                soa_r2.flags[idx] |= sam_flags::SECONDARY;
+                // Don't mark as secondary if already supplementary
+                if soa_r2.flags[idx] & sam_flags::SUPPLEMENTARY == 0 {
+                    soa_r2.flags[idx] |= sam_flags::SECONDARY;
+                }
             }
 
             primary_r1.push(r1_start);

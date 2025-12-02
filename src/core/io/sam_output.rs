@@ -593,6 +593,19 @@ pub fn write_sam_records_soa<W: Write>(
                 is_unmapped || (!is_secondary && (is_primary || is_supplementary))
             };
 
+            log::debug!(
+                "[SAM_OUTPUT] Read {} aln {}/{}: flag={}, score={}, is_primary={}, is_secondary={}, is_supp={}, should_output={}",
+                soa_read_batch.names[read_idx],
+                i,
+                num_alignments,
+                soa_result.flags[aln_idx],
+                soa_result.scores[aln_idx],
+                is_primary,
+                is_secondary,
+                is_supplementary,
+                should_output
+            );
+
             if !should_output {
                 continue;
             }

@@ -816,6 +816,9 @@ fn find_primary_alignments(
 fn apply_supplementary_flags(alignments: &mut [Alignment], primary_indices: &[usize]) {
     for (idx, &i) in primary_indices.iter().enumerate() {
         if idx > 0 {
+            // Clear SECONDARY flag before setting SUPPLEMENTARY
+            // An alignment is either secondary OR supplementary, never both
+            alignments[i].flag &= !sam_flags::SECONDARY;
             alignments[i].flag |= sam_flags::SUPPLEMENTARY;
             log::debug!(
                 "Marked alignment {} as SUPPLEMENTARY ({}:{}, score={})",
