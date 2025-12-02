@@ -9,10 +9,9 @@
 #![cfg(target_arch = "x86_64")]
 
 use super::engines::SwEngine256;
-use crate::core::alignment::banded_swa::engines16::SwEngine256_16;
 use crate::core::alignment::banded_swa::OutScore;
+use crate::core::alignment::banded_swa::engines16::SwEngine256_16;
 use crate::{generate_swa_entry_i16, generate_swa_entry_i16_soa};
-
 
 /// AVX2-optimized banded Smith-Waterman for batches of up to 16 alignments (16-bit scores)
 ///
@@ -60,7 +59,6 @@ mod tests {
             results[0].score
         );
     }
-
 }
 
 use crate::generate_swa_entry_soa;

@@ -189,7 +189,7 @@ macro_rules! generate_swa_entry {
                 MAX_SEQ_LEN,
             >(&padded);
 
-            let params = crate::core::alignment::banded_swa::kernel::KernelParams {
+            let params = $crate::core::alignment::banded_swa::kernel::KernelParams {
                 batch,
                 query_soa: &query_soa,
                 target_soa: &target_soa,
@@ -210,7 +210,7 @@ macro_rules! generate_swa_entry {
             };
 
             // Placeholder call; returns empty Vec until the shared kernel is implemented.
-            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params, num_jobs)
+            $crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(&params, num_jobs)
         }
     };
 }
@@ -252,7 +252,7 @@ macro_rules! generate_swa_entry_i16 {
             for i in 0..W {
                 h0[i] = h0_i8[i] as i16;
             }
-            let params = crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
+            let params = $crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
                 batch,
                 query_soa: &query_soa_i16,
                 target_soa: &target_soa_i16,
@@ -271,7 +271,7 @@ macro_rules! generate_swa_entry_i16 {
                 m,
             };
             let num_jobs = batch.len().min(W);
-            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(
+            $crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(
                 &params, num_jobs,
             )
         }
@@ -328,7 +328,7 @@ macro_rules! generate_swa_entry_soa {
                 cfg: None,
             };
 
-            crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(
+            $crate::core::alignment::banded_swa::kernel::sw_kernel::<SIMD_WIDTH, $E>(
                 &params, num_jobs,
             )
         }
@@ -381,7 +381,7 @@ macro_rules! generate_swa_entry_i16_soa {
                 mat,
                 m,
             };
-            crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(
+            $crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(
                 &params, num_jobs,
             )
         }

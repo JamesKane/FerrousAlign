@@ -29,7 +29,7 @@ macro_rules! generate_ksw_entry_soa {
             ambig_penalty: i8,
             debug: bool,
         ) -> Vec<$crate::core::alignment::kswv_batch::KswResult> {
-            use crate::core::alignment::kswv_batch::{KswResult, SeqPair};
+            use $crate::core::alignment::kswv_batch::{KswResult, SeqPair};
 
             const W: usize = $W;
             let lanes = num_jobs.min(W);

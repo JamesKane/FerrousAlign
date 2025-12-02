@@ -297,11 +297,7 @@ pub fn dispatch_kswv_soa(
         let chunk_size = (count - offset).min(batch_size);
         let chunk_jobs = &jobs[offset..offset + chunk_size];
 
-        log::debug!(
-            "  Processing chunk offset={}, chunk_size={}",
-            offset,
-            chunk_size
-        );
+        log::debug!("  Processing chunk offset={offset}, chunk_size={chunk_size}");
 
         // SAFETY: Get raw pointer to workspace BEFORE any borrows.
         // We'll use this to access kernel buffers while SoA data borrows the workspace.
