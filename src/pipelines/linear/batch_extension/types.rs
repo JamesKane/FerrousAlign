@@ -459,6 +459,7 @@ impl SoAAlignmentResult {
         // Merge all results
         for result in results {
             // Track offsets for boundary adjustment
+            let alignment_base_offset = merged.query_names.len(); // Offset for alignment indices
             let cigar_base_offset = merged.cigar_ops.len();
             let seq_base_offset = merged.seqs.len();
             let tag_base_offset = merged.tag_names.len();
@@ -514,10 +515,14 @@ impl SoAAlignmentResult {
             merged.hashes.extend(result.hashes);
             merged.frac_reps.extend(result.frac_reps);
 
-            // Append per-read boundaries (no offset adjustment needed - these are per-result indices)
-            merged
-                .read_alignment_boundaries
-                .extend(result.read_alignment_boundaries);
+            // Append per-read boundaries WITH offset adjustment
+            // CRITICAL: start_idx references alignment array indices, which need adjustment when merging
+            merged.read_alignment_boundaries.extend(
+                result
+                    .read_alignment_boundaries
+                    .into_iter()
+                    .map(|(start, count)| (start + alignment_base_offset, count)),
+            );
         }
 
         merged

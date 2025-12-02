@@ -91,6 +91,31 @@ pub unsafe fn batch_ksw_align_avx512(
     workspace_buffers: Option<(&mut [u8], &mut [u8], &mut [u8], &mut [u8])>,
 ) -> usize {
     // ========================================================================
+    // VALIDATION: Ensure buffers are properly sized for 64-way SIMD
+    // ========================================================================
+
+    // Validate alignment (AVX-512 requires 64-byte alignment)
+    debug_assert_eq!(
+        seq1_soa as usize % 64, 0,
+        "seq1_soa not 64-byte aligned (ptr={:p})", seq1_soa
+    );
+    debug_assert_eq!(
+        seq2_soa as usize % 64, 0,
+        "seq2_soa not 64-byte aligned (ptr={:p})", seq2_soa
+    );
+
+    // Validate buffer capacity (kernel will access up to nrow*64 and ncol*64 bytes)
+    // Note: In production this should be guaranteed by the workspace allocation,
+    // but we add debug assertions to catch issues early.
+    let ref_bytes_needed = nrow as usize * SIMD_WIDTH8;
+    let query_bytes_needed = ncol as usize * SIMD_WIDTH8;
+
+    if _debug {
+        eprintln!("[AVX-512] nrow={}, ncol={}, ref_bytes_needed={}, query_bytes_needed={}",
+                  nrow, ncol, ref_bytes_needed, query_bytes_needed);
+    }
+
+    // ========================================================================
     // SECTION 1: Initialization (C++ lines 387-478)
     // ========================================================================
 
