@@ -1,4 +1,4 @@
-use super::types::{BatchedExtensionJob, ExtensionJobBatch};
+use super::types::BatchedExtensionJob;
 
 /// Build SoA (Structure-of-Arrays) interleaved buffers for the entire batch.
 ///
@@ -68,24 +68,4 @@ pub fn make_batch_soa<const W: usize>(
         }
     }
     (query_soa, target_soa, pos_offsets)
-}
-
-/// Get SoA views for a specific job in the batch.
-///
-/// NOTE: This is a diagnostic helper and is not performant. It constructs
-/// temporary vectors to represent the strided data for a single job.
-/// For kernel execution, the entire SoA buffer should be used directly.
-///
-/// # Arguments
-/// * `job_idx` - The index of the job to get views for.
-///
-/// # Returns
-/// This implementation is a placeholder, as returning a true strided slice
-/// is not directly possible. It will return empty slices.
-pub fn soa_views_for_job(batch: &ExtensionJobBatch, job_idx: usize) -> (&[u8], i32, &[u8], i32) {
-    // This is a diagnostic function. For now, we return empty slices as it's not
-    // trivial to return a strided view as a standard slice. The core logic
-    // will pass the entire SoA buffer to the kernels.
-    let _ = (batch, job_idx);
-    (&[], 0, &[], 0)
 }
