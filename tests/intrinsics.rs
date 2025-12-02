@@ -348,6 +348,27 @@ mod aarch64_tests {
     }
 
     #[test]
+    fn test_min_epi8() {
+        use ferrous_align::compute::simd_abstraction::portable_intrinsics::_mm_min_epi8;
+        unsafe {
+            let a_data: [i8; 16] = [10, -5, 3, 100, -100, 0, 50, -50, 1, 2, 3, 4, 5, 6, 7, 8];
+            let b_data: [i8; 16] = [5, -10, 10, 50, -50, 10, 25, -25, 8, 7, 6, 5, 4, 3, 2, 1];
+
+            let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr() as *const u8));
+            let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr() as *const u8));
+
+            let result = _mm_min_epi8(a, b);
+
+            let mut actual: [i8; 16] = [0; 16];
+            aarch64::vst1q_s8(actual.as_mut_ptr(), result.as_s8());
+
+            // Expected: element-wise signed minimum
+            let expected: [i8; 16] = [5, -10, 3, 50, -100, 0, 25, -50, 1, 2, 3, 4, 4, 3, 2, 1];
+            assert_eq!(actual, expected, "test_min_epi8");
+        }
+    }
+
+    #[test]
     fn test_unpackhi_epi8() {
         unsafe {
             let a_data: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
