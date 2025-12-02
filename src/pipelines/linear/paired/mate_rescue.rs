@@ -1880,10 +1880,13 @@ fn collect_rescue_jobs_for_read_soa(
     let anchor_ref_len =
         reference_length_from_cigar_soa_rescue(soa_anchor, anchor_primary_idx) as i64;
 
-    // Get mate sequence
+    // Get mate sequence (ASCII from FASTQ)
     let (seq_start, seq_len) = reads_rescued.read_boundaries[read_idx];
-    let mate_seq = &reads_rescued.seqs[seq_start..seq_start + seq_len];
+    let mate_seq_ascii = &reads_rescued.seqs[seq_start..seq_start + seq_len];
     let mate_name = &reads_rescued.names[read_idx];
+
+    // Encode to 2-bit representation for Smith-Waterman (A=0, C=1, G=2, T=3, N=4)
+    let mate_seq = crate::core::alignment::utils::encode_sequence(mate_seq_ascii);
 
     let l_pac = bwa_idx.bns.packed_sequence_length as i64;
     let min_seed_len = bwa_idx.min_seed_len;

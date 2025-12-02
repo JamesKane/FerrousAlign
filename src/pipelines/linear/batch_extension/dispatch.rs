@@ -307,6 +307,18 @@ pub fn dispatch_kswv_soa(
         // Transpose this chunk to SoA layout (borrows ws)
         let inputs = ws.ensure_and_transpose_ksw(chunk_jobs, batch_size);
 
+        // Debug: Check if input lengths are valid
+        if chunk_jobs.len() > 0 {
+            log::debug!(
+                "  First job: qlen={} tlen={} band={} query[0..5]={:?} target[0..5]={:?}",
+                chunk_jobs[0].qlen,
+                chunk_jobs[0].tlen,
+                chunk_jobs[0].band,
+                &chunk_jobs[0].query[..chunk_jobs[0].qlen.min(5)],
+                &chunk_jobs[0].target[..chunk_jobs[0].tlen.min(5)]
+            );
+        }
+
         let chunk_results = unsafe {
             match engine {
                 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
@@ -354,6 +366,23 @@ pub fn dispatch_kswv_soa(
         };
 
         log::debug!("  Chunk returned {} results", chunk_results.len());
+
+        // Debug: Check if any results have non-zero scores
+        let non_zero_scores = chunk_results.iter().filter(|r| r.score > 0).count();
+        if non_zero_scores == 0 && chunk_results.len() > 0 {
+            log::debug!(
+                "  WARNING: All {} results have score=0! First result: score={} qe={} te={} qb={} tb={}",
+                chunk_results.len(),
+                chunk_results[0].score,
+                chunk_results[0].qe,
+                chunk_results[0].te,
+                chunk_results[0].qb,
+                chunk_results[0].tb
+            );
+        } else {
+            log::debug!("  {} results have score > 0", non_zero_scores);
+        }
+
         all_results.extend(chunk_results);
         offset += chunk_size;
     }
