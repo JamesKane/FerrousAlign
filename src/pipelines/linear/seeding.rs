@@ -781,7 +781,9 @@ pub fn get_sa_entries(
     interval_size: u64,
     max_occurrences: u32,
 ) -> Vec<u64> {
-    let mut ref_positions = Vec::new();
+    // Pre-size with exact capacity since we know the size
+    let num_to_retrieve = (interval_size as u32).min(max_occurrences);
+    let mut ref_positions = Vec::with_capacity(num_to_retrieve as usize);
 
     // For repetitive seeds, we need to sample evenly across the ENTIRE interval
     // to ensure we cover all reference positions, not just a clustered subset.
@@ -791,8 +793,6 @@ pub fn get_sa_entries(
     //
     // We use floating-point arithmetic to ensure even distribution across the
     // full interval range.
-    let num_to_retrieve = (interval_size as u32).min(max_occurrences);
-
     let actual_num = num_to_retrieve;
 
     if num_to_retrieve == 0 {
@@ -1295,7 +1295,8 @@ pub fn find_seeds_batch(
         }
 
         // Filter SMEMs
-        let mut unique_filtered_smems: Vec<SMEM> = Vec::new();
+        // Pre-size with capacity based on input size
+        let mut unique_filtered_smems: Vec<SMEM> = Vec::with_capacity(all_smems.len());
         all_smems.sort_by_key(|smem| {
             (
                 smem.query_start,
@@ -1418,8 +1419,9 @@ pub fn find_seeds_batch(
             (SEEDS_PER_READ / sorted_smems.len()).max(1)
         };
 
-        let mut current_read_seeds: Vec<Seed> = Vec::new();
-        let mut seeds_per_smem_count = Vec::new(); // Track seeds generated per SMEM for Phase 2 validation
+        // Pre-size seed accumulator based on expected seeds per read
+        let mut current_read_seeds: Vec<Seed> = Vec::with_capacity(SEEDS_PER_READ);
+        let mut seeds_per_smem_count = Vec::with_capacity(sorted_smems.len()); // Track seeds generated per SMEM for Phase 2 validation
 
         for (smem_idx, smem) in sorted_smems.iter().enumerate() {
             let seeds_before = current_read_seeds.len();

@@ -767,7 +767,8 @@ fn find_primary_alignments(
     mask_level: f32,
     score_gap_threshold: i32,
 ) -> (Vec<usize>, Vec<i32>, Vec<i32>) {
-    let mut primary_indices: Vec<usize> = Vec::new();
+    // Pre-size with capacity to avoid reallocations (typically 1-3 primaries per read)
+    let mut primary_indices: Vec<usize> = Vec::with_capacity(alignments.len().min(4));
     let mut sub_scores: Vec<i32> = vec![0; alignments.len()];
     let mut sub_counts: Vec<i32> = vec![0; alignments.len()];
 
@@ -876,7 +877,8 @@ fn filter_supplementary_by_score(
     let before_filter = alignments.len();
 
     // Mark low-scoring supplementary for removal
-    let mut to_remove: Vec<usize> = Vec::new();
+    // Pre-size with capacity (typically 0-2 supplementary per read)
+    let mut to_remove: Vec<usize> = Vec::with_capacity(alignments.len().min(4));
     for i in 0..alignments.len() {
         if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0
             && alignments[i].score < supp_threshold
