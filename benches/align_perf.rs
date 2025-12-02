@@ -274,7 +274,8 @@ fn bench_kswv(c: &mut Criterion) {
             b.iter_batched(
                 || AlignmentWorkspace::new(),
                 |mut ws| unsafe {
-                    let _r: Vec<KswResult> = kswv16_soa(&inputs, &mut ws, 16, 1, 0, 6, 1, 6, 1, -1, false);
+                    let _r: Vec<KswResult> =
+                        kswv16_soa(&inputs, &mut ws, 16, 1, 0, 6, 1, 6, 1, -1, false);
                     black_box(_r)
                 },
                 BatchSize::SmallInput,
@@ -317,7 +318,8 @@ fn bench_kswv(c: &mut Criterion) {
             b.iter_batched(
                 || AlignmentWorkspace::new(),
                 |mut ws| unsafe {
-                    let _r: Vec<KswResult> = kswv32_soa(&inputs, &mut ws, 32, 1, 0, 6, 1, 6, 1, -1, false);
+                    let _r: Vec<KswResult> =
+                        kswv32_soa(&inputs, &mut ws, 32, 1, 0, 6, 1, 6, 1, -1, false);
                     black_box(_r)
                 },
                 BatchSize::SmallInput,

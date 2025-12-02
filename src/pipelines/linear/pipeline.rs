@@ -1115,7 +1115,10 @@ mod tests {
     // ========================================================================
 
     #[test]
-    #[cfg_attr(target_arch = "aarch64", ignore = "NEON kernel path needs investigation")]
+    #[cfg_attr(
+        target_arch = "aarch64",
+        ignore = "NEON kernel path needs investigation"
+    )]
     fn test_align_read_basic() {
         use crate::compute::detect_optimal_backend;
         use std::path::Path;
@@ -1179,7 +1182,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(target_arch = "aarch64", ignore = "NEON kernel path needs investigation")]
+    #[cfg_attr(
+        target_arch = "aarch64",
+        ignore = "NEON kernel path needs investigation"
+    )]
     fn test_deferred_cigar_pipeline() {
         use crate::compute::detect_optimal_backend;
         use std::path::Path;

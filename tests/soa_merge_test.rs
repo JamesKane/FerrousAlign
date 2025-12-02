@@ -163,20 +163,32 @@ fn test_merge_all_basic_two_chunks() {
     assert_eq!(merged.read_alignment_boundaries.len(), 4);
 
     // Read 0 boundaries should be unchanged (0, 2)
-    assert_eq!(merged.read_alignment_boundaries[0], (0, 2),
-        "Read 0 should have 2 alignments starting at index 0");
+    assert_eq!(
+        merged.read_alignment_boundaries[0],
+        (0, 2),
+        "Read 0 should have 2 alignments starting at index 0"
+    );
 
     // Read 1 boundaries should be unchanged (2, 1)
-    assert_eq!(merged.read_alignment_boundaries[1], (2, 1),
-        "Read 1 should have 1 alignment at index 2");
+    assert_eq!(
+        merged.read_alignment_boundaries[1],
+        (2, 1),
+        "Read 1 should have 1 alignment at index 2"
+    );
 
     // Read 2 boundaries should be offset-adjusted: (0, 1) -> (3, 1)
-    assert_eq!(merged.read_alignment_boundaries[2], (3, 1),
-        "Read 2 should have 1 alignment at index 3 (was 0 in chunk, +3 offset)");
+    assert_eq!(
+        merged.read_alignment_boundaries[2],
+        (3, 1),
+        "Read 2 should have 1 alignment at index 3 (was 0 in chunk, +3 offset)"
+    );
 
     // Read 3 boundaries should be offset-adjusted: (1, 1) -> (4, 1)
-    assert_eq!(merged.read_alignment_boundaries[3], (4, 1),
-        "Read 3 should have 1 alignment at index 4 (was 1 in chunk, +3 offset)");
+    assert_eq!(
+        merged.read_alignment_boundaries[3],
+        (4, 1),
+        "Read 3 should have 1 alignment at index 4 (was 1 in chunk, +3 offset)"
+    );
 
     // Verify alignment data is accessible via boundaries
     let (start, count) = merged.read_alignment_boundaries[2];
@@ -324,9 +336,21 @@ fn test_merge_all_three_chunks() {
     assert_eq!(merged.len(), 6); // 2 + 3 + 1
 
     // Verify cumulative offset adjustment
-    assert_eq!(merged.read_alignment_boundaries[0], (0, 2), "Read 0: alignments 0-1");
-    assert_eq!(merged.read_alignment_boundaries[1], (2, 3), "Read 1: alignments 2-4 (was 0-2, +2 offset)");
-    assert_eq!(merged.read_alignment_boundaries[2], (5, 1), "Read 2: alignment 5 (was 0, +5 offset)");
+    assert_eq!(
+        merged.read_alignment_boundaries[0],
+        (0, 2),
+        "Read 0: alignments 0-1"
+    );
+    assert_eq!(
+        merged.read_alignment_boundaries[1],
+        (2, 3),
+        "Read 1: alignments 2-4 (was 0-2, +2 offset)"
+    );
+    assert_eq!(
+        merged.read_alignment_boundaries[2],
+        (5, 1),
+        "Read 2: alignment 5 (was 0, +5 offset)"
+    );
 }
 
 /// Test that reads with zero alignments are handled correctly
@@ -398,9 +422,21 @@ fn test_merge_all_with_zero_alignment_reads() {
     assert_eq!(merged.num_reads(), 3);
     assert_eq!(merged.len(), 2); // Only 2 alignments total
 
-    assert_eq!(merged.read_alignment_boundaries[0], (0, 1), "Read 0: 1 alignment");
-    assert_eq!(merged.read_alignment_boundaries[1], (1, 0), "Read 1: 0 alignments (unmapped)");
-    assert_eq!(merged.read_alignment_boundaries[2], (1, 1), "Read 2: 1 alignment at index 1 (was 0, +1 offset)");
+    assert_eq!(
+        merged.read_alignment_boundaries[0],
+        (0, 1),
+        "Read 0: 1 alignment"
+    );
+    assert_eq!(
+        merged.read_alignment_boundaries[1],
+        (1, 0),
+        "Read 1: 0 alignments (unmapped)"
+    );
+    assert_eq!(
+        merged.read_alignment_boundaries[2],
+        (1, 1),
+        "Read 2: 1 alignment at index 1 (was 0, +1 offset)"
+    );
 }
 
 /// Regression test for the exact bug that caused 66% mapping loss
@@ -431,7 +467,9 @@ fn test_merge_all_regression_thread_safety_bug() {
             chunk1.seq_boundaries.push((chunk1.seqs.len() - 1, 1));
             chunk1.cigar_ops.push(0);
             chunk1.cigar_lens.push(50);
-            chunk1.cigar_boundaries.push((chunk1.cigar_ops.len() - 1, 1));
+            chunk1
+                .cigar_boundaries
+                .push((chunk1.cigar_ops.len() - 1, 1));
             chunk1.tag_names.push("AS".to_string());
             chunk1.tag_values.push("100".to_string());
             chunk1.tag_boundaries.push((chunk1.tag_names.len() - 1, 1));
@@ -442,7 +480,9 @@ fn test_merge_all_regression_thread_safety_bug() {
             chunk1.frac_reps.push(0.0);
         }
 
-        chunk1.read_alignment_boundaries.push((start_idx, num_aligns));
+        chunk1
+            .read_alignment_boundaries
+            .push((start_idx, num_aligns));
     }
 
     let chunk1_total_alignments = chunk1.len();
@@ -468,7 +508,9 @@ fn test_merge_all_regression_thread_safety_bug() {
             chunk2.seq_boundaries.push((chunk2.seqs.len() - 1, 1));
             chunk2.cigar_ops.push(0);
             chunk2.cigar_lens.push(50);
-            chunk2.cigar_boundaries.push((chunk2.cigar_ops.len() - 1, 1));
+            chunk2
+                .cigar_boundaries
+                .push((chunk2.cigar_ops.len() - 1, 1));
             chunk2.tag_names.push("AS".to_string());
             chunk2.tag_values.push("100".to_string());
             chunk2.tag_boundaries.push((chunk2.tag_names.len() - 1, 1));
@@ -479,7 +521,9 @@ fn test_merge_all_regression_thread_safety_bug() {
             chunk2.frac_reps.push(0.0);
         }
 
-        chunk2.read_alignment_boundaries.push((start_idx, num_aligns));
+        chunk2
+            .read_alignment_boundaries
+            .push((start_idx, num_aligns));
     }
 
     let merged = SoAAlignmentResult::merge_all(vec![chunk1, chunk2]);
@@ -491,21 +535,35 @@ fn test_merge_all_regression_thread_safety_bug() {
         let (start, count) = merged.read_alignment_boundaries[read_idx];
 
         // All indices should be >= chunk1_total_alignments
-        assert!(start >= chunk1_total_alignments,
+        assert!(
+            start >= chunk1_total_alignments,
             "Read {} boundary start {} should be >= {} (chunk1 size)",
-            read_idx, start, chunk1_total_alignments);
+            read_idx,
+            start,
+            chunk1_total_alignments
+        );
 
         // Verify we can access the alignment data
-        assert!(start + count <= merged.len(),
+        assert!(
+            start + count <= merged.len(),
             "Read {} boundary [{}, {}) exceeds merged alignment count {}",
-            read_idx, start, start + count, merged.len());
+            read_idx,
+            start,
+            start + count,
+            merged.len()
+        );
 
         // Verify the alignment actually belongs to this read
         if count > 0 {
             let query_name = &merged.query_names[start];
-            assert_eq!(query_name, &format!("read{}", read_idx),
+            assert_eq!(
+                query_name,
+                &format!("read{}", read_idx),
                 "Read {} alignment at index {} has wrong query name: {}",
-                read_idx, start, query_name);
+                read_idx,
+                start,
+                query_name
+            );
         }
     }
 }

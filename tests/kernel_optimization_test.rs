@@ -6,10 +6,10 @@
 // 2. Hoisting of temporary array allocations
 // 3. Correctness of SIMD operations across all supported widths
 
-use ferrous_align::alignment::banded_swa::kernel::{sw_kernel, KernelParams, SwEngine128};
+use ferrous_align::alignment::banded_swa::bwa_fill_scmat;
 #[cfg(target_arch = "x86_64")]
 use ferrous_align::alignment::banded_swa::kernel::SwEngine256;
-use ferrous_align::alignment::banded_swa::bwa_fill_scmat;
+use ferrous_align::alignment::banded_swa::kernel::{KernelParams, SwEngine128, sw_kernel};
 
 /// Helper to create test parameters for kernel testing
 fn create_test_params<'a>(
@@ -97,12 +97,14 @@ fn test_kernel_identical_sequence_alignment() {
             result.score
         );
         assert_eq!(
-            result.query_end_pos, (seq_len - 1) as i32,
+            result.query_end_pos,
+            (seq_len - 1) as i32,
             "Lane {}: Query end should be at last position",
             i
         );
         assert_eq!(
-            result.target_end_pos, (seq_len - 1) as i32,
+            result.target_end_pos,
+            (seq_len - 1) as i32,
             "Lane {}: Target end should be at last position",
             i
         );
@@ -413,22 +415,16 @@ fn test_kernel_zero_length_edge_case() {
     let h0 = vec![0i8; num_lanes];
     let w = vec![10i8; num_lanes];
 
-    let params = create_test_params(
-        &query_soa,
-        &target_soa,
-        &qlen,
-        &tlen,
-        &h0,
-        &w,
-        0,
-        0,
-        &mat,
-    );
+    let params = create_test_params(&query_soa, &target_soa, &qlen, &tlen, &h0, &w, 0, 0, &mat);
 
     let results = unsafe { sw_kernel::<16, SwEngine128>(&params, num_lanes) };
 
     // Should return empty results for zero-length sequences
-    assert_eq!(results.len(), 0, "Zero-length sequences should produce no results");
+    assert_eq!(
+        results.len(),
+        0,
+        "Zero-length sequences should produce no results"
+    );
 }
 
 #[test]

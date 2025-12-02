@@ -686,7 +686,7 @@ macro_rules! mm_slli_epi16 {
         #[cfg(target_arch = "aarch64")]
         unsafe {
             $crate::compute::simd_abstraction::types::__m128i::from_s16(
-                std::arch::aarch64::vshlq_n_s16($a.as_s16(), $imm8)
+                std::arch::aarch64::vshlq_n_s16($a.as_s16(), $imm8),
             )
         }
     }};
@@ -704,9 +704,11 @@ macro_rules! mm_srli_si128 {
             if $imm8 >= 16 {
                 $crate::compute::simd_abstraction::portable_intrinsics::_mm_setzero_si128()
             } else {
-                $crate::compute::simd_abstraction::types::__m128i(
-                    std::arch::aarch64::vextq_u8(std::arch::aarch64::vdupq_n_u8(0), $a.0, $imm8)
-                )
+                $crate::compute::simd_abstraction::types::__m128i(std::arch::aarch64::vextq_u8(
+                    std::arch::aarch64::vdupq_n_u8(0),
+                    $a.0,
+                    $imm8,
+                ))
             }
         }
     }};
@@ -722,11 +724,14 @@ macro_rules! mm_alignr_epi8 {
         #[cfg(target_arch = "aarch64")]
         unsafe {
             if $imm8 >= 16 {
-                $crate::compute::simd_abstraction::portable_intrinsics::_mm_srli_si128_var($a, $imm8 - 16)
-            } else {
-                $crate::compute::simd_abstraction::types::__m128i(
-                    std::arch::aarch64::vextq_u8($b.0, $a.0, $imm8)
+                $crate::compute::simd_abstraction::portable_intrinsics::_mm_srli_si128_var(
+                    $a,
+                    $imm8 - 16,
                 )
+            } else {
+                $crate::compute::simd_abstraction::types::__m128i(std::arch::aarch64::vextq_u8(
+                    $b.0, $a.0, $imm8,
+                ))
             }
         }
     }};

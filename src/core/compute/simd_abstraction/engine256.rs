@@ -28,7 +28,7 @@ use super::types::simd_arch;
 // We use the generic match_shift_immediate! and match_alignr_immediate! macros
 // instead of defining engine-specific versions. This eliminates ~50 lines of
 // duplication per engine while maintaining zero runtime overhead.
-use crate::{match_shift_immediate, match_alignr_immediate};
+use crate::{match_alignr_immediate, match_shift_immediate};
 
 #[cfg(target_arch = "x86_64")]
 /// 256-bit SIMD engine (AVX2 on x86_64)
@@ -156,7 +156,12 @@ impl SimdEngine for SimdEngine256 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn slli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        match_shift_immediate!(a, num_bytes, simd_arch::_mm256_slli_si256, simd_arch::_mm256_setzero_si256())
+        match_shift_immediate!(
+            a,
+            num_bytes,
+            simd_arch::_mm256_slli_si256,
+            simd_arch::_mm256_setzero_si256()
+        )
     }
 
     #[inline]
@@ -168,7 +173,12 @@ impl SimdEngine for SimdEngine256 {
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn srli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
-        match_shift_immediate!(a, num_bytes, simd_arch::_mm256_srli_si256, simd_arch::_mm256_setzero_si256())
+        match_shift_immediate!(
+            a,
+            num_bytes,
+            simd_arch::_mm256_srli_si256,
+            simd_arch::_mm256_setzero_si256()
+        )
     }
 
     #[inline]

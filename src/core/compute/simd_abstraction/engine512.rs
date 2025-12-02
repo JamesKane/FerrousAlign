@@ -28,7 +28,7 @@ use super::types::simd_arch;
 // duplication per engine while maintaining zero runtime overhead.
 // Note: AVX-512 uses _mm512_bslli_epi128 / _mm512_bsrli_epi128 for byte shifts
 // within each 128-bit lane (not across the whole register).
-use crate::{match_shift_immediate, match_alignr_immediate_or};
+use crate::{match_alignr_immediate_or, match_shift_immediate};
 
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 /// AVX‑512BW SIMD backend implementing `SimdEngine` for 512‑bit vectors.
@@ -158,7 +158,12 @@ impl SimdEngine for SimdEngine512 {
     #[target_feature(enable = "avx512bw")]
     unsafe fn slli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
         // AVX-512 uses _mm512_bslli_epi128 for byte shifts within each 128-bit lane
-        match_shift_immediate!(a, num_bytes, simd_arch::_mm512_bslli_epi128, simd_arch::_mm512_setzero_si512())
+        match_shift_immediate!(
+            a,
+            num_bytes,
+            simd_arch::_mm512_bslli_epi128,
+            simd_arch::_mm512_setzero_si512()
+        )
     }
 
     #[inline]
@@ -171,7 +176,12 @@ impl SimdEngine for SimdEngine512 {
     #[target_feature(enable = "avx512bw")]
     unsafe fn srli_bytes(a: Self::Vec8, num_bytes: i32) -> Self::Vec8 {
         // AVX-512 uses _mm512_bsrli_epi128 for byte shifts within each 128-bit lane
-        match_shift_immediate!(a, num_bytes, simd_arch::_mm512_bsrli_epi128, simd_arch::_mm512_setzero_si512())
+        match_shift_immediate!(
+            a,
+            num_bytes,
+            simd_arch::_mm512_bsrli_epi128,
+            simd_arch::_mm512_setzero_si512()
+        )
     }
 
     #[inline]
