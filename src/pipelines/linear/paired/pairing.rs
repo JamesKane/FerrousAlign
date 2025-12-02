@@ -441,10 +441,19 @@ pub fn pair_alignments_soa(
         // Use read index for deterministic tie-breaking
         let pair_id = read_idx as u64;
 
+        // Debug logging
+        if read_idx == 10 {
+            log::debug!("CALLING find_best_pair_soa for read_idx={}", read_idx);
+        }
+
         // Find best pair using SoA data
         if let Some((best_r1_offset, best_r2_offset, _, _)) =
             find_best_pair_soa(soa_r1, soa_r2, read_idx, stats, match_score, pair_id, l_pac)
         {
+            if read_idx == 10 {
+                log::debug!("RETURNED from find_best_pair_soa: best_r1_offset={} best_r2_offset={}",
+                    best_r1_offset, best_r2_offset);
+            }
             let best_r1_idx = r1_start + best_r1_offset;
             let best_r2_idx = r2_start + best_r2_offset;
 
@@ -538,6 +547,12 @@ fn find_best_pair_soa(
             | ((offset as u64) << 2)
             | ((is_in_reverse_half as u64) << 1); // 0 = read1
 
+        if read_idx == 10 {
+            eprintln!("R1[{}] sam_pos={} ref_id={} is_rev={} aln_len={} bidir_pos={} fwd_norm_pos={} score={}",
+                offset, soa_r1.positions[idx], soa_r1.ref_ids[idx], is_reverse, alignment_length,
+                bidir_pos, fwd_normalized_pos, soa_r1.scores[idx]);
+        }
+
         alignments_sorted.push(AlignmentForPairing {
             sort_key,
             packed_info,
@@ -561,6 +576,12 @@ fn find_best_pair_soa(
             | ((is_in_reverse_half as u64) << 1)
             | 1; // 1 = read2
 
+        if read_idx == 10 {
+            eprintln!("R2[{}] sam_pos={} ref_id={} is_rev={} aln_len={} bidir_pos={} fwd_norm_pos={} score={}",
+                offset, soa_r2.positions[idx], soa_r2.ref_ids[idx], is_reverse, alignment_length,
+                bidir_pos, fwd_normalized_pos, soa_r2.scores[idx]);
+        }
+
         alignments_sorted.push(AlignmentForPairing {
             sort_key,
             packed_info,
@@ -573,6 +594,28 @@ fn find_best_pair_soa(
     // Track last seen alignment index for each (read_number, strand_half) combination
     let mut last_seen_idx: [i32; 4] = [-1; 4];
 
+    // Debug logging for problem read - show alignment positions
+    if read_idx == 10 {
+        eprintln!("=== READ_IDX=10 PAIRING DEBUG ===");
+        eprintln!("Insert size stats:");
+        for (i, stat) in stats.iter().enumerate() {
+            eprintln!("  [{}] avg={:.1} std={:.1} low={} high={} failed={}",
+                i, stat.avg, stat.std, stat.low, stat.high, stat.failed);
+        }
+        eprintln!("R1 alignments (count={}):", r1_count);
+        for offset in 0..r1_count {
+            let idx = r1_start + offset;
+            eprintln!("  R1[{}] pos={} score={} ref_id={}",
+                offset, soa_r1.positions[idx], soa_r1.scores[idx], soa_r1.ref_ids[idx]);
+        }
+        eprintln!("R2 alignments (count={}):", r2_count);
+        for offset in 0..r2_count {
+            let idx = r2_start + offset;
+            eprintln!("  R2[{}] pos={} score={} ref_id={}",
+                offset, soa_r2.positions[idx], soa_r2.scores[idx], soa_r2.ref_ids[idx]);
+        }
+    }
+
     // Collect valid candidate pairs
     let mut candidate_pairs: Vec<CandidatePairScore> = Vec::new();
 
@@ -580,10 +623,20 @@ fn find_best_pair_soa(
     for current_idx in 0..alignments_sorted.len() {
         let current = &alignments_sorted[current_idx];
 
+        if read_idx == 10 && current_idx < 5 {
+            eprintln!("Checking current_idx={} read_num={} strand_half={}",
+                current_idx, current.packed_info & 1, (current.packed_info >> 1) & 1);
+        }
+
         // Try both possible mate strand configurations
         for mate_strand_config in 0..2 {
             let current_strand_half = (current.packed_info >> 1) & 1;
             let orientation_idx = ((mate_strand_config << 1) | current_strand_half) as usize;
+
+            if read_idx == 10 && current_idx < 5 {
+                eprintln!("  mate_config={} orientation_idx={} failed={}",
+                    mate_strand_config, orientation_idx, stats[orientation_idx].failed);
+            }
 
             if stats[orientation_idx].failed {
                 continue;
@@ -593,20 +646,38 @@ fn find_best_pair_soa(
             let mate_read_num = current_read_num ^ 1;
             let mate_lookup_key = ((mate_strand_config << 1) | mate_read_num) as usize;
 
+            if read_idx == 10 && current_idx < 5 {
+                eprintln!("    mate_lookup_key={} last_seen={}", mate_lookup_key, last_seen_idx[mate_lookup_key]);
+            }
+
             if last_seen_idx[mate_lookup_key] < 0 {
+                if read_idx == 10 && current_idx < 5 {
+                    eprintln!("    SKIP: no previous mate seen");
+                }
                 continue;
             }
 
             // Search backward for compatible pairs
             let mut search_idx = last_seen_idx[mate_lookup_key] as usize;
+
+            if read_idx == 10 && current_idx < 5 {
+                eprintln!("    Searching backward from search_idx={}", search_idx);
+            }
+
             loop {
                 if search_idx >= alignments_sorted.len() {
+                    if read_idx == 10 && current_idx < 5 {
+                        eprintln!("      BREAK: search_idx out of bounds");
+                    }
                     break;
                 }
 
                 let candidate_mate = &alignments_sorted[search_idx];
 
                 if (candidate_mate.packed_info & 3) != mate_lookup_key as u64 {
+                    if read_idx == 10 && current_idx < 5 {
+                        eprintln!("      search_idx={}: wrong lookup_key", search_idx);
+                    }
                     if search_idx == 0 {
                         break;
                     }
@@ -614,13 +685,47 @@ fn find_best_pair_soa(
                     continue;
                 }
 
-                let distance = (current.sort_key as i64) - (candidate_mate.sort_key as i64);
+                // Extract ref_id and position from packed sort_key
+                // sort_key format: [ref_id: 32 bits][position: 32 bits]
+                let current_ref = (current.sort_key >> 32) as u32;
+                let mate_ref = (candidate_mate.sort_key >> 32) as u32;
+
+                // Skip if alignments are on different chromosomes
+                if current_ref != mate_ref {
+                    if read_idx == 10 && current_idx < 5 {
+                        eprintln!("      search_idx={}: SKIP different chromosomes (ref {} vs {})",
+                            search_idx, current_ref, mate_ref);
+                    }
+                    if search_idx == 0 {
+                        break;
+                    }
+                    search_idx -= 1;
+                    continue;
+                }
+
+                // Extract fwd_normalized positions from sort_key for distance calculation
+                // These are in the same coordinate system as bootstrap insert size stats
+                // (projected to forward strand, similar to BWA-MEM2's approach)
+                let current_pos = (current.sort_key & 0xFFFFFFFF) as i64;
+                let mate_pos = (candidate_mate.sort_key & 0xFFFFFFFF) as i64;
+                let distance = (current_pos - mate_pos).abs();
+
+                if read_idx == 10 && current_idx < 5 {
+                    eprintln!("      search_idx={}: ref={} current_pos={} mate_pos={} distance={} (low={} high={})",
+                        search_idx, current_ref, current_pos, mate_pos, distance, stats[orientation_idx].low, stats[orientation_idx].high);
+                }
 
                 if distance > stats[orientation_idx].high as i64 {
+                    if read_idx == 10 && current_idx < 5 {
+                        eprintln!("        BREAK: distance > high");
+                    }
                     break;
                 }
 
                 if distance < stats[orientation_idx].low as i64 {
+                    if read_idx == 10 && current_idx < 5 {
+                        eprintln!("        SKIP: distance < low");
+                    }
                     if search_idx == 0 {
                         break;
                     }
@@ -664,6 +769,13 @@ fn find_best_pair_soa(
                     tiebreak_hash,
                 });
 
+                // Debug logging for problem read
+                if read_idx == 10 {
+                    eprintln!("  PAIR r1_idx={} r2_idx={} dist={} norm={:.2} pen={:.1} scores={}+{} combined={}",
+                        read1_idx, read2_idx, distance, normalized_insert_size,
+                        insert_size_log_penalty, current_score, mate_score, combined_score);
+                }
+
                 if search_idx == 0 {
                     break;
                 }
@@ -675,7 +787,14 @@ fn find_best_pair_soa(
         last_seen_idx[current_lookup_key] = current_idx as i32;
     }
 
+    if read_idx == 10 {
+        eprintln!("Generated {} candidate pairs", candidate_pairs.len());
+    }
+
     if candidate_pairs.is_empty() {
+        if read_idx == 10 {
+            eprintln!("NO PAIRS FOUND - returning None");
+        }
         return None;
     }
 
@@ -691,6 +810,22 @@ fn find_best_pair_soa(
     } else {
         0
     };
+
+    // Debug logging for problem read
+    if read_idx == 10 {
+        eprintln!("=== SELECTED BEST PAIR ===");
+        eprintln!("  n_pairs={} best: r1_idx={} r2_idx={} score={} second_best={}",
+            candidate_pairs.len(),
+            best_pair.read1_alignment_idx, best_pair.read2_alignment_idx,
+            best_pair.combined_score, second_best_score);
+
+        // Show top 5 pairs
+        eprintln!("  Top 5 pairs:");
+        for (i, pair) in candidate_pairs.iter().take(5).enumerate() {
+            eprintln!("    {}. r1={} r2={} score={}", i, pair.read1_alignment_idx,
+                pair.read2_alignment_idx, pair.combined_score);
+        }
+    }
 
     Some((
         best_pair.read1_alignment_idx,
