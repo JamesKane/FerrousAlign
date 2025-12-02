@@ -379,5 +379,197 @@ pub fn bootstrap_insert_size_stats(
     }
 }
 
+/// Bootstrap insert size statistics from SoA alignment results
+///
+/// SoA-native version that operates directly on SoAAlignmentResult without
+/// converting to Alignment structs. This is the primary entry point for the
+/// pure SoA pipeline.
+///
+/// # Arguments
+/// * `soa_r1` - SoA alignment results for read 1
+/// * `soa_r2` - SoA alignment results for read 2
+/// * `l_pac` - Packed reference length (for bidirectional coordinate space)
+///
+/// # Returns
+/// Array of InsertSizeStats for 4 orientations: FF, FR, RF, RR
+pub fn bootstrap_insert_size_stats_soa(
+    soa_r1: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_r2: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    l_pac: i64,
+) -> [InsertSizeStats; 4] {
+    let num_reads = soa_r1.num_reads();
+
+    log::info!(
+        "[PE] Inferring insert size distribution from data (n={})",
+        num_reads * 2
+    );
+
+    // Extract position pairs from SoA results
+    let mut position_pairs: Vec<(i64, i64)> = Vec::new();
+
+    for read_idx in 0..num_reads {
+        let (r1_start, r1_count) = soa_r1.read_alignment_boundaries[read_idx];
+        let (r2_start, r2_count) = soa_r2.read_alignment_boundaries[read_idx];
+
+        if r1_count == 0 || r2_count == 0 {
+            continue; // No alignments for this read pair
+        }
+
+        // Get best alignment for R1 (highest score)
+        let best_r1_idx = (r1_start..r1_start + r1_count).max_by_key(|&i| soa_r1.scores[i]);
+
+        // Get best alignment for R2 (highest score)
+        let best_r2_idx = (r2_start..r2_start + r2_count).max_by_key(|&i| soa_r2.scores[i]);
+
+        if let (Some(r1_idx), Some(r2_idx)) = (best_r1_idx, best_r2_idx) {
+            // Calculate sub-optimal score for uniqueness check (BWA-MEM2 bwamem_pair.cpp:97-98)
+            let sub1 = calculate_sub_score_soa(soa_r1, read_idx);
+            let sub2 = calculate_sub_score_soa(soa_r2, read_idx);
+
+            if sub1 as f64 > MIN_RATIO * soa_r1.scores[r1_idx] as f64 {
+                continue; // Read 1 is not unique enough
+            }
+            if sub2 as f64 > MIN_RATIO * soa_r2.scores[r2_idx] as f64 {
+                continue; // Read 2 is not unique enough
+            }
+
+            // Check if on same chromosome (BWA-MEM2 bwamem_pair.cpp:99)
+            if soa_r1.ref_names[r1_idx] == soa_r2.ref_names[r2_idx] {
+                let is_rev1 = (soa_r1.flags[r1_idx] & sam_flags::REVERSE) != 0;
+                let is_rev2 = (soa_r2.flags[r2_idx] & sam_flags::REVERSE) != 0;
+
+                // Calculate reference length from CIGAR for each alignment
+                let ref_len1 = reference_length_from_cigar_soa(soa_r1, r1_idx) as i64;
+                let ref_len2 = reference_length_from_cigar_soa(soa_r2, r2_idx) as i64;
+
+                // Convert positions to bidirectional coordinate space [0, 2*l_pac)
+                // For reverse strand, use rightmost position (end of alignment)
+                let pos1 = if is_rev1 {
+                    let rightmost = soa_r1.positions[r1_idx] as i64 + ref_len1 - 1;
+                    (l_pac << 1) - 1 - rightmost
+                } else {
+                    soa_r1.positions[r1_idx] as i64
+                };
+
+                let pos2 = if is_rev2 {
+                    let rightmost = soa_r2.positions[r2_idx] as i64 + ref_len2 - 1;
+                    (l_pac << 1) - 1 - rightmost
+                } else {
+                    soa_r2.positions[r2_idx] as i64
+                };
+
+                position_pairs.push((pos1, pos2));
+            }
+        }
+    }
+
+    log::debug!(
+        "Extracted {} concordant position pairs from first batch",
+        position_pairs.len()
+    );
+
+    // Use existing calculation logic
+    if !position_pairs.is_empty() {
+        calculate_insert_size_stats(l_pac, &position_pairs)
+    } else {
+        // Return failed stats if no pairs found
+        [
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+            InsertSizeStats {
+                avg: 0.0,
+                std: 0.0,
+                low: 0,
+                high: 0,
+                failed: true,
+            },
+        ]
+    }
+}
+
+/// Calculate sub-optimal score for a read's alignments in SoA format
+///
+/// Returns the best secondary alignment score that has significant overlap with primary.
+/// This is used for uniqueness filtering during insert size bootstrapping.
+fn calculate_sub_score_soa(
+    soa: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    read_idx: usize,
+) -> i32 {
+    let (start, count) = soa.read_alignment_boundaries[read_idx];
+
+    if count <= 1 {
+        return 0;
+    }
+
+    // Primary is the first (best scoring) alignment for this read
+    let primary_idx = start;
+    let mask_level = 0.5; // Default opt->mask_level
+
+    // Check secondary alignments for overlap with primary
+    for offset in 1..count {
+        let secondary_idx = start + offset;
+
+        // Check for significant overlap with primary
+        let b_max = soa.query_starts[secondary_idx].max(soa.query_starts[primary_idx]);
+        let e_min = soa.query_ends[secondary_idx].min(soa.query_ends[primary_idx]);
+
+        if e_min > b_max {
+            // Have overlap
+            let min_len = (soa.query_ends[secondary_idx] - soa.query_starts[secondary_idx])
+                .min(soa.query_ends[primary_idx] - soa.query_starts[primary_idx]);
+            if (e_min - b_max) as f64 >= min_len as f64 * mask_level {
+                // Significant overlap - return this secondary's score
+                return soa.scores[secondary_idx];
+            }
+        }
+    }
+
+    // No overlapping secondary found - use minimum seed length * match score as default
+    19 // Default fallback (matches BWA-MEM2)
+}
+
+/// Calculate reference length from CIGAR string in SoA format
+///
+/// Sums M, D, N, =, X operations (those that consume reference bases).
+fn reference_length_from_cigar_soa(
+    soa: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    aln_idx: usize,
+) -> i32 {
+    let (cigar_start, cigar_count) = soa.cigar_boundaries[aln_idx];
+    let mut ref_len = 0i32;
+
+    for offset in 0..cigar_count {
+        let idx = cigar_start + offset;
+        let op = soa.cigar_ops[idx];
+        let len = soa.cigar_lens[idx];
+
+        // M, D, N, =, X consume reference
+        if op == b'M' || op == b'D' || op == b'N' || op == b'=' || op == b'X' {
+            ref_len += len;
+        }
+    }
+
+    ref_len
+}
+
 // Re-export erfc for pairing module
 pub(crate) use erfc as erfc_fn;

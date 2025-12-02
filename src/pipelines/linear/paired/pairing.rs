@@ -392,3 +392,322 @@ pub fn mem_pair(
         second_best_score,
     ))
 }
+
+/// SoA-native paired-end alignment scoring
+///
+/// This function scores all pairs in a batch without converting to Alignment structs.
+/// It modifies the SoA flags in-place to mark primary/secondary alignments.
+///
+/// # Arguments
+/// * `soa_r1` - Mutable SoA alignment results for read 1
+/// * `soa_r2` - Mutable SoA alignment results for read 2
+/// * `stats` - Insert size statistics for each orientation [FF, FR, RF, RR]
+/// * `match_score` - Match score parameter (opt->a) for log-likelihood calculation
+/// * `l_pac` - Length of packed reference sequence
+///
+/// # Returns
+/// Vectors of primary alignment indices for R1 and R2 (one per read pair)
+pub fn pair_alignments_soa(
+    soa_r1: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_r2: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    stats: &[InsertSizeStats; 4],
+    match_score: i32,
+    l_pac: i64,
+) -> (Vec<usize>, Vec<usize>) {
+    let num_reads = soa_r1.num_reads();
+    let mut primary_r1 = Vec::with_capacity(num_reads);
+    let mut primary_r2 = Vec::with_capacity(num_reads);
+
+    for read_idx in 0..num_reads {
+        let (r1_start, r1_count) = soa_r1.read_alignment_boundaries[read_idx];
+        let (r2_start, r2_count) = soa_r2.read_alignment_boundaries[read_idx];
+
+        if r1_count == 0 || r2_count == 0 {
+            // No alignments for one or both reads
+            // Mark all as secondary if any exist
+            for offset in 0..r1_count {
+                let idx = r1_start + offset;
+                soa_r1.flags[idx] |= sam_flags::SECONDARY;
+            }
+            for offset in 0..r2_count {
+                let idx = r2_start + offset;
+                soa_r2.flags[idx] |= sam_flags::SECONDARY;
+            }
+            primary_r1.push(r1_start); // Use first alignment as placeholder
+            primary_r2.push(r2_start);
+            continue;
+        }
+
+        // Use read index for deterministic tie-breaking
+        let pair_id = read_idx as u64;
+
+        // Find best pair using SoA data
+        if let Some((best_r1_offset, best_r2_offset, _, _)) =
+            find_best_pair_soa(soa_r1, soa_r2, read_idx, stats, match_score, pair_id, l_pac)
+        {
+            let best_r1_idx = r1_start + best_r1_offset;
+            let best_r2_idx = r2_start + best_r2_offset;
+
+            // Clear secondary/supplementary flags for primary pair
+            soa_r1.flags[best_r1_idx] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
+            soa_r2.flags[best_r2_idx] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
+
+            // Mark all other alignments as secondary
+            for offset in 0..r1_count {
+                let idx = r1_start + offset;
+                if idx != best_r1_idx {
+                    soa_r1.flags[idx] |= sam_flags::SECONDARY;
+                }
+            }
+            for offset in 0..r2_count {
+                let idx = r2_start + offset;
+                if idx != best_r2_idx {
+                    soa_r2.flags[idx] |= sam_flags::SECONDARY;
+                }
+            }
+
+            primary_r1.push(best_r1_idx);
+            primary_r2.push(best_r2_idx);
+        } else {
+            // No valid pairs found - use first alignments as primaries
+            soa_r1.flags[r1_start] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
+            soa_r2.flags[r2_start] &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
+
+            // Mark others as secondary
+            for offset in 1..r1_count {
+                let idx = r1_start + offset;
+                soa_r1.flags[idx] |= sam_flags::SECONDARY;
+            }
+            for offset in 1..r2_count {
+                let idx = r2_start + offset;
+                soa_r2.flags[idx] |= sam_flags::SECONDARY;
+            }
+
+            primary_r1.push(r1_start);
+            primary_r2.push(r2_start);
+        }
+    }
+
+    (primary_r1, primary_r2)
+}
+
+/// Find the best pair of alignments for a single read pair in SoA format
+///
+/// Returns (r1_offset, r2_offset, pair_score, sub_score) if a valid pair is found.
+/// Offsets are relative to the read's alignment start in the SoA buffers.
+fn find_best_pair_soa(
+    soa_r1: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_r2: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    read_idx: usize,
+    stats: &[InsertSizeStats; 4],
+    match_score: i32,
+    pair_id: u64,
+    l_pac: i64,
+) -> Option<(usize, usize, i32, i32)> {
+    let (r1_start, r1_count) = soa_r1.read_alignment_boundaries[read_idx];
+    let (r2_start, r2_count) = soa_r2.read_alignment_boundaries[read_idx];
+
+    // Build sorted array of alignment positions (same structure as AoS version)
+    let mut alignments_sorted: Vec<AlignmentForPairing> = Vec::with_capacity(r1_count + r2_count);
+
+    // Add R1 alignments
+    for offset in 0..r1_count {
+        let idx = r1_start + offset;
+        let is_reverse = (soa_r1.flags[idx] & sam_flags::REVERSE) != 0;
+        let alignment_length = reference_length_from_cigar_soa_pairing(soa_r1, idx);
+
+        let bidir_pos =
+            sam_pos_to_bidirectional(soa_r1.positions[idx], alignment_length, is_reverse, l_pac);
+        let fwd_normalized_pos = bidirectional_to_forward_normalized(bidir_pos, l_pac);
+        let is_in_reverse_half = bidir_pos >= l_pac;
+
+        let sort_key = ((soa_r1.ref_ids[idx] as u64) << 32) | (fwd_normalized_pos as u64);
+        let packed_info = ((soa_r1.scores[idx] as u64) << 32)
+            | ((offset as u64) << 2)
+            | ((is_in_reverse_half as u64) << 1); // 0 = read1
+
+        alignments_sorted.push(AlignmentForPairing {
+            sort_key,
+            packed_info,
+        });
+    }
+
+    // Add R2 alignments
+    for offset in 0..r2_count {
+        let idx = r2_start + offset;
+        let is_reverse = (soa_r2.flags[idx] & sam_flags::REVERSE) != 0;
+        let alignment_length = reference_length_from_cigar_soa_pairing(soa_r2, idx);
+
+        let bidir_pos =
+            sam_pos_to_bidirectional(soa_r2.positions[idx], alignment_length, is_reverse, l_pac);
+        let fwd_normalized_pos = bidirectional_to_forward_normalized(bidir_pos, l_pac);
+        let is_in_reverse_half = bidir_pos >= l_pac;
+
+        let sort_key = ((soa_r2.ref_ids[idx] as u64) << 32) | (fwd_normalized_pos as u64);
+        let packed_info = ((soa_r2.scores[idx] as u64) << 32)
+            | ((offset as u64) << 2)
+            | ((is_in_reverse_half as u64) << 1)
+            | 1; // 1 = read2
+
+        alignments_sorted.push(AlignmentForPairing {
+            sort_key,
+            packed_info,
+        });
+    }
+
+    // Sort by position
+    alignments_sorted.sort_by_key(|a| a.sort_key);
+
+    // Track last seen alignment index for each (read_number, strand_half) combination
+    let mut last_seen_idx: [i32; 4] = [-1; 4];
+
+    // Collect valid candidate pairs
+    let mut candidate_pairs: Vec<CandidatePairScore> = Vec::new();
+
+    // For each alignment, look backward for compatible mates
+    for current_idx in 0..alignments_sorted.len() {
+        let current = &alignments_sorted[current_idx];
+
+        // Try both possible mate strand configurations
+        for mate_strand_config in 0..2 {
+            let current_strand_half = (current.packed_info >> 1) & 1;
+            let orientation_idx = ((mate_strand_config << 1) | current_strand_half) as usize;
+
+            if stats[orientation_idx].failed {
+                continue;
+            }
+
+            let current_read_num = current.packed_info & 1;
+            let mate_read_num = current_read_num ^ 1;
+            let mate_lookup_key = ((mate_strand_config << 1) | mate_read_num) as usize;
+
+            if last_seen_idx[mate_lookup_key] < 0 {
+                continue;
+            }
+
+            // Search backward for compatible pairs
+            let mut search_idx = last_seen_idx[mate_lookup_key] as usize;
+            loop {
+                if search_idx >= alignments_sorted.len() {
+                    break;
+                }
+
+                let candidate_mate = &alignments_sorted[search_idx];
+
+                if (candidate_mate.packed_info & 3) != mate_lookup_key as u64 {
+                    if search_idx == 0 {
+                        break;
+                    }
+                    search_idx -= 1;
+                    continue;
+                }
+
+                let distance = (current.sort_key as i64) - (candidate_mate.sort_key as i64);
+
+                if distance > stats[orientation_idx].high as i64 {
+                    break;
+                }
+
+                if distance < stats[orientation_idx].low as i64 {
+                    if search_idx == 0 {
+                        break;
+                    }
+                    search_idx -= 1;
+                    continue;
+                }
+
+                // Valid pair found - calculate combined score
+                let normalized_insert_size =
+                    (distance as f64 - stats[orientation_idx].avg) / stats[orientation_idx].std;
+
+                let insert_size_log_penalty = 0.721
+                    * (2.0f64 * erfc(normalized_insert_size.abs() / std::f64::consts::SQRT_2)).ln()
+                    * (match_score as f64);
+
+                let current_score = (current.packed_info >> 32) as i32;
+                let mate_score = (candidate_mate.packed_info >> 32) as i32;
+                let mut combined_score =
+                    current_score + mate_score + (insert_size_log_penalty + 0.499) as i32;
+
+                if combined_score < 0 {
+                    combined_score = 0;
+                }
+
+                let hash_input = (search_idx as u64) << 32 | current_idx as u64;
+                let tiebreak_hash = (hash_64(hash_input ^ (pair_id << 8)) & 0xffffffff) as u32;
+
+                let current_alignment_idx = ((current.packed_info >> 2) & 0x3fffffff) as usize;
+                let mate_alignment_idx = ((candidate_mate.packed_info >> 2) & 0x3fffffff) as usize;
+
+                let (read1_idx, read2_idx) = if (candidate_mate.packed_info & 1) == 0 {
+                    (mate_alignment_idx, current_alignment_idx)
+                } else {
+                    (current_alignment_idx, mate_alignment_idx)
+                };
+
+                candidate_pairs.push(CandidatePairScore {
+                    read1_alignment_idx: read1_idx,
+                    read2_alignment_idx: read2_idx,
+                    combined_score,
+                    tiebreak_hash,
+                });
+
+                if search_idx == 0 {
+                    break;
+                }
+                search_idx -= 1;
+            }
+        }
+
+        let current_lookup_key = (current.packed_info & 3) as usize;
+        last_seen_idx[current_lookup_key] = current_idx as i32;
+    }
+
+    if candidate_pairs.is_empty() {
+        return None;
+    }
+
+    // Sort by score (descending), then by hash
+    candidate_pairs.sort_by(|a, b| match b.combined_score.cmp(&a.combined_score) {
+        std::cmp::Ordering::Equal => b.tiebreak_hash.cmp(&a.tiebreak_hash),
+        other => other,
+    });
+
+    let best_pair = &candidate_pairs[0];
+    let second_best_score = if candidate_pairs.len() > 1 {
+        candidate_pairs[1].combined_score
+    } else {
+        0
+    };
+
+    Some((
+        best_pair.read1_alignment_idx,
+        best_pair.read2_alignment_idx,
+        best_pair.combined_score,
+        second_best_score,
+    ))
+}
+
+/// Calculate reference length from CIGAR string in SoA format (for pairing module)
+///
+/// Duplicate of the function in insert_size.rs to avoid circular dependencies.
+fn reference_length_from_cigar_soa_pairing(
+    soa: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    aln_idx: usize,
+) -> i32 {
+    let (cigar_start, cigar_count) = soa.cigar_boundaries[aln_idx];
+    let mut ref_len = 0i32;
+
+    for offset in 0..cigar_count {
+        let idx = cigar_start + offset;
+        let op = soa.cigar_ops[idx];
+        let len = soa.cigar_lens[idx];
+
+        // M, D, N, =, X consume reference
+        if op == b'M' || op == b'D' || op == b'N' || op == b'=' || op == b'X' {
+            ref_len += len;
+        }
+    }
+
+    ref_len
+}
