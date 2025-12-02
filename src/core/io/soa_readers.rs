@@ -80,6 +80,54 @@ impl SoAReadBatch {
             })
             .collect()
     }
+
+    /// Create a slice of this batch containing reads from [start, end)
+    ///
+    /// This is a zero-copy operation for the bulk sequence/quality data - it returns
+    /// a new SoAReadBatch that references the same underlying buffers but with
+    /// updated boundaries for the specified range of reads.
+    ///
+    /// # Arguments
+    /// * `start` - Starting read index (inclusive)
+    /// * `end` - Ending read index (exclusive)
+    ///
+    /// # Panics
+    /// Panics if start > end or end > self.len()
+    pub fn slice(&self, start: usize, end: usize) -> Self {
+        assert!(start <= end, "slice: start must be <= end");
+        assert!(end <= self.len(), "slice: end must be <= batch length");
+
+        if start == end {
+            return Self::new(); // Empty slice
+        }
+
+        // Clone the name and boundary slices for the specified range
+        let names = self.names[start..end].to_vec();
+        let read_boundaries = self.read_boundaries[start..end].to_vec();
+
+        // Determine the byte range we need from seqs/quals
+        // We need from the start of the first read to the end of the last read
+        let (first_seq_start, _) = self.read_boundaries[start];
+        let (last_seq_start, last_seq_len) = self.read_boundaries[end - 1];
+        let byte_end = last_seq_start + last_seq_len;
+
+        // Clone only the required portion of seqs and quals
+        let seqs = self.seqs[first_seq_start..byte_end].to_vec();
+        let quals = self.quals[first_seq_start..byte_end].to_vec();
+
+        // Adjust boundaries to be relative to the new seqs/quals start
+        let adjusted_boundaries: Vec<(usize, usize)> = read_boundaries
+            .iter()
+            .map(|(offset, len)| (offset - first_seq_start, *len))
+            .collect();
+
+        Self {
+            seqs,
+            quals,
+            names,
+            read_boundaries: adjusted_boundaries,
+        }
+    }
 }
 
 /// FASTQ reader with automatic gzip/bgzip detection that reads into SoA buffers.

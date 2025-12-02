@@ -429,6 +429,99 @@ impl SoAAlignmentResult {
     pub fn num_reads(&self) -> usize {
         self.read_alignment_boundaries.len()
     }
+
+    /// Merge multiple SoAAlignmentResult instances into a single result
+    ///
+    /// This concatenates all alignment data from the input results, adjusting
+    /// boundaries and offsets as needed. Used for combining results from
+    /// parallel chunk processing.
+    ///
+    /// # Arguments
+    /// * `results` - Vector of results to merge (consumed)
+    ///
+    /// # Returns
+    /// A single merged SoAAlignmentResult containing all alignments from all inputs
+    pub fn merge_all(results: Vec<Self>) -> Self {
+        if results.is_empty() {
+            return Self::new();
+        }
+
+        if results.len() == 1 {
+            return results.into_iter().next().unwrap();
+        }
+
+        // Calculate total capacity
+        let total_alignments: usize = results.iter().map(|r| r.len()).sum();
+        let total_reads: usize = results.iter().map(|r| r.num_reads()).sum();
+
+        let mut merged = Self::with_capacity(total_alignments, total_reads);
+
+        // Merge all results
+        for result in results {
+            // Track offsets for boundary adjustment
+            let cigar_base_offset = merged.cigar_ops.len();
+            let seq_base_offset = merged.seqs.len();
+            let tag_base_offset = merged.tag_names.len();
+
+            // Append scalar fields (one per alignment)
+            merged.query_names.extend(result.query_names);
+            merged.flags.extend(result.flags);
+            merged.ref_names.extend(result.ref_names);
+            merged.ref_ids.extend(result.ref_ids);
+            merged.positions.extend(result.positions);
+            merged.mapqs.extend(result.mapqs);
+            merged.scores.extend(result.scores);
+
+            // Append CIGAR data and adjust boundaries
+            merged.cigar_ops.extend(result.cigar_ops);
+            merged.cigar_lens.extend(result.cigar_lens);
+            merged.cigar_boundaries.extend(
+                result
+                    .cigar_boundaries
+                    .into_iter()
+                    .map(|(start, count)| (start + cigar_base_offset, count)),
+            );
+
+            // Append mate information
+            merged.rnexts.extend(result.rnexts);
+            merged.pnexts.extend(result.pnexts);
+            merged.tlens.extend(result.tlens);
+
+            // Append sequence/quality data and adjust boundaries
+            merged.seqs.extend(result.seqs);
+            merged.quals.extend(result.quals);
+            merged.seq_boundaries.extend(
+                result
+                    .seq_boundaries
+                    .into_iter()
+                    .map(|(start, len)| (start + seq_base_offset, len)),
+            );
+
+            // Append tag data and adjust boundaries
+            merged.tag_names.extend(result.tag_names);
+            merged.tag_values.extend(result.tag_values);
+            merged.tag_boundaries.extend(
+                result
+                    .tag_boundaries
+                    .into_iter()
+                    .map(|(start, count)| (start + tag_base_offset, count)),
+            );
+
+            // Append internal fields
+            merged.query_starts.extend(result.query_starts);
+            merged.query_ends.extend(result.query_ends);
+            merged.seed_coverages.extend(result.seed_coverages);
+            merged.hashes.extend(result.hashes);
+            merged.frac_reps.extend(result.frac_reps);
+
+            // Append per-read boundaries (no offset adjustment needed - these are per-result indices)
+            merged
+                .read_alignment_boundaries
+                .extend(result.read_alignment_boundaries);
+        }
+
+        merged
+    }
 }
 
 impl Default for SoAAlignmentResult {

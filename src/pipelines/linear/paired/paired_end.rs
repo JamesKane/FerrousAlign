@@ -12,6 +12,7 @@
 // - Output: sam_output functions handle flag setting and formatting
 
 use super::super::batch_extension::process_sub_batch_internal_soa;
+use super::super::batch_extension::types::SoAAlignmentResult;
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats_soa};
@@ -22,6 +23,7 @@ use crate::compute::simd_abstraction::simd::SimdEngineType;
 use crate::io::sam_output::write_sam_records_soa;
 use crate::io::soa_readers::SoaFastqReader;
 use crate::utils::cputime;
+use rayon::prelude::*;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -43,6 +45,85 @@ const BOOTSTRAP_BATCH_SIZE: usize = 512;
 // Paired-end alignment constants
 #[allow(dead_code)] // Reserved for future use in alignment scoring
 const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignment
+
+/// Process a batch in parallel chunks
+///
+/// Splits the batch into thread-sized chunks and processes them in parallel,
+/// then merges the results. This restores full CPU utilization while maintaining
+/// SoA benefits within each chunk.
+///
+/// # Arguments
+/// * `batch` - The SoA read batch to process
+/// * `bwa_idx` - Reference index
+/// * `pac` - Packed reference sequence
+/// * `opt` - Alignment options
+/// * `batch_start_id` - Starting read ID for hash tie-breaking
+/// * `engine` - SIMD engine type
+///
+/// # Returns
+/// Merged SoAAlignmentResult containing all alignments
+fn process_batch_parallel(
+    batch: &crate::io::soa_readers::SoAReadBatch,
+    bwa_idx: &Arc<&BwaIndex>,
+    pac: &Arc<&[u8]>,
+    opt: &Arc<&MemOpt>,
+    batch_start_id: u64,
+    engine: SimdEngineType,
+) -> SoAAlignmentResult {
+    if batch.is_empty() {
+        return SoAAlignmentResult::new();
+    }
+
+    // Determine optimal chunk size based on thread count
+    let num_threads = rayon::current_num_threads();
+    let batch_size = batch.len();
+
+    // If batch is smaller than thread count, process sequentially
+    if batch_size <= num_threads {
+        return process_sub_batch_internal_soa(bwa_idx, pac, opt, batch, batch_start_id, engine);
+    }
+
+    // Calculate chunk size (round up to ensure we cover all reads)
+    let chunk_size = (batch_size + num_threads - 1) / num_threads;
+
+    log::debug!(
+        "Processing batch of {} reads in {} parallel chunks (chunk_size={})",
+        batch_size,
+        num_threads,
+        chunk_size
+    );
+
+    // Create chunk boundaries
+    let chunks: Vec<(usize, usize)> = (0..batch_size)
+        .step_by(chunk_size)
+        .map(|start| {
+            let end = (start + chunk_size).min(batch_size);
+            (start, end)
+        })
+        .collect();
+
+    // Process chunks in parallel
+    let results: Vec<SoAAlignmentResult> = chunks
+        .into_par_iter()
+        .map(|(start, end)| {
+            // Slice the batch (zero-copy for seq/qual data)
+            let chunk = batch.slice(start, end);
+
+            // Process chunk with SoA pipeline
+            process_sub_batch_internal_soa(
+                bwa_idx,
+                pac,
+                opt,
+                &chunk,
+                batch_start_id + start as u64,
+                engine,
+            )
+        })
+        .collect();
+
+    // Merge results from all chunks
+    SoAAlignmentResult::merge_all(results)
+}
 
 // Process paired-end reads with parallel batching
 // ============================================================================
@@ -178,23 +259,29 @@ pub fn process_paired_end(
         .simd_engine()
         .unwrap_or(SimdEngineType::Engine128);
 
-    // Stage 1: SoA batch alignment for R1 and R2
+    // Stage 1: SoA batch alignment for R1 and R2 (parallel processing)
     let pac_ref = Arc::new(&pac[..]);
-    let soa_result1 = process_sub_batch_internal_soa(
-        &bwa_idx_clone,
-        &pac_ref,
-        &opt_clone,
-        &first_batch1,
-        batch_start_id,
-        simd_engine,
-    );
-    let soa_result2 = process_sub_batch_internal_soa(
-        &bwa_idx_clone,
-        &pac_ref,
-        &opt_clone,
-        &first_batch2,
-        batch_start_id,
-        simd_engine,
+    let (soa_result1, soa_result2) = rayon::join(
+        || {
+            process_batch_parallel(
+                &first_batch1,
+                &bwa_idx_clone,
+                &pac_ref,
+                &opt_clone,
+                batch_start_id,
+                simd_engine,
+            )
+        },
+        || {
+            process_batch_parallel(
+                &first_batch2,
+                &bwa_idx_clone,
+                &pac_ref,
+                &opt_clone,
+                batch_start_id,
+                simd_engine,
+            )
+        },
     );
 
     // Stage 2: Pure SoA pipeline - Bootstrap insert size stats
@@ -377,23 +464,29 @@ pub fn process_paired_end(
         let opt_clone = Arc::clone(&opt);
         let batch_start_id = pairs_processed; // Capture for closure
 
-        // SoA batch alignment for R1 and R2
+        // SoA batch alignment for R1 and R2 (parallel processing)
         let pac_ref = Arc::new(&pac[..]);
-        let soa_result1 = process_sub_batch_internal_soa(
-            &bwa_idx_clone,
-            &pac_ref,
-            &opt_clone,
-            &batch1,
-            batch_start_id,
-            simd_engine,
-        );
-        let soa_result2 = process_sub_batch_internal_soa(
-            &bwa_idx_clone,
-            &pac_ref,
-            &opt_clone,
-            &batch2,
-            batch_start_id,
-            simd_engine,
+        let (soa_result1, soa_result2) = rayon::join(
+            || {
+                process_batch_parallel(
+                    &batch1,
+                    &bwa_idx_clone,
+                    &pac_ref,
+                    &opt_clone,
+                    batch_start_id,
+                    simd_engine,
+                )
+            },
+            || {
+                process_batch_parallel(
+                    &batch2,
+                    &bwa_idx_clone,
+                    &pac_ref,
+                    &opt_clone,
+                    batch_start_id,
+                    simd_engine,
+                )
+            },
         );
 
         // Pure SoA pipeline - no AoS conversions
