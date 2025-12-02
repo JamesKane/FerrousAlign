@@ -324,14 +324,16 @@ pub unsafe fn batch_ksw_align_avx512(
             iqe512 = _mm512_mask_blend_epi8(cmp0, iqe512, l512);
 
             // Update E (gap in query)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
             let gap_e512: __m512i = _mm512_subs_epu8(h11, oe_ins512);
-            e11 = _mm512_subs_epu8(e11, e_ins512);
-            e11 = _mm512_max_epu8(gap_e512, e11);
+            let e_extend: __m512i = _mm512_subs_epu8(e11, e_ins512);
+            e11 = _mm512_max_epu8(gap_e512, e_extend);
 
             // Update F (gap in reference)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
             let gap_d512: __m512i = _mm512_subs_epu8(h11, oe_del512);
-            let mut f21: __m512i = _mm512_subs_epu8(f11, e_del512);
-            f21 = _mm512_max_epu8(gap_d512, f21);
+            let f_extend: __m512i = _mm512_subs_epu8(f11, e_del512);
+            let f21: __m512i = _mm512_max_epu8(gap_d512, f_extend);
 
             // Store updated DP values using pointer arithmetic (allows LLVM to optimize to aligned ops)
             let h1_ptr = h1_buf.as_mut_ptr();
@@ -350,12 +352,10 @@ pub unsafe fn batch_ksw_align_avx512(
             let msk64: __mmask64 = _mm512_cmpgt_epu8_mask(imax512, pimax512);
             let combined: __mmask64 = msk64 | mask512;
 
-            // pimax512 = where(combined, zero512, pimax512)
-            let mut pimax512_tmp: __m512i = _mm512_mask_blend_epi8(combined, pimax512, zero512);
-            // pimax512 = where(!minsc_msk, zero512, pimax512)
-            pimax512_tmp = _mm512_mask_blend_epi8(minsc_msk, zero512, pimax512_tmp);
-            // pimax512 = where(!exit0, zero512, pimax512)
-            pimax512_tmp = _mm512_mask_blend_epi8(exit0, zero512, pimax512_tmp);
+            // AVX-512 aggressive optimization: chain mask operations with AND
+            // Only keep pimax512 where: !combined AND minsc_msk AND exit0
+            let keep_mask: __mmask64 = (!combined) & minsc_msk & exit0;
+            let pimax512_tmp: __m512i = _mm512_mask_blend_epi8(keep_mask, zero512, pimax512);
 
             // Store row max using pointer arithmetic (allows LLVM to optimize to aligned ops)
             let row_max_ptr = row_max_buf.as_mut_ptr();
@@ -407,11 +407,9 @@ pub unsafe fn batch_ksw_align_avx512(
     }
 
     // Final row max update (C++ lines 549-552)
-    let pimax512_final: __m512i = {
-        let tmp = _mm512_mask_blend_epi8(mask512, pimax512, zero512);
-        let tmp = _mm512_mask_blend_epi8(minsc_msk, zero512, tmp);
-        _mm512_mask_blend_epi8(exit0, zero512, tmp)
-    };
+    // AVX-512 aggressive optimization: combine all masks with AND
+    let keep_mask_final: __mmask64 = (!mask512) & minsc_msk & exit0;
+    let pimax512_final: __m512i = _mm512_mask_blend_epi8(keep_mask_final, zero512, pimax512);
 
     if limit > 0 {
         // Store final row max using pointer arithmetic (allows LLVM to optimize to aligned ops)
