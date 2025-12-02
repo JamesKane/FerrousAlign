@@ -1848,6 +1848,25 @@ mod tests {
         let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
         assert_eq!(dir, 3); // RR orientation
     }
+
+    /// Test scoring matrix
+    #[test]
+    fn test_scoring_matrix() {
+        // Match scores
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[0], 1); // A-A
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[6], 1); // C-C
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[12], 1); // G-G
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[18], 1); // T-T
+
+        // Mismatch penalties
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[1], -4); // A-C
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[5], -4); // C-A
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[7], -4); // C-G
+
+        // N handling (neutral score)
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[4], 0); // A-N
+        assert_eq!(MATE_RESCUE_SCORING_MATRIX[24], 0); // N-N
+    }
 }
 
 // ============================================================================
@@ -2262,28 +2281,4 @@ fn reference_length_from_cigar_soa_rescue(
     }
 
     ref_len
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test scoring matrix
-    #[test]
-    fn test_scoring_matrix() {
-        // Match scores
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[0], 1); // A-A
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[6], 1); // C-C
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[12], 1); // G-G
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[18], 1); // T-T
-
-        // Mismatch penalties
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[1], -4); // A-C
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[5], -4); // C-A
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[7], -4); // C-G
-
-        // N handling (neutral score)
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[4], 0); // A-N
-        assert_eq!(MATE_RESCUE_SCORING_MATRIX[24], 0); // N-N
-    }
 }
