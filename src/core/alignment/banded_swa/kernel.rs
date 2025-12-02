@@ -283,7 +283,9 @@ where
     out_scores
 }
 
-pub use super::engines::{SwEngine128, SwEngine256};
+pub use super::engines::SwEngine128;
+#[cfg(target_arch = "x86_64")]
+pub use super::engines::SwEngine256;
 use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::shared_types::WorkspaceArena;
 use crate::core::alignment::workspace::with_workspace;

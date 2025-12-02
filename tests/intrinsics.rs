@@ -8,7 +8,7 @@ mod aarch64_tests {
         _mm_add_epi16, _mm_blendv_epi8, _mm_cmpgt_epi16, _mm_max_epi16, _mm_set1_epi16,
         _mm_setzero_si128, _mm_slli_si128_var, _mm_srli_si128_var, _mm_sub_epi16,
     };
-    use ferrous_align::compute::simd_abstraction::types::{__m128i, simd_arch};
+    use ferrous_align::compute::simd_abstraction::types::__m128i;
     use ferrous_align::{mm_alignr_epi8, mm_srli_si128};
     use std::arch::aarch64;
 

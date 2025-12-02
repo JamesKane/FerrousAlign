@@ -427,6 +427,19 @@ pub unsafe fn _mm_max_epi8(a: __m128i, b: __m128i) -> __m128i {
 
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn _mm_min_epi8(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_min_epi8(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe { __m128i::from_s8(simd_arch::vminq_s8(a.as_s8(), b.as_s8())) }
+    }
+}
+
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn _mm_blendv_epi8(a: __m128i, b: __m128i, mask: __m128i) -> __m128i {
     #[cfg(target_arch = "x86_64")]
     {
@@ -668,11 +681,13 @@ macro_rules! mm_slli_epi16 {
     ($a:expr, $imm8:expr) => {{
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            simd_arch::_mm_slli_epi16($a, $imm8)
+            std::arch::x86_64::_mm_slli_epi16($a, $imm8)
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
-            __m128i::from_s16(simd_arch::vshlq_n_s16($a.as_s16(), $imm8))
+            $crate::compute::simd_abstraction::types::__m128i::from_s16(
+                std::arch::aarch64::vshlq_n_s16($a.as_s16(), $imm8)
+            )
         }
     }};
 }
@@ -682,14 +697,16 @@ macro_rules! mm_srli_si128 {
     ($a:expr, $imm8:expr) => {{
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            simd_arch::_mm_srli_si128($a, $imm8)
+            std::arch::x86_64::_mm_srli_si128($a, $imm8)
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
             if $imm8 >= 16 {
-                _mm_setzero_si128()
+                $crate::compute::simd_abstraction::portable_intrinsics::_mm_setzero_si128()
             } else {
-                __m128i(simd_arch::vextq_u8(simd_arch::vdupq_n_u8(0), $a.0, $imm8))
+                $crate::compute::simd_abstraction::types::__m128i(
+                    std::arch::aarch64::vextq_u8(std::arch::aarch64::vdupq_n_u8(0), $a.0, $imm8)
+                )
             }
         }
     }};
@@ -700,14 +717,16 @@ macro_rules! mm_alignr_epi8 {
     ($a:expr, $b:expr, $imm8:expr) => {{
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            simd_arch::_mm_alignr_epi8($a, $b, $imm8)
+            std::arch::x86_64::_mm_alignr_epi8($a, $b, $imm8)
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
             if $imm8 >= 16 {
-                _mm_srli_si128_var($a, $imm8 - 16)
+                $crate::compute::simd_abstraction::portable_intrinsics::_mm_srli_si128_var($a, $imm8 - 16)
             } else {
-                __m128i(simd_arch::vextq_u8($b.0, $a.0, $imm8))
+                $crate::compute::simd_abstraction::types::__m128i(
+                    std::arch::aarch64::vextq_u8($b.0, $a.0, $imm8)
+                )
             }
         }
     }};

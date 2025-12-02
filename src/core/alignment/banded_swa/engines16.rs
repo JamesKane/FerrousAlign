@@ -4,6 +4,7 @@ use crate::core::compute::simd_abstraction::SimdEngine;
 // engines.rs (or engines16.rs)
 #[derive(Copy, Clone)]
 pub struct SwEngine128_16; // 8 lanes of i16 (SSE/NEON)
+#[cfg(target_arch = "x86_64")]
 #[derive(Copy, Clone)]
 pub struct SwEngine256_16; // 16 lanes of i16 (AVX2)
 
@@ -81,6 +82,7 @@ impl SwSimd16 for SwEngine128_16 {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 impl SwSimd16 for SwEngine256_16 {
     type V16 = <crate::core::compute::simd_abstraction::SimdEngine256 as crate::core::compute::simd_abstraction::SimdEngine>::Vec16; // 256-bit vector used for i16 ops
     const LANES: usize = 16;

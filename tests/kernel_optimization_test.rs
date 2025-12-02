@@ -6,7 +6,9 @@
 // 2. Hoisting of temporary array allocations
 // 3. Correctness of SIMD operations across all supported widths
 
-use ferrous_align::alignment::banded_swa::kernel::{sw_kernel, KernelParams, SwEngine128, SwEngine256};
+use ferrous_align::alignment::banded_swa::kernel::{sw_kernel, KernelParams, SwEngine128};
+#[cfg(target_arch = "x86_64")]
+use ferrous_align::alignment::banded_swa::kernel::SwEngine256;
 use ferrous_align::alignment::banded_swa::bwa_fill_scmat;
 
 /// Helper to create test parameters for kernel testing
