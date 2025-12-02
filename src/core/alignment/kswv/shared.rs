@@ -60,7 +60,7 @@ macro_rules! generate_ksw_entry_soa {
             let ncol = inputs.max_qlen as i16;
 
             // SAFETY: Call into the per‑ISA batch kernel provided by the module
-            let used = unsafe {
+            let _used = unsafe {
                 $callee(
                     inputs.ref_soa.as_ptr(),
                     inputs.query_soa.as_ptr(),

@@ -31,9 +31,6 @@ pub struct Bwt {
     pub sa_low_words: Vec<u32>,
 }
 
-#[path = "bwt_test.rs"]
-mod bwt_test;
-
 impl Default for Bwt {
     fn default() -> Self {
         Bwt {

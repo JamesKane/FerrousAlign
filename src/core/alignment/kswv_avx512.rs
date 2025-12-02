@@ -196,7 +196,7 @@ pub unsafe fn batch_ksw_align_avx512(
 
     // Check if workspace buffers are provided and large enough
     let (mut h0_buf_owned, mut h1_buf_owned, mut f_buf_owned, mut row_max_buf_owned);
-    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (
+    let (mut h0_buf, mut h1_buf, f_buf, row_max_buf): (
         &mut [u8],
         &mut [u8],
         &mut [u8],

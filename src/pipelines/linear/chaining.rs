@@ -823,7 +823,6 @@ pub fn filter_chains(
 /// 3. Filter by min_chain_weight
 /// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
 /// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
-
 pub fn filter_chains_batch(
     soa_chain_batch: &mut SoAChainBatch,
     soa_seed_batch: &SoASeedBatch,

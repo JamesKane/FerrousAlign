@@ -116,16 +116,6 @@ pub struct BandedPairWiseSW {
     e_del: i32,
     e_ins: i32,
     mat: [i8; 25], // Assuming a 5x5 matrix for A,C,G,T,N
-
-    w_match: i8,
-
-    w_mismatch: i8,
-
-    w_open: i8,
-
-    w_extend: i8,
-
-    w_ambig: i8,
 }
 
 impl BandedPairWiseSW {
@@ -139,8 +129,8 @@ impl BandedPairWiseSW {
         pen_clip5: i32,
         pen_clip3: i32,
         mat: [i8; 25],
-        w_match: i8,
-        w_mismatch: i8,
+        _w_match: i8,
+        _w_mismatch: i8,
     ) -> Self {
         BandedPairWiseSW {
             m: 5, // Assuming 5 bases (A, C, G, T, N)
@@ -153,11 +143,6 @@ impl BandedPairWiseSW {
             e_del,
             e_ins,
             mat,
-            w_match,
-            w_mismatch, // Keep negative: caller passes -opt.b (e.g., -4), SIMD adds this to subtract
-            w_open: o_del as i8, // Cast to i8
-            w_extend: e_del as i8, // Cast to i8
-            w_ambig: DEFAULT_AMBIG,
         }
     }
 

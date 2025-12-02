@@ -37,8 +37,6 @@
 // BWA-MEM2: bwa-mem2/src/kswv.cpp (kswv256_u8)
 // ============================================================================
 
-#![cfg(target_arch = "x86_64")]
-
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
 use crate::compute::simd_abstraction::{SimdEngine, SimdEngine256};
 

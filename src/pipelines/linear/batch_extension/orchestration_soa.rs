@@ -52,7 +52,7 @@ fn convert_batch_results_to_outscores(
 ///
 /// This is the end-to-end SoA implementation that eliminates AoS-to-SoA conversion.
 /// Data flows: SoAReadBatch → find_seeds_batch → chain_seeds_batch → extension → finalization
-
+///
 /// Process a sub-batch using end-to-end SoA pipeline (PR3/PR4)
 ///
 /// This function implements the complete SoA flow:

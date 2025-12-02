@@ -121,7 +121,7 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
     let w_vec = avx::_mm512_loadu_si512(params.w.as_ptr() as *const _);
     // beg starts at 0; end starts at qlen
     let beg_vec = avx::_mm512_setzero_si512();
-    let mut end_vec = qlen_vec;
+    let end_vec = qlen_vec;
 
     // Per-lane termination
     let mut term_mask_global: u64 = 0; // 1 bit = lane terminated

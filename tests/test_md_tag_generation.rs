@@ -11,7 +11,7 @@
 /// 2. MD tags are correctly formatted
 /// 3. NM (edit distance) is calculated correctly from MD tag
 /// 4. Complex scenarios (mismatches, indels, combinations) work correctly
-
+///
 /// Test MD tag format for perfect match
 #[test]
 fn test_md_tag_perfect_match() {

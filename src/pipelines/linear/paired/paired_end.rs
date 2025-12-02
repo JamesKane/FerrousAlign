@@ -424,8 +424,6 @@ pub fn process_paired_end(
         );
 
         // PHASE 2.5: Mate rescue (pure SoA)
-        let rescue_start = Instant::now();
-        let rescue_start_cpu = cputime();
         let rescued = mate_rescue_soa(
             &mut soa_result1,
             &mut soa_result2,
@@ -438,8 +436,6 @@ pub fn process_paired_end(
             &current_stats,
             Some(simd_engine),
         );
-        let rescue_cpu = cputime() - rescue_start_cpu;
-        let rescue_wall = rescue_start.elapsed();
         total_rescued += rescued;
 
         // PHASE 2.75: Finalize pairs (pure SoA)
