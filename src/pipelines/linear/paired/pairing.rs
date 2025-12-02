@@ -840,7 +840,7 @@ fn is_proper_pair_soa(
         return false;
     }
 
-    // Convert to bidirectional coordinates to calculate orientation and distance
+    // Convert to bidirectional coordinates (same as BWA-MEM2)
     let r1_is_rev = (soa_r1.flags[r1_idx] & sam_flags::REVERSE) != 0;
     let r2_is_rev = (soa_r2.flags[r2_idx] & sam_flags::REVERSE) != 0;
 
@@ -850,8 +850,7 @@ fn is_proper_pair_soa(
     let r1_pos = soa_r1.positions[r1_idx] as i64;
     let r2_pos = soa_r2.positions[r2_idx] as i64;
 
-    // For proper pair determination, we need to use the same bidirectional coordinate
-    // system as BWA-MEM2
+    // Calculate bidirectional coordinates (5' end for reverse reads)
     let r1_bidir = if r1_is_rev {
         let rightmost = r1_pos + r1_ref_len - 1;
         (l_pac << 1) - 1 - rightmost
@@ -866,28 +865,13 @@ fn is_proper_pair_soa(
         r2_pos
     };
 
-    // Determine orientation (0=FF, 1=FR, 2=RF, 3=RR)
-    let r1_half = if r1_bidir >= l_pac { 1 } else { 0 };
-    let r2_half = if r2_bidir >= l_pac { 1 } else { 0 };
-    let orientation =
-        if r1_half == r2_half { 0 } else { 1 } ^ if r2_bidir > r1_bidir { 0 } else { 3 };
+    // Use the standard infer_orientation function to match bootstrap logic
+    let (orientation, dist) = super::insert_size::infer_orientation(l_pac, r1_bidir, r2_bidir);
 
     // Check if this orientation has valid statistics
     if stats[orientation].failed {
         return false;
     }
-
-    // Calculate distance in bidirectional space
-    let p2 = if r1_half == r2_half {
-        r2_bidir
-    } else {
-        (l_pac << 1) - 1 - r2_bidir
-    };
-    let dist = if p2 > r1_bidir {
-        p2 - r1_bidir
-    } else {
-        r1_bidir - p2
-    };
 
     // Check if distance is within expected range for this orientation
     dist >= stats[orientation].low as i64 && dist <= stats[orientation].high as i64
