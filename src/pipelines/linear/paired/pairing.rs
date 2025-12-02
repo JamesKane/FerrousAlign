@@ -711,3 +711,184 @@ fn reference_length_from_cigar_soa_pairing(
 
     ref_len
 }
+
+// ============================================================================
+// SoA PAIR FINALIZATION (Pure SoA Pipeline - Phase 4)
+// ============================================================================
+
+/// Finalize paired-end alignments in SoA format
+///
+/// Sets mate information fields (RNEXT, PNEXT, TLEN) and paired flags
+/// for all alignments in the batch. This is the final step before SAM output.
+///
+/// # Arguments
+/// * `soa_r1` - Mutable SoA alignment results for read 1
+/// * `soa_r2` - Mutable SoA alignment results for read 2
+/// * `primary_r1` - Indices of primary alignments for read 1
+/// * `primary_r2` - Indices of primary alignments for read 2
+/// * `stats` - Insert size statistics for proper pair determination
+/// * `l_pac` - Packed reference length for coordinate conversion
+pub fn finalize_pairs_soa(
+    soa_r1: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_r2: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    primary_r1: &[usize],
+    primary_r2: &[usize],
+    stats: &[InsertSizeStats; 4],
+    l_pac: i64,
+) {
+    let num_reads = primary_r1.len();
+
+    for i in 0..num_reads {
+        let r1_idx = primary_r1[i];
+        let r2_idx = primary_r2[i];
+
+        // Set mate information for R1 (points to R2)
+        soa_r1.rnexts[r1_idx] = if soa_r2.ref_names[r2_idx] == soa_r1.ref_names[r1_idx] {
+            "=".to_string()
+        } else {
+            soa_r2.ref_names[r2_idx].clone()
+        };
+        soa_r1.pnexts[r1_idx] = soa_r2.positions[r2_idx];
+
+        // Set mate information for R2 (points to R1)
+        soa_r2.rnexts[r2_idx] = if soa_r1.ref_names[r1_idx] == soa_r2.ref_names[r2_idx] {
+            "=".to_string()
+        } else {
+            soa_r1.ref_names[r1_idx].clone()
+        };
+        soa_r2.pnexts[r2_idx] = soa_r1.positions[r1_idx];
+
+        // Set paired flags
+        soa_r1.flags[r1_idx] |= sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR;
+        soa_r2.flags[r2_idx] |= sam_flags::PAIRED | sam_flags::SECOND_IN_PAIR;
+
+        // Set mate reverse flags
+        if (soa_r2.flags[r2_idx] & sam_flags::REVERSE) != 0 {
+            soa_r1.flags[r1_idx] |= sam_flags::MATE_REVERSE;
+        }
+        if (soa_r1.flags[r1_idx] & sam_flags::REVERSE) != 0 {
+            soa_r2.flags[r2_idx] |= sam_flags::MATE_REVERSE;
+        }
+
+        // Set unmapped flags if either read is unmapped
+        if soa_r1.mapqs[r1_idx] == 0 && soa_r1.scores[r1_idx] == 0 {
+            soa_r1.flags[r1_idx] |= sam_flags::UNMAPPED;
+            soa_r2.flags[r2_idx] |= sam_flags::MATE_UNMAPPED;
+        }
+        if soa_r2.mapqs[r2_idx] == 0 && soa_r2.scores[r2_idx] == 0 {
+            soa_r2.flags[r2_idx] |= sam_flags::UNMAPPED;
+            soa_r1.flags[r1_idx] |= sam_flags::MATE_UNMAPPED;
+        }
+
+        // Calculate TLEN (template length) only if both reads are mapped on same reference
+        if soa_r1.ref_ids[r1_idx] == soa_r2.ref_ids[r2_idx] {
+            let r1_is_rev = (soa_r1.flags[r1_idx] & sam_flags::REVERSE) != 0;
+            let r2_is_rev = (soa_r2.flags[r2_idx] & sam_flags::REVERSE) != 0;
+
+            let r1_ref_len = reference_length_from_cigar_soa_pairing(soa_r1, r1_idx) as i64;
+            let r2_ref_len = reference_length_from_cigar_soa_pairing(soa_r2, r2_idx) as i64;
+
+            // Calculate TLEN using SAM spec convention:
+            // - Leftmost read gets positive TLEN (from its 5' to mate's 3')
+            // - Rightmost read gets negative TLEN
+            let r1_pos = soa_r1.positions[r1_idx] as i64;
+            let r2_pos = soa_r2.positions[r2_idx] as i64;
+
+            let r1_end = r1_pos + r1_ref_len;
+            let r2_end = r2_pos + r2_ref_len;
+
+            let tlen = if r1_pos < r2_pos {
+                // R1 is leftmost: TLEN = rightmost end - leftmost start
+                r2_end - r1_pos
+            } else {
+                // R2 is leftmost: TLEN = -(rightmost end - leftmost start)
+                -(r1_end - r2_pos)
+            };
+
+            soa_r1.tlens[r1_idx] = tlen as i32;
+            soa_r2.tlens[r2_idx] = -(tlen as i32);
+
+            // Determine if this is a proper pair based on insert size distribution
+            if is_proper_pair_soa(soa_r1, r1_idx, soa_r2, r2_idx, stats, l_pac) {
+                soa_r1.flags[r1_idx] |= sam_flags::PROPER_PAIR;
+                soa_r2.flags[r2_idx] |= sam_flags::PROPER_PAIR;
+            }
+        } else {
+            // Different chromosomes - not a proper pair
+            soa_r1.tlens[r1_idx] = 0;
+            soa_r2.tlens[r2_idx] = 0;
+        }
+    }
+}
+
+/// Determine if a pair is a "proper pair" based on insert size distribution
+///
+/// A proper pair must satisfy:
+/// 1. Both reads mapped to same chromosome
+/// 2. Correct orientation (typically FR for paired-end)
+/// 3. Insert size within expected range
+fn is_proper_pair_soa(
+    soa_r1: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    r1_idx: usize,
+    soa_r2: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    r2_idx: usize,
+    stats: &[InsertSizeStats; 4],
+    l_pac: i64,
+) -> bool {
+    // Must be on same chromosome
+    if soa_r1.ref_ids[r1_idx] != soa_r2.ref_ids[r2_idx] {
+        return false;
+    }
+
+    // Convert to bidirectional coordinates to calculate orientation and distance
+    let r1_is_rev = (soa_r1.flags[r1_idx] & sam_flags::REVERSE) != 0;
+    let r2_is_rev = (soa_r2.flags[r2_idx] & sam_flags::REVERSE) != 0;
+
+    let r1_ref_len = reference_length_from_cigar_soa_pairing(soa_r1, r1_idx) as i64;
+    let r2_ref_len = reference_length_from_cigar_soa_pairing(soa_r2, r2_idx) as i64;
+
+    let r1_pos = soa_r1.positions[r1_idx] as i64;
+    let r2_pos = soa_r2.positions[r2_idx] as i64;
+
+    // For proper pair determination, we need to use the same bidirectional coordinate
+    // system as BWA-MEM2
+    let r1_bidir = if r1_is_rev {
+        let rightmost = r1_pos + r1_ref_len - 1;
+        (l_pac << 1) - 1 - rightmost
+    } else {
+        r1_pos
+    };
+
+    let r2_bidir = if r2_is_rev {
+        let rightmost = r2_pos + r2_ref_len - 1;
+        (l_pac << 1) - 1 - rightmost
+    } else {
+        r2_pos
+    };
+
+    // Determine orientation (0=FF, 1=FR, 2=RF, 3=RR)
+    let r1_half = if r1_bidir >= l_pac { 1 } else { 0 };
+    let r2_half = if r2_bidir >= l_pac { 1 } else { 0 };
+    let orientation =
+        if r1_half == r2_half { 0 } else { 1 } ^ if r2_bidir > r1_bidir { 0 } else { 3 };
+
+    // Check if this orientation has valid statistics
+    if stats[orientation].failed {
+        return false;
+    }
+
+    // Calculate distance in bidirectional space
+    let p2 = if r1_half == r2_half {
+        r2_bidir
+    } else {
+        (l_pac << 1) - 1 - r2_bidir
+    };
+    let dist = if p2 > r1_bidir {
+        p2 - r1_bidir
+    } else {
+        r1_bidir - p2
+    };
+
+    // Check if distance is within expected range for this orientation
+    dist >= stats[orientation].low as i64 && dist <= stats[orientation].high as i64
+}
