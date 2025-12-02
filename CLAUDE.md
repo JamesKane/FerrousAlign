@@ -154,6 +154,53 @@ Detailed design documents are in `documents/`:
 
 **Platforms**: macOS (x86_64, arm64), Linux (x86_64, aarch64)
 
+## Known Limitations
+
+### Paired-End Processing
+
+#### ✅ FIXED in v0.7.1: Batch Size Validation
+- **Previous**: No validation that R1/R2 files have equal read counts per batch
+  - Could produce incorrect results if files were mismatched
+  - Silent mis-pairing of reads
+- **Current**: Strict validation with clear error messages
+  - Detects truncated files immediately
+  - Verifies EOF synchronization
+  - Fails fast to prevent corrupt output
+
+#### ❌ No Interleaved FASTQ Support (Planned for v0.8.0)
+- Single file with alternating R1/R2 reads not supported
+- **Workaround**: De-interleave first using `seqtk split` or similar tools:
+  ```bash
+  # De-interleave a single FASTQ file
+  seqtk seq -1 interleaved.fq > R1.fq
+  seqtk seq -2 interleaved.fq > R2.fq
+  ferrous-align mem ref.fa R1.fq R2.fq > out.sam
+  ```
+- **Status**: Feature request tracked for v0.8.0
+
+### File Integrity Requirements
+
+**CRITICAL**: Paired-end FASTQ files must have:
+1. **Equal read counts** (e.g., if R1 has 1M reads, R2 must have exactly 1M)
+2. **Same read order** (R1[i] must be the mate of R2[i])
+3. **No truncation** (both files must be complete)
+
+**To verify before running**:
+```bash
+# Check line counts (should be identical)
+wc -l R1.fq R2.fq
+
+# For gzipped files
+zcat R1.fq.gz | wc -l
+zcat R2.fq.gz | wc -l
+```
+
+**Common causes of mismatches**:
+- Disk full during sequencing output
+- Incomplete file transfer (e.g., scp interrupted)
+- Corrupted or truncated downloads
+- Mismatched file pairs from different samples
+
 ## References
 
 - [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2) - C++ reference implementation

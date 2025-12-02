@@ -217,6 +217,29 @@ pub fn process_paired_end(
         }
     };
 
+    // CRITICAL VALIDATION: Verify batch sizes match to prevent mis-pairing
+    // This catches truncated files, missing reads, and other synchronization issues
+    if first_batch1.len() != first_batch2.len() {
+        log::error!(
+            "Paired-end read count mismatch in bootstrap batch: R1={} reads, R2={} reads",
+            first_batch1.len(),
+            first_batch2.len()
+        );
+        log::error!(
+            "Paired-end FASTQ files must have exactly the same number of reads in the same order."
+        );
+        log::error!(
+            "Common causes: truncated file, missing reads, corrupted data, or mismatched file pairs."
+        );
+        log::error!(
+            "Please verify file integrity with: wc -l {} {}",
+            read1_file,
+            read2_file
+        );
+        return;
+    }
+
+    // Check for empty input
     if first_batch1.names.is_empty() {
         log::warn!("No data to process (empty input files)");
         return;
@@ -420,8 +443,60 @@ pub fn process_paired_end(
             }
         };
 
-        // Check for EOF
-        if batch1.names.is_empty() {
+        // CRITICAL VALIDATION: Verify batch sizes match to prevent mis-pairing
+        if batch1.len() != batch2.len() {
+            log::error!(
+                "Paired-end read count mismatch in batch {}: R1={} reads, R2={} reads",
+                batch_num,
+                batch1.len(),
+                batch2.len()
+            );
+            log::error!(
+                "Paired-end FASTQ files must have exactly the same number of reads in the same order."
+            );
+            log::error!(
+                "Common causes: truncated file, missing reads, corrupted data, or mismatched file pairs."
+            );
+            log::error!(
+                "Please verify file integrity with: wc -l {} {}",
+                read1_file,
+                read2_file
+            );
+            log::error!("Aborting to prevent incorrect alignments.");
+            break;
+        }
+
+        // Check for EOF synchronization
+        // If R1 is empty, R2 must also be empty (and vice versa)
+        if batch1.is_empty() && !batch2.is_empty() {
+            log::error!(
+                "R1 file ended but R2 has {} reads remaining in batch {}. Files are not properly paired.",
+                batch2.len(),
+                batch_num
+            );
+            log::error!(
+                "Please verify files contain the same number of reads: wc -l {} {}",
+                read1_file,
+                read2_file
+            );
+            break;
+        }
+        if !batch1.is_empty() && batch2.is_empty() {
+            log::error!(
+                "R2 file ended but R1 has {} reads remaining in batch {}. Files are not properly paired.",
+                batch1.len(),
+                batch_num
+            );
+            log::error!(
+                "Please verify files contain the same number of reads: wc -l {} {}",
+                read1_file,
+                read2_file
+            );
+            break;
+        }
+
+        // Check for EOF (both files must end together)
+        if batch1.is_empty() {
             log::debug!("[Main] EOF reached after {batch_num} batches");
             break;
         }
