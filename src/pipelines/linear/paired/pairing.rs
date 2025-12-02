@@ -828,6 +828,25 @@ pub fn finalize_pairs_soa(
             soa_r2.tlens[r2_idx] = 0;
         }
     }
+
+    // CRITICAL FIX: Set PAIRED + FIRST_IN_PAIR/SECOND_IN_PAIR flags for ALL alignments,
+    // including supplementary alignments. BWA-MEM2 behavior is that ALL alignments from
+    // paired-end reads (primary, secondary, supplementary) must have the appropriate
+    // pair flags set, not just the primary alignments.
+    //
+    // Without this, supplementary alignments will lack the 0x1 (PAIRED), 0x40 (FIRST_IN_PAIR),
+    // and 0x80 (SECOND_IN_PAIR) flags, causing them to appear as unpaired single-end reads.
+    for idx in 0..soa_r1.flags.len() {
+        // Only set flags if not already set (avoid overwriting for primary alignments)
+        if (soa_r1.flags[idx] & (sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR | sam_flags::SECOND_IN_PAIR)) == 0 {
+            soa_r1.flags[idx] |= sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR;
+        }
+    }
+    for idx in 0..soa_r2.flags.len() {
+        if (soa_r2.flags[idx] & (sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR | sam_flags::SECOND_IN_PAIR)) == 0 {
+            soa_r2.flags[idx] |= sam_flags::PAIRED | sam_flags::SECOND_IN_PAIR;
+        }
+    }
 }
 
 /// Determine if a pair is a "proper pair" based on insert size distribution
