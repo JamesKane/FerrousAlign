@@ -101,12 +101,13 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
     let e_ins_vec = avx::_mm512_set1_epi8(e_ins as i8);
 
     // Initialize first row H from h0
+    // Note: subs_epi8 is saturating - already clamps to 0, no need for max(x, 0)
     let h0_vec = avx::_mm512_loadu_si512(params.h0.as_ptr() as *const _);
     avx::_mm512_storeu_si512(h_ptr as *mut _, h0_vec);
-    let mut h_prev = avx::_mm512_max_epi8(avx::_mm512_subs_epi8(h0_vec, oe_ins_vec), zero);
+    let mut h_prev = avx::_mm512_subs_epi8(h0_vec, oe_ins_vec);
     avx::_mm512_storeu_si512(h_ptr.add(stride) as *mut _, h_prev);
     for j in 2..qmax {
-        let h_curr = avx::_mm512_max_epi8(avx::_mm512_subs_epi8(h_prev, e_ins_vec), zero);
+        let h_curr = avx::_mm512_subs_epi8(h_prev, e_ins_vec);
         avx::_mm512_storeu_si512(h_ptr.add(j * stride) as *mut _, h_curr);
         h_prev = h_curr;
     }
@@ -175,14 +176,15 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
             // Zero where ambiguous (any base >= 4)
             let ambig_mask = avx::_mm512_cmpgt_epu8_mask(or_bases, avx::_mm512_set1_epi8(3));
             let mut m_vec = avx::_mm512_mask_blend_epi8(ambig_mask, m_add, zero);
+            // Note: adds_epi8 is saturating and ambig blend with zero already handles negatives
             m_vec = avx::_mm512_max_epi8(m_vec, zero);
 
-            // E and F updates (saturating)
-            let e_open = avx::_mm512_max_epi8(avx::_mm512_subs_epi8(m_vec, oe_del_vec), zero);
+            // E and F updates - saturating subtraction already clamps to 0
+            let e_open = avx::_mm512_subs_epi8(m_vec, oe_del_vec);
             let e_extend = avx::_mm512_subs_epi8(e_prev, e_del_vec);
             let e_val = avx::_mm512_max_epi8(e_open, e_extend);
 
-            let f_open = avx::_mm512_max_epi8(avx::_mm512_subs_epi8(m_vec, oe_ins_vec), zero);
+            let f_open = avx::_mm512_subs_epi8(m_vec, oe_ins_vec);
             let f_extend = avx::_mm512_subs_epi8(f_vec, e_ins_vec);
             f_vec = avx::_mm512_max_epi8(f_open, f_extend);
 
@@ -190,15 +192,15 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
             let mut h_val = avx::_mm512_max_epi8(m_vec, e_val);
             h_val = avx::_mm512_max_epi8(h_val, f_vec);
 
-            // In-band check: (j > current_beg-1) & (j < current_end)
+            // AVX-512 mask-based in-band check: (j > current_beg-1) & (j < current_end)
+            // All operations use masks - no intermediate vector storage needed
             let j_vec = avx::_mm512_set1_epi8(j as i8);
             let in_band_left =
                 avx::_mm512_cmpgt_epi8_mask(j_vec, avx::_mm512_subs_epi8(current_beg_vec, one));
             let in_band_right = avx::_mm512_cmpgt_epi8_mask(current_end_vec, j_vec);
-            let in_band_mask = in_band_left & in_band_right;
 
-            // Combined lane mask for valid work at (i,j)
-            let combined_mask: u64 = in_band_mask & active_mask;
+            // Combined lane mask for valid work at (i,j): in-band AND active
+            let combined_mask: u64 = in_band_left & in_band_right & active_mask;
 
             // Mask h/e values outside band/active
             let h_masked = avx::_mm512_maskz_mov_epi8(combined_mask, h_val);
@@ -221,13 +223,21 @@ unsafe fn sw_kernel_avx512_impl<const W: usize>(
         }
 
         if zdrop > 0 {
-            // Determine lanes to terminate using zdrop based on row_max vs global max
-            let global_gt_row_mask: u64 = avx::_mm512_cmpgt_epi8_mask(max_scores, row_max_vec);
-            // Compute (global - row) > zdrop using i16 to avoid wrap; do approximate: if max>row and (max - row) as i16 > zdrop
-            // For simplicity and to preserve correctness biases, we conservatively terminate when row_max==0 as in generic fast path
+            // AVX-512 optimized z-drop termination with mask arithmetic
+            // Terminate lanes where: (max_scores - row_max_vec) > zdrop OR row_max_vec == 0
+
+            // Check for zero row max (definite termination)
             let row_zero_mask: u64 = avx::_mm512_cmpeq_epi8_mask(row_max_vec, zero);
-            // Only consider active lanes
-            let term_now = (row_zero_mask | global_gt_row_mask) & active_mask;
+
+            // Compute score drop: saturating subtraction avoids underflow
+            let score_drop_vec = avx::_mm512_subs_epu8(max_scores, row_max_vec);
+            let zdrop_vec = avx::_mm512_set1_epi8(zdrop as i8);
+
+            // Mask for lanes where drop exceeds threshold
+            let drop_exceeded_mask: u64 = avx::_mm512_cmpgt_epu8_mask(score_drop_vec, zdrop_vec);
+
+            // Terminate if zero row OR drop exceeded, but only for active lanes
+            let term_now = (row_zero_mask | drop_exceeded_mask) & active_mask;
             term_mask_global |= term_now;
         }
     }

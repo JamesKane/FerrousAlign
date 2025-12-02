@@ -47,10 +47,6 @@ impl SwSimd for SwEngine128 {
         unsafe { simd::SimdEngine128::cmpeq_epi8(a, b) }
     }
     #[inline(always)]
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        unsafe { simd::SimdEngine128::cmpgt_epi8(b, a) }
-    }
-    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine128::blendv_epi8(a, b, mask) }
     }
@@ -119,10 +115,6 @@ impl SwSimd for SwEngine256 {
         unsafe { simd::SimdEngine256::cmpeq_epi8(a, b) }
     }
     #[inline(always)]
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        unsafe { simd::SimdEngine256::cmpgt_epi8(b, a) }
-    }
-    #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine256::blendv_epi8(a, b, mask) }
     }
@@ -189,10 +181,6 @@ impl SwSimd for SwEngine512 {
     #[inline(always)]
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
         unsafe { simd::SimdEngine512::cmpeq_epi8(a, b) }
-    }
-    #[inline(always)]
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8 {
-        unsafe { simd::SimdEngine512::cmpgt_epi8(b, a) }
     }
     #[inline(always)]
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8 {

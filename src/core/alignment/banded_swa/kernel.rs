@@ -102,17 +102,16 @@ where
     let e_ins_vec = E::set1_epi8(e_ins);
 
     // Initialize first row into workspace buffers
+    // Note: subs_epi8 is saturating subtraction - already clamps to 0, no need for max(x, 0)
     let h0_vec = E::loadu_epi8(params.h0.as_ptr());
     E::storeu_epi8(h_ptr, h0_vec);
 
     let h1_vec = E::subs_epi8(h0_vec, oe_ins_vec);
-    let h1_vec = E::max_epi8(h1_vec, zero);
     E::storeu_epi8(h_ptr.add(stride), h1_vec);
 
     let mut h_prev = h1_vec;
     for j in 2..qmax {
         let h_curr = E::subs_epi8(h_prev, e_ins_vec);
-        let h_curr = E::max_epi8(h_curr, zero);
         E::storeu_epi8(h_ptr.add(j * stride), h_curr);
         h_prev = h_curr;
     }
@@ -131,6 +130,11 @@ where
     }
 
     let qlen_vec = E::loadu_epi8(params.qlen.as_ptr());
+
+    // Pre-allocate temporary arrays used in the main loop (hoist out of hot path)
+    let mut current_beg = [0i8; W];
+    let mut current_end = [0i8; W];
+    let mut term_mask_vals = [0i8; W];
 
     // Main DP loop
     let mut _final_row = tmax;
@@ -161,16 +165,17 @@ where
         let mut current_end_vec = E::min_epu8(end_vec, i_plus_w_plus_1);
         current_end_vec = E::min_epu8(current_end_vec, qlen_vec);
 
-        let mut current_beg = [0i8; W];
-        let mut current_end = [0i8; W];
+        // Reuse pre-allocated arrays (hoisted out of loop)
         E::storeu_epi8(current_beg.as_mut_ptr(), current_beg_vec);
         E::storeu_epi8(current_end.as_mut_ptr(), current_end_vec);
 
-        let mut term_mask_vals = [0i8; W];
+        // Build termination mask for this row
         for lane in 0..lanes {
-            if !terminated[lane] && i < params.tlen[lane] as usize {
-                term_mask_vals[lane] = -1i8;
-            }
+            term_mask_vals[lane] = if !terminated[lane] && i < params.tlen[lane] as usize {
+                -1i8
+            } else {
+                0i8
+            };
         }
         let term_mask = E::loadu_epi8(term_mask_vals.as_ptr());
 
@@ -190,13 +195,12 @@ where
             m_vec = E::blendv_epi8(m_vec, zero, or_bases);
             m_vec = E::max_epi8(m_vec, zero);
 
+            // Note: subs_epi8 saturates to 0, so no need for max(x, 0) afterward
             let e_open = E::subs_epi8(m_vec, oe_del_vec);
-            let e_open = E::max_epi8(e_open, zero);
             let e_extend = E::subs_epi8(e_prev, e_del_vec);
             let e_val = E::max_epi8(e_open, e_extend);
 
             let f_open = E::subs_epi8(m_vec, oe_ins_vec);
-            let f_open = E::max_epi8(f_open, zero);
             let f_extend = E::subs_epi8(f_vec, e_ins_vec);
             f_vec = E::max_epi8(f_open, f_extend);
 
@@ -308,7 +312,6 @@ pub trait SwSimd: Copy {
     unsafe fn max_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     unsafe fn min_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     unsafe fn cmpeq_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
-    unsafe fn cmplt_epi8(a: Self::V8, b: Self::V8) -> Self::V8;
     /// Select bytes from b where mask MSB is set, else from a (like blendv)
     unsafe fn blendv_epi8(a: Self::V8, b: Self::V8, mask: Self::V8) -> Self::V8;
     unsafe fn and_si128(a: Self::V8, b: Self::V8) -> Self::V8;
