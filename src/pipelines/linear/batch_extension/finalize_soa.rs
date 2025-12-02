@@ -1,9 +1,35 @@
 use super::super::chaining::Chain;
-use super::super::finalization::Alignment;
+use super::super::finalization::{Alignment, sam_flags};
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::super::region::{generate_cigar_from_region, merge_extension_scores_to_regions};
 use super::super::seeding::Seed;
+
+/// Create an unmapped alignment (helper for finalization)
+fn create_unmapped_alignment_internal(query_name: &str) -> Alignment {
+    Alignment {
+        query_name: query_name.to_string(),
+        flag: sam_flags::UNMAPPED,
+        ref_name: "*".to_string(),
+        ref_id: 0,
+        pos: 0,
+        mapq: 0,
+        score: 0,
+        cigar: Vec::new(),
+        rnext: "*".to_string(),
+        pnext: 0,
+        tlen: 0,
+        seq: String::new(),
+        qual: String::new(),
+        tags: Vec::new(),
+        query_start: 0,
+        query_end: 0,
+        seed_coverage: 0,
+        hash: 0,
+        frac_rep: 0.0,
+    }
+}
+
 /// SoA-native finalization (PR3/PR4)
 ///
 /// Converts extension results to final alignments while working with SoA structures.
@@ -277,9 +303,7 @@ pub fn finalize_alignments_soa(
             if regions.is_empty() {
                 return (
                     read_idx,
-                    vec![super::orchestration::create_unmapped_alignment_internal(
-                        query_name,
-                    )],
+                    vec![create_unmapped_alignment_internal(query_name)],
                 );
             }
 
@@ -290,9 +314,7 @@ pub fn finalize_alignments_soa(
             if filtered_regions.is_empty() {
                 return (
                     read_idx,
-                    vec![super::orchestration::create_unmapped_alignment_internal(
-                        query_name,
-                    )],
+                    vec![create_unmapped_alignment_internal(query_name)],
                 );
             }
 
@@ -348,9 +370,7 @@ pub fn finalize_alignments_soa(
             if alignments.is_empty() {
                 return (
                     read_idx,
-                    vec![super::orchestration::create_unmapped_alignment_internal(
-                        query_name,
-                    )],
+                    vec![create_unmapped_alignment_internal(query_name)],
                 );
             }
 
@@ -365,11 +385,7 @@ pub fn finalize_alignments_soa(
     let mut all_alignments: Vec<Vec<Alignment>> = soa_context
         .query_names
         .iter()
-        .map(|name| {
-            vec![super::orchestration::create_unmapped_alignment_internal(
-                name,
-            )]
-        })
+        .map(|name| vec![create_unmapped_alignment_internal(name)])
         .collect();
 
     for (read_idx, alignments) in valid_alignments {

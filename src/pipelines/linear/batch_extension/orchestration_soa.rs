@@ -4,17 +4,54 @@ use super::super::mem_opt::MemOpt;
 use super::super::seeding::find_seeds_batch;
 use super::collect_soa::collect_extension_jobs_batch_soa;
 use super::dispatch::execute_batch_simd_scoring;
-use super::distribute::convert_batch_results_to_outscores;
 use super::finalize_soa::finalize_alignments_soa;
+use super::types::{
+    BatchExtensionResult, ExtensionJobBatch, SoAAlignmentResult, SoAReadExtensionContext,
+};
+use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::core::alignment::banded_swa::{BandedPairWiseSW, OutScore};
+use crate::core::io::soa_readers::SoAReadBatch;
+use std::sync::Arc;
+
+/// Convert batch extension results to per-read OutScore vectors (helper)
+fn convert_batch_results_to_outscores(
+    results: &[BatchExtensionResult],
+    batch: &ExtensionJobBatch,
+    num_reads: usize,
+) -> Vec<Vec<OutScore>> {
+    // Pre-allocate per-read result vectors
+    let mut per_read_scores: Vec<Vec<OutScore>> = vec![Vec::new(); num_reads];
+
+    // Determine size of each read's score vector from the batch jobs
+    let mut read_job_counts: Vec<usize> = vec![0; num_reads];
+    for job in &batch.jobs {
+        read_job_counts[job.read_idx] += 1;
+    }
+
+    for (read_idx, count) in read_job_counts.iter().enumerate() {
+        per_read_scores[read_idx].reserve(*count);
+    }
+
+    // Distribute results back to per-read vectors
+    // Note: results are in the same order as batch.jobs
+    for result in results {
+        per_read_scores[result.read_idx].push(OutScore {
+            score: result.score,
+            query_end_pos: result.query_end,
+            target_end_pos: result.ref_end,
+            global_score: result.gscore,
+            gtarget_end_pos: result.gref_end,
+            max_offset: result.max_off,
+        });
+    }
+
+    per_read_scores
+}
+
 /// SoA-native sub-batch processing (PR3)
 ///
 /// This is the end-to-end SoA implementation that eliminates AoS-to-SoA conversion.
 /// Data flows: SoAReadBatch → find_seeds_batch → chain_seeds_batch → extension → finalization
-use super::types::{ExtensionJobBatch, SoAAlignmentResult, SoAReadExtensionContext};
-use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::core::alignment::banded_swa::BandedPairWiseSW;
-use crate::core::io::soa_readers::SoAReadBatch;
-use std::sync::Arc;
 
 /// Process a sub-batch using end-to-end SoA pipeline (PR3/PR4)
 ///
