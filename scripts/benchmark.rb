@@ -284,6 +284,74 @@ puts "Exit: #{exit_status.exitstatus}"
   )
 end
 
+# Helper function to format numbers with comma separators
+def format_number(num)
+  num.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
+end
+
+# Helper function to compute CPU efficiency as a parallel multiplier
+def cpu_efficiency_multiplier(cpu_time, wall_time)
+  return nil if cpu_time.nil? || wall_time.nil? || wall_time.zero?
+  cpu_time / wall_time
+end
+
+# Prints a detailed metrics table for a single run
+def print_detailed_metrics(result, title)
+  puts ""
+  puts "### #{title}"
+  puts ""
+
+  total_records = result.record_count
+  supplementary = total_records - TOTAL_READS
+
+  # Determine SIMD width display
+  simd_width_display = result.simd_width.start_with?("128") ? "128-bit (baseline)" : result.simd_width
+  simd_parallelism_display = result.simd_parallelism == 0 ? "N/A" : "#{result.simd_parallelism}-way"
+
+  # CPU efficiency as a multiplier
+  cpu_multiplier = cpu_efficiency_multiplier(result.cpu_time_s, result.wall_time_s)
+  cpu_efficiency_display = cpu_multiplier ? sprintf('%.0f%% (%.1fx parallel)', cpu_multiplier * 100, cpu_multiplier) : "N/A"
+
+  puts "| Metric | Value |"
+  puts "|--------|-------|"
+  puts "| **SIMD Width** | **#{simd_width_display}** |"
+  puts "| **Parallelism** | **#{simd_parallelism_display}** |"
+  puts "| Total reads | #{format_number(TOTAL_READS)} (#{format_number(TOTAL_READ_PAIRS)} pairs) |"
+  puts "| Total records | #{format_number(total_records)} |"
+  puts "| Supplementary | #{format_number(supplementary)} |"
+
+  if result.mapped_percent
+    puts "| Mapped | #{sprintf('%.2f', result.mapped_percent)}% |"
+  else
+    puts "| Mapped | N/A |"
+  end
+
+  if result.properly_paired_percent
+    puts "| Properly paired | #{sprintf('%.2f', result.properly_paired_percent)}% |"
+  else
+    puts "| Properly paired | N/A |"
+  end
+
+  if result.pairs_rescued
+    puts "| Pairs rescued | #{format_number(result.pairs_rescued)} |"
+  else
+    puts "| Pairs rescued | N/A |"
+  end
+
+  puts "| **Wall time** | **#{result.format_wall_time} (#{sprintf('%.2f', result.wall_time_s)}s)** |"
+
+  if result.cpu_time_s
+    puts "| CPU time | #{sprintf('%.2f', result.cpu_time_s)}s |"
+  else
+    puts "| CPU time | N/A |"
+  end
+
+  puts "| **Throughput** | **#{format_number(result.throughput.to_i)} reads/sec** |"
+  puts "| CPU efficiency | #{cpu_efficiency_display} |"
+  puts "| Max memory | #{sprintf('%.1f', result.max_rss_kb / 1024.0 / 1024.0)} GB |"
+  puts ""
+end
+
 # Prints the benchmark summary tables
 def print_summary_tables(results)
   puts "========================================"
@@ -302,67 +370,16 @@ def print_summary_tables(results)
     max_memory_gb = '%.2f' % (r.max_rss_kb / 1024.0 / 1024.0)
 
     simd_label = r.simd_width.split(' ').first # e.g., 128-bit
-    
-    puts "| **#{tool_name}** | #{reference_name} | #{simd_label} | #{r.format_wall_time} | #{max_memory_gb} | #{r.throughput.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} |"
+
+    puts "| **#{tool_name}** | #{reference_name} | #{simd_label} | #{r.format_wall_time} | #{max_memory_gb} | #{format_number(r.throughput.to_i)} |"
   end
   puts ""
-  puts "---"
 
-  # --- Table 2: Detailed Results (for the first run) ---
-  puts "### 🔬 Detailed Run Metrics (Example: #{results.first.name})"
-  first_run = results.first
-  total_records = first_run.record_count
-
-  # Calculate supplementary records
-  supplementary = total_records - TOTAL_READS
-  
-  # Mapped and properly paired from samtools flagstats (parsed earlier)
-  mapped_percent = first_run.mapped_percent
-  properly_paired_percent = first_run.properly_paired_percent
-  
-  # CPU time and efficiency from /usr/bin/time -v (parsed earlier)
-  cpu_time = first_run.cpu_time_s
-  cpu_efficiency = first_run.cpu_efficiency_pct
-  
-  simd_width_display = first_run.simd_width.start_with?("128") ? "128-bit (baseline)" : first_run.simd_width
-  simd_parallelism_display = first_run.simd_parallelism == 0 ? "N/A" : "#{first_run.simd_parallelism}-way"
-
-
-  puts "| Metric | Value |"
-  puts "|:---|:---|"
-  puts "| **SIMD Width** | **#{simd_width_display}** |"
-  puts "| **Parallelism** | **#{simd_parallelism_display}** |"
-  puts "| Total reads | #{TOTAL_READS.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} (#{TOTAL_READ_PAIRS.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} pairs) |"
-  puts "| Total records | #{total_records.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} |"
-  puts "| Supplementary | #{supplementary.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} |"
-  if mapped_percent
-    puts "| Mapped | #{sprintf('%.2f', mapped_percent)}% |"
-  else
-    puts "| Mapped | N/A |"
+  # --- Table 2: Detailed Metrics for Each Run ---
+  results.each_with_index do |result, idx|
+    title = "#{idx + 1}. #{result.name} - Detailed Metrics"
+    print_detailed_metrics(result, title)
   end
-  if properly_paired_percent
-    puts "| Properly paired | #{sprintf('%.2f', properly_paired_percent)}% |"
-  else
-    puts "| Properly paired | N/A |"
-  end
-  puts "| **Wall time** | **#{first_run.format_wall_time} (#{sprintf('%.2f', first_run.wall_time_s)}s)** |"
-  if cpu_time
-    puts "| CPU time | #{sprintf('%.2f', cpu_time)}s |"
-  else
-    puts "| CPU time | N/A |"
-  end
-  puts "| **Throughput** | **#{first_run.throughput.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} reads/sec** |"
-  if cpu_efficiency
-    puts "| CPU efficiency | #{sprintf('%.0f', cpu_efficiency)}% |"
-  else
-    puts "| CPU efficiency | N/A |"
-  end
-  if first_run.pairs_rescued
-    puts "| Pairs rescued | #{first_run.pairs_rescued.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} |"
-  else
-    puts "| Pairs rescued | N/A |"
-  end
-  puts "| Max memory | #{'%.2f' % (first_run.max_rss_kb / 1024.0 / 1024.0)} GB |"
 end
 
 
