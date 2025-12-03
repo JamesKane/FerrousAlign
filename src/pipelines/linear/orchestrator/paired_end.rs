@@ -32,8 +32,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use rayon::prelude::*;
-
 use super::{
     OrchestratorError, PipelineMode, PipelineOrchestrator, PipelineStatistics, PipelineTimer,
 };
@@ -74,6 +72,8 @@ pub struct PairedEndOrchestrator<'a> {
     seeder: SeedingStage,
     chainer: ChainingStage,
     extender: ExtensionStage,
+    /// Finalization stage (reserved for future use in full stage-based output)
+    #[allow(dead_code)]
     finalizer: FinalizationStage,
     /// Insert size statistics (bootstrapped from first batch)
     insert_stats: [InsertSizeStats; 4],
@@ -495,7 +495,8 @@ impl PairedEndOrchestrator<'_> {
                     .sum::<usize>();
 
             log::info!(
-                "read_chunk: {}, work_chunk_size: {}, nseq: {}",
+                "Batch {}: read_chunk: {}, work_chunk_size: {}, nseq: {}",
+                batch_num,
                 self.options.batch_size,
                 batch_bp,
                 batch_size * 2

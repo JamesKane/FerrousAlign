@@ -1,12 +1,10 @@
 use super::index::index::BwaIndex;
 use super::mem_opt::{MemCliOptions, MemOpt};
-use super::paired::paired_end::process_paired_end;
-use super::single_end::process_single_end;
+use super::orchestrator::{PairedEndOrchestrator, PipelineOrchestrator, SingleEndOrchestrator};
 use crate::io::async_writer::AsyncChannelWriter;
 use anyhow::Result;
 use std::fs::File;
 use std::io::{self, Write};
-// Added import for BwaIndex
 
 pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     // ========================================================================
@@ -221,42 +219,48 @@ pub fn main_mem(opts: &MemCliOptions) -> Result<()> {
     let mut writer: Box<dyn Write> = Box::new(AsyncChannelWriter::new(base_writer));
 
     // ========================================================================
-    // HETEROGENEOUS COMPUTE DISPATCH
+    // PIPELINE ORCHESTRATION
     // ========================================================================
     //
     // This is the dispatch point where alignment processing begins.
-    // The compute_ctx is passed to processing functions to control which
-    // hardware backend (CPU SIMD, GPU, NPU) is used for alignment.
+    // The new stage-based orchestrators coordinate the pipeline:
+    //   - SingleEndOrchestrator: Pure SoA pipeline for unpaired reads
+    //   - PairedEndOrchestrator: Hybrid AoS/SoA for paired reads
     //
     // The compute context flows through:
-    //   main_mem() → process_single/paired_end() → align_read_deferred() → extension
+    //   main_mem() → Orchestrator → Stages → Extension kernels
     //
     // ========================================================================
 
     // Detect paired-end mode: if exactly 2 query files provided
-    if opts.reads.len() == 2 {
+    let stats = if opts.reads.len() == 2 {
         // Paired-end mode
-        process_paired_end(
-            &bwa_idx,
-            opts.reads[0]
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("Invalid read1 file path"))?,
-            opts.reads[1]
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("Invalid read2 file path"))?,
-            &mut writer,
-            &opt,
-            &compute_ctx,
-        );
+        let mut orchestrator = PairedEndOrchestrator::new(&bwa_idx, &opt, &compute_ctx);
+        orchestrator
+            .run(&opts.reads, &mut writer)
+            .map_err(|e| anyhow::anyhow!("Pipeline error: {}", e))?
     } else {
-        // Single-end mode (original behavior)
-        let read_files_str: Vec<String> = opts
-            .reads
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-        process_single_end(&bwa_idx, &read_files_str, &mut writer, &opt, &compute_ctx);
-    }
+        // Single-end mode
+        let mut orchestrator = SingleEndOrchestrator::new(&bwa_idx, &opt, &compute_ctx);
+        orchestrator
+            .run(&opts.reads, &mut writer)
+            .map_err(|e| anyhow::anyhow!("Pipeline error: {}", e))?
+    };
+
+    // Log final statistics
+    log::info!(
+        "Pipeline complete: {} reads, {:.2} Mbases, {:.2}s wall, {:.2}s CPU",
+        stats.total_reads,
+        stats.total_bases as f64 / 1_000_000.0,
+        stats.wall_time_secs,
+        stats.cpu_time_secs
+    );
+    log::info!(
+        "Throughput: {:.2} reads/sec, {:.2} Mbases/sec",
+        stats.reads_per_second(),
+        stats.throughput_mbases_per_sec()
+    );
+
     // Drop writer to ensure background thread flushes and joins before exit
     drop(writer);
     Ok(())

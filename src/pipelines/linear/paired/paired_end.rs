@@ -170,23 +170,33 @@ fn process_batch_parallel(
     SoAAlignmentResult::merge_all(results)
 }
 
-// Process paired-end reads with parallel batching
 // ============================================================================
-// HETEROGENEOUS COMPUTE ENTRY POINT - PAIRED-END PROCESSING
+// DEPRECATED: PAIRED-END PROCESSING
 // ============================================================================
 //
-// This function is the main entry point for paired-end alignment processing.
-// The compute_ctx parameter controls which hardware backend is used for
-// alignment computations.
+// This function is deprecated as of v0.8.0. Use PairedEndOrchestrator instead.
 //
-// Compute flow: process_paired_end() → align_read_deferred() → extension
+// The new orchestrator provides:
+// - Stage-based pipeline with clear separation of concerns
+// - Better statistics collection (mapping rate, proper pairing rate)
+// - Unified error handling with proper Result types
+// - Hybrid AoS/SoA architecture for correct pairing
 //
-// To add GPU/NPU acceleration:
-// 1. Pass compute_ctx through to align_read_deferred()
-// 2. In extension, route based on compute_ctx.backend
-// 3. Implement backend-specific alignment kernel
+// Migration:
+// ```rust
+// // Old:
+// process_paired_end(&bwa_idx, r1, r2, &mut writer, &opt, &compute_ctx);
+//
+// // New:
+// let mut orch = PairedEndOrchestrator::new(&bwa_idx, &opt, &compute_ctx);
+// let stats = orch.run(&[r1.into(), r2.into()], &mut writer)?;
+// ```
 //
 // ============================================================================
+#[deprecated(
+    since = "0.8.0",
+    note = "Use PairedEndOrchestrator from orchestrator module instead"
+)]
 pub fn process_paired_end(
     bwa_idx: &BwaIndex,
     read1_file: &str,

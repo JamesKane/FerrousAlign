@@ -112,21 +112,31 @@ fn process_batch_parallel(
 }
 
 // ============================================================================
-// HETEROGENEOUS COMPUTE ENTRY POINT - SINGLE-END PROCESSING
+// DEPRECATED: SINGLE-END PROCESSING
 // ============================================================================
 //
-// This function is the main entry point for single-end alignment processing.
-// The compute_ctx parameter controls which hardware backend is used for
-// alignment computations.
+// This function is deprecated as of v0.8.0. Use SingleEndOrchestrator instead.
 //
-// Compute flow: process_single_end() → align_read_deferred() → extension
+// The new orchestrator provides:
+// - Stage-based pipeline with clear separation of concerns
+// - Better statistics collection
+// - Unified error handling
 //
-// To add GPU/NPU acceleration:
-// 1. Pass compute_ctx through to align_read_deferred()
-// 2. In extension, route based on compute_ctx.backend
-// 3. Implement backend-specific alignment kernel
+// Migration:
+// ```rust
+// // Old:
+// process_single_end(&bwa_idx, &files, &mut writer, &opt, &compute_ctx);
+//
+// // New:
+// let mut orch = SingleEndOrchestrator::new(&bwa_idx, &opt, &compute_ctx);
+// let stats = orch.run(&files, &mut writer)?;
+// ```
 //
 // ============================================================================
+#[deprecated(
+    since = "0.8.0",
+    note = "Use SingleEndOrchestrator from orchestrator module instead"
+)]
 pub fn process_single_end(
     bwa_idx: &BwaIndex,
     query_files: &Vec<String>,
