@@ -97,7 +97,7 @@ impl PipelineStage for ExtensionStage {
         // Build SoAReadExtensionContext from ChainingOutput
         let mut soa_context = SoAReadExtensionContext {
             read_boundaries: input.seeds.read_seed_boundaries.clone(),
-            query_names: Vec::new(), // Not available from chaining output, will be set by finalization
+            query_names: input.query_names.clone(),
             query_lengths: input.query_lengths.clone(),
             encoded_queries: input.encoded_queries.encoded_seqs,
             encoded_query_boundaries: input.encoded_queries.query_boundaries,

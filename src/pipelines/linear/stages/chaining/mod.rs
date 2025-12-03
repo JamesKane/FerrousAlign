@@ -58,6 +58,9 @@ pub struct ChainingOutput {
     /// Encoded query sequences (reverse complement)
     pub encoded_queries_rc: SoAEncodedQueryBatch,
 
+    /// Query names (propagated for SAM output)
+    pub query_names: Vec<String>,
+
     /// Query lengths per read
     pub query_lengths: Vec<i32>,
 }
@@ -137,24 +140,8 @@ impl PipelineStage for ChainingStage {
             input.seeds.query_pos.len()
         );
 
-        // Step 2: Calculate query lengths for filtering
-        let query_lengths: Vec<i32> = input
-            .seeds
-            .read_seed_boundaries
-            .iter()
-            .enumerate()
-            .map(|(read_idx, _)| {
-                // Get query length from encoded query boundaries
-                if read_idx < input.encoded_queries.query_boundaries.len() {
-                    input.encoded_queries.query_boundaries[read_idx].1 as i32
-                } else {
-                    0
-                }
-            })
-            .collect();
-
-        // Step 3: Filter chains
-        filter_chains_batch(&mut chains, &input.seeds, ctx.options, &query_lengths);
+        // Step 2: Filter chains using query lengths from seeding stage
+        filter_chains_batch(&mut chains, &input.seeds, ctx.options, &input.query_lengths);
 
         let kept_chains = chains.kept.iter().filter(|&&k| k > 0).count();
         log::debug!("ChainingStage: {} chains kept after filtering", kept_chains);
@@ -164,7 +151,8 @@ impl PipelineStage for ChainingStage {
             seeds: input.seeds,
             encoded_queries: input.encoded_queries,
             encoded_queries_rc: input.encoded_queries_rc,
-            query_lengths,
+            query_names: input.query_names,
+            query_lengths: input.query_lengths,
         })
     }
 

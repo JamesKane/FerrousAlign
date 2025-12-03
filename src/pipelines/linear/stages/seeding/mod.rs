@@ -61,6 +61,12 @@ pub struct SeedingOutput {
 
     /// Encoded query sequences (reverse complement)
     pub encoded_queries_rc: SoAEncodedQueryBatch,
+
+    /// Query names (propagated for SAM output)
+    pub query_names: Vec<String>,
+
+    /// Query lengths per read
+    pub query_lengths: Vec<i32>,
 }
 
 impl SeedingOutput {
@@ -113,6 +119,14 @@ impl PipelineStage for SeedingStage {
             return Ok(SeedingOutput::new());
         }
 
+        // Extract query names and lengths before processing
+        let query_names = input.names.clone();
+        let query_lengths: Vec<i32> = input
+            .read_boundaries
+            .iter()
+            .map(|(_, len)| *len as i32)
+            .collect();
+
         // Delegate to existing implementation
         let (seeds, encoded_queries, encoded_queries_rc) =
             find_seeds_batch(ctx.index, &input, ctx.options);
@@ -121,6 +135,8 @@ impl PipelineStage for SeedingStage {
             seeds,
             encoded_queries,
             encoded_queries_rc,
+            query_names,
+            query_lengths,
         })
     }
 
