@@ -1,6 +1,6 @@
 //! Banded Smith–Waterman: shared kernel + thin ISA wrappers + dispatch
 
-mod engines; // SwEngine128/256/512 adapters (no public API)
+pub mod engines; // SwEngine128/256/512 adapters (used in tests)
 pub mod kernel; // SwSimd trait + sw_kernel + KernelParams
 pub mod scalar;
 pub mod scoring;

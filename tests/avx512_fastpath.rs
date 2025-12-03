@@ -4,7 +4,8 @@
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
 
 use ferrous_align::core::alignment::banded_swa::isa_avx512_int8::simd_banded_swa_batch64_soa;
-use ferrous_align::core::alignment::banded_swa::kernel::{KernelParams, SwEngine512, sw_kernel};
+use ferrous_align::core::alignment::banded_swa::kernel::{KernelParams, sw_kernel};
+use ferrous_align::core::alignment::banded_swa::engines::SwEngine512;
 use ferrous_align::core::alignment::banded_swa::shared::{SoAInputs, pad_batch, soa_transform};
 
 #[test]
@@ -68,7 +69,7 @@ fn avx512_fastpath_parity_small() {
         m: 5,
         cfg: None,
     };
-    let generic = unsafe { sw_kernel::<W, SwEngine512>(&params) };
+    let generic = unsafe { sw_kernel::<W, SwEngine512>(&params, W) };
 
     assert_eq!(fast.len(), generic.len());
     for (a, b) in fast.iter().zip(generic.iter()) {
