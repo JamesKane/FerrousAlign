@@ -115,7 +115,27 @@ impl PairedEndOrchestrator<'_> {
         *alignments1 = soa1.to_aos();
         *alignments2 = soa2.to_aos();
 
+        // Fix hash values for any alignments that don't have one (e.g., rescued alignments)
+        // This matches BWA-MEM2's approach where mem_mark_primary_se() sets hashes AFTER mate rescue
+        Self::fix_missing_hashes(alignments1);
+        Self::fix_missing_hashes(alignments2);
+
         rescued
+    }
+
+    /// Fix missing hash values for alignments that have hash=0
+    /// This happens for rescued alignments and unmapped alignments.
+    /// Matches BWA-MEM2's approach where hashes are computed after mate rescue.
+    fn fix_missing_hashes(all_alignments: &mut [Vec<Alignment>]) {
+        for (read_idx, alignments) in all_alignments.iter_mut().enumerate() {
+            for (aln_idx, aln) in alignments.iter_mut().enumerate() {
+                if aln.hash == 0 {
+                    // Compute hash using same formula as finalization: hash_64(read_id + aln_idx)
+                    // Use read_idx as the read_id since we don't have the global batch offset here
+                    aln.hash = crate::utils::hash_64(read_idx as u64 + aln_idx as u64);
+                }
+            }
+        }
     }
 
     /// Write paired-end alignments to output.
