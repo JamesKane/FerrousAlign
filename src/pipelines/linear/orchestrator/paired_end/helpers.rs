@@ -166,18 +166,25 @@ impl PairedEndOrchestrator<'_> {
             let qual2 =
                 std::str::from_utf8(&batch2.quals[seq_start2..seq_start2 + seq_len2]).unwrap_or("");
 
-            // Write R1 alignments
-            if let Some(aln) = alns1.first() {
-                writeln!(output, "{}", aln.to_sam_string_with_seq(seq1, qual1))
-                    .map_err(|e| OrchestratorError::Io(e))?;
-                records += 1;
+            // Write R1: primary (first) + any supplementary alignments
+            // BWA-MEM2 outputs primary and supplementary, but skips secondary
+            for (idx, aln) in alns1.iter().enumerate() {
+                // Write primary (idx == 0) or supplementary (SUPPLEMENTARY flag set)
+                if idx == 0 || (aln.flag & sam_flags::SUPPLEMENTARY) != 0 {
+                    writeln!(output, "{}", aln.to_sam_string_with_seq(seq1, qual1))
+                        .map_err(|e| OrchestratorError::Io(e))?;
+                    records += 1;
+                }
             }
 
-            // Write R2 alignments
-            if let Some(aln) = alns2.first() {
-                writeln!(output, "{}", aln.to_sam_string_with_seq(seq2, qual2))
-                    .map_err(|e| OrchestratorError::Io(e))?;
-                records += 1;
+            // Write R2: primary (first) + any supplementary alignments
+            for (idx, aln) in alns2.iter().enumerate() {
+                // Write primary (idx == 0) or supplementary (SUPPLEMENTARY flag set)
+                if idx == 0 || (aln.flag & sam_flags::SUPPLEMENTARY) != 0 {
+                    writeln!(output, "{}", aln.to_sam_string_with_seq(seq2, qual2))
+                        .map_err(|e| OrchestratorError::Io(e))?;
+                    records += 1;
+                }
             }
         }
 
