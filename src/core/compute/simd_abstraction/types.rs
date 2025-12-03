@@ -15,10 +15,10 @@
 //! lane reordering), implemented via NEON `vreinterpret` intrinsics.
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) use std::arch::x86_64 as simd_arch;
+pub use std::arch::x86_64 as simd_arch;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use std::arch::aarch64 as simd_arch;
+pub use std::arch::aarch64 as simd_arch;
 
 /// Type alias for `__m128i` on x86_64.
 #[allow(non_camel_case_types)]
@@ -102,5 +102,21 @@ impl __m128i {
     #[inline]
     pub fn from_s32(v: simd_arch::int32x4_t) -> Self {
         Self(unsafe { simd_arch::vreinterpretq_u8_s32(v) })
+    }
+
+    /// Create a new vector by loading from a slice.
+    /// Panics if the slice is not 16 bytes long.
+    #[inline]
+    pub fn from_slice(slice: &[i8]) -> Self {
+        assert_eq!(slice.len(), 16);
+        Self(unsafe { simd_arch::vreinterpretq_u8_s8(simd_arch::vld1q_s8(slice.as_ptr())) })
+    }
+
+    /// Copy the vector's contents to a slice.
+    /// Panics if the slice is not 16 bytes long.
+    #[inline]
+    pub fn copy_to_slice(&self, slice: &mut [i8]) {
+        assert_eq!(slice.len(), 16);
+        unsafe { simd_arch::vst1q_s8(slice.as_mut_ptr(), self.as_s8()) };
     }
 }
