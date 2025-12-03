@@ -8,7 +8,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 **Critical**: The C++ bwa-mem2 behavior and file formats are the technical specification. Any deviation is a critical bug.
 
-**Status**: v0.7.0-alpha (feature/core-rearch) - SoA architecture migration complete, integration testing in progress.
+**Status**: v0.8.0-alpha (feature/pipeline-structure) - Stage-based pipeline architecture complete, optimization work in progress.
 
 ## Build Commands
 
@@ -57,23 +57,55 @@ src/
 │   ├── compute/                    # SIMD abstraction (SSE/AVX2/AVX-512/NEON)
 │   └── io/                         # SoA-aware I/O (SoAReadBatch, SAM output)
 ├── pipelines/
-│   └── linear/                     # BWA-MEM pipeline (SoA-native)
-│       ├── batch_extension/        # Batched extension orchestration
+│   └── linear/                     # BWA-MEM pipeline (stage-based architecture)
+│       ├── orchestrator/           # Pipeline coordination (NEW in v0.8.0)
+│       │   ├── single_end.rs       # Pure SoA orchestrator (314 lines)
+│       │   ├── paired_end/         # Hybrid AoS/SoA orchestrator (423+242 lines)
+│       │   └── conversions.rs      # AoS↔SoA transitions (137 lines)
+│       ├── stages/                 # Stage wrappers (NEW in v0.8.0)
+│       │   ├── loading/            # Stage 0: Read loading
+│       │   ├── seeding/            # Stage 1: SMEM extraction (190 lines wrapper)
+│       │   ├── chaining/           # Stage 2: Seed chaining (218 lines wrapper)
+│       │   ├── extension/          # Stage 3: SW alignment (276 lines wrapper)
+│       │   └── finalization/       # Stage 4: CIGAR/MD/NM (324 lines wrapper)
+│       ├── batch_extension/        # Batched extension implementation
 │       ├── index/                  # FM-Index, BWT, suffix array
-│       ├── paired/                 # Paired-end processing
-│       ├── seeding.rs              # SMEM extraction
-│       ├── chaining.rs             # Seed chaining
-│       ├── pipeline.rs             # Main alignment entry
-│       └── finalization.rs         # CIGAR, MD tags, filtering
-└── main.rs                         # CLI entry point
+│       ├── paired/                 # Paired-end logic (pairing, mate rescue)
+│       ├── seeding/                # SMEM implementation (1929 lines - legacy)
+│       ├── chaining/               # Chaining implementation (1116 lines - legacy)
+│       ├── region/                 # Extension implementation (1598 lines - legacy)
+│       ├── finalization/           # Finalization implementation (1704 lines - legacy)
+│       └── mem.rs                  # CLI entry point (uses orchestrators)
+└── main.rs                         # Main entry point
 ```
 
 ### Pipeline Stages
 
-1. **Seeding**: SMEM extraction via FM-Index backward search
-2. **Chaining**: Group compatible seeds via DP scoring
-3. **Extension**: Batched Smith-Waterman (SoA layout, SIMD kernels)
-4. **Finalization**: MD tags, NM computation, MAPQ, filtering
+The v0.8.0 refactor introduced a stage-based architecture with explicit orchestration:
+
+**Single-End Pipeline** (Pure SoA):
+1. **Loading**: Read FASTQ into SoA batches
+2. **Seeding**: SMEM extraction via FM-Index backward search
+3. **Chaining**: Group compatible seeds via DP scoring
+4. **Extension**: Batched Smith-Waterman (SoA layout, SIMD kernels)
+5. **Finalization**: CIGAR, MD tags, NM computation, MAPQ, filtering
+6. **Output**: Write SAM records directly from SoA
+
+**Paired-End Pipeline** (Hybrid AoS/SoA):
+1. **Loading**: Read FASTQ R1/R2 into SoA batches
+2. **Seeding**: SMEM extraction (SoA) for both R1 and R2
+3. **Chaining**: Seed chaining (SoA) for both R1 and R2
+4. **Extension**: SW alignment (SoA) for both R1 and R2
+5. **Finalization**: CIGAR/MD/NM (SoA) for both R1 and R2
+6. **SoA→AoS**: Convert to AoS for pairing logic
+7. **Pairing**: Associate R1/R2 alignments (AoS - required for correctness)
+8. **AoS→SoA**: Convert back to SoA for mate rescue
+9. **Mate Rescue**: Rescue unmapped mates using SIMD (SoA)
+10. **SoA→AoS**: Convert to AoS for output
+11. **Output**: Write SAM records with proper pairing flags
+
+**Key Insight**: Pure SoA pairing caused 96% duplicate reads in v0.7.0. The hybrid architecture
+is mandatory for correctness - pairing logic requires per-read indexing that SoA cannot provide.
 
 ### SIMD Engine Hierarchy
 
@@ -118,33 +150,90 @@ let sum = _mm_add_epi16(a, b);  // Works on x86 and ARM
 
 ### Making Changes
 
-1. Work in `feature/core-rearch` for SoA-related changes
+1. Work in `feature/pipeline-structure` for v0.8.0 optimization work
 2. Run `cargo fmt` before each commit
-3. Keep files under 500 lines (split into submodules if needed)
+3. Keep NEW files under 500 lines (enforced for merge gating)
 4. Run `cargo test` to ensure no regressions
-5. For pipeline changes: verify against baseline output
+5. For pipeline changes: verify against baseline output (10K HG002 dataset)
+6. For performance changes: benchmark before/after with `hyperfine`
 
 ### File Size Targets
 
-Files exceeding 500-line target (pending split):
-- `seeding.rs`: 1902 lines
-- `finalization.rs`: 1707 lines
-- `region.rs`: 1598 lines
+**v0.8.0 Achievement**: All NEW modules under 500 lines ✅
+- All `orchestrator/` modules: 137-423 lines each
+- All `stages/` modules: 190-324 lines each
+- Total: ~1,223 lines of dead code eliminated
+
+**Legacy files** (wrapped by stages, full split deferred):
+- `seeding/` modules: ~1929 lines total (wrapped by `stages/seeding/`)
+- `finalization/` modules: ~1704 lines total (wrapped by `stages/finalization/`)
+- `region/` modules: ~1598 lines total (wrapped by `stages/extension/`)
+- `chaining/` modules: ~1116 lines total (wrapped by `stages/chaining/`)
+
+**Note**: The wrapper approach creates thin stage modules that delegate to existing
+implementations. Full file splitting of legacy code is deferred to minimize risk.
 
 ## Roadmaps and Design Documents
 
 Detailed design documents are in `documents/`:
 
-| Document | Purpose |
-|----------|---------|
-| `RedesignStrategy.md` | SIMD kernel unification and module split plan |
-| `SOA_End_to_End.md` | End-to-end SoA pipeline design (PR1-PR4 complete) |
-| `SOA_Transition.md` | SoA migration checklist and acceptance criteria |
-| `ARM_SVE_SME_Roadmap.md` | ARM SVE/SME support (post-1.x) |
-| `RISCV_RVV_Roadmap.md` | RISC-V Vector support (experimental, post-1.x) |
-| `Metal_GPU_Acceleration_Design.md` | GPU acceleration via Metal (post-1.x) |
-| `NPU_Seed_Filter_Design.md` | NPU seed pre-filtering (post-1.x) |
-| `Learned_Index_SA_Lookup_Design.md` | Sapling-style SA acceleration (post-1.x) |
+| Document | Purpose | Status |
+|----------|---------|--------|
+| `v0.8.0_Completion_Plan.md` | Plan for completing v0.8.0 (pairing, perf, memory, threading) | 📋 Current |
+| `Pipeline_Restructure_v0.8_Plan.md` | Stage-based architecture implementation | ✅ Complete |
+| `SOA_End_to_End.md` | End-to-end SoA pipeline design with hybrid discovery | ✅ Complete |
+| `SOA_Transition.md` | SoA migration checklist and acceptance criteria | ✅ Complete |
+| `RedesignStrategy.md` | SIMD kernel unification and module split plan | 📚 Reference |
+| `ARM_SVE_SME_Roadmap.md` | ARM SVE/SME support (post-1.x) | 🔮 Future |
+| `RISCV_RVV_Roadmap.md` | RISC-V Vector support (experimental, post-1.x) | 🔮 Future |
+| `Metal_GPU_Acceleration_Design.md` | GPU acceleration via Metal (post-1.x) | 🔮 Future |
+| `NPU_Seed_Filter_Design.md` | NPU seed pre-filtering (post-1.x) | 🔮 Future |
+| `Learned_Index_SA_Lookup_Design.md` | Sapling-style SA acceleration (post-1.x) | 🔮 Future |
+
+## v0.8.0 Architecture Improvements
+
+### Stage-Based Pipeline (Completed)
+
+The v0.8.0 refactor introduced a clean separation between pipeline coordination (orchestrators)
+and algorithm implementation (stages):
+
+**Benefits**:
+- **Modularity**: Each stage is independently testable and swappable
+- **Maintainability**: All new modules under 500 lines (merge gating requirement)
+- **Debuggability**: Stage boundaries provide natural instrumentation points
+- **Performance**: 15% improvement vs v0.7.0 from reduced overhead
+
+**Architecture**:
+```rust
+// PipelineStage trait - all stages implement this
+pub trait PipelineStage {
+    type Input;
+    type Output;
+    fn process(&self, input: Self::Input, ctx: &StageContext) -> Result<Self::Output>;
+    fn name(&self) -> &str;
+}
+
+// Orchestrators coordinate stage execution
+pub trait PipelineOrchestrator {
+    fn run(&mut self, files: &[PathBuf], output: &mut dyn Write) -> Result<PipelineStatistics>;
+}
+```
+
+**Hybrid AoS/SoA Discovery**:
+- Pure SoA pairing caused 96% duplicate reads (v0.7.0 bug)
+- Solution: Explicit representation transitions at stage boundaries
+- SoA for compute-heavy stages (SIMD alignment, mate rescue)
+- AoS for logic-heavy stages (pairing, output)
+- ~2% conversion overhead (acceptable for correctness)
+
+### Remaining v0.8.0 Work
+
+See `documents/v0.8.0_Completion_Plan.md` for detailed implementation plan:
+
+1. **Pairing Accuracy** - Close 3pp gap (94.14% → 97%+)
+2. **Performance** - Reach 85-90% of BWA-MEM2 throughput (currently ~79%)
+3. **Memory** - Reduce peak usage (~32 GB → 24 GB)
+4. **Threading** - Improve core utilization
 
 ## Compatibility
 
@@ -167,7 +256,7 @@ Detailed design documents are in `documents/`:
   - Verifies EOF synchronization
   - Fails fast to prevent corrupt output
 
-#### ❌ No Interleaved FASTQ Support (Planned for v0.8.0)
+#### ❌ No Interleaved FASTQ Support (Deferred to v0.9.0)
 - Single file with alternating R1/R2 reads not supported
 - **Workaround**: De-interleave first using `seqtk split` or similar tools:
   ```bash
@@ -176,7 +265,7 @@ Detailed design documents are in `documents/`:
   seqtk seq -2 interleaved.fq > R2.fq
   ferrous-align mem ref.fa R1.fq R2.fq > out.sam
   ```
-- **Status**: Feature request tracked for v0.8.0
+- **Status**: Feature request deferred to v0.9.0 (v0.8.0 focuses on performance/accuracy)
 
 ### File Integrity Requirements
 
