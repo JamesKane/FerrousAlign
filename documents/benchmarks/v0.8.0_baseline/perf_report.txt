@@ -1,0 +1,287 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 33K of event 'cycles:Pu'
+# Event count (approx.): 139853167645
+#
+# Children      Self  Command        Shared Object         Symbol                                                                                                                                                                                
+# ........  ........  .............  ....................  ......................................................................................................................................................................................
+#
+    15.97%     8.74%  ferrous-align  ferrous-align         [.] ferrous_align::core::alignment::banded_swa::scalar::implementation::scalar_banded_swa
+            |          
+             --14.28%--ferrous_align::core::alignment::banded_swa::scalar::implementation::scalar_banded_swa
+                       |          
+                       |--5.13%--cfree@GLIBC_2.2.5
+                       |          |          
+                       |           --4.05%--_int_free_chunk
+                       |                     |          
+                       |                      --1.06%--_int_free_merge_chunk
+                       |          
+                        --1.53%--alloc::raw_vec::RawVec<T,A>::grow_one
+                                  |          
+                                   --1.34%--alloc::raw_vec::finish_grow
+                                             |          
+                                              --1.00%--realloc
+
+    15.26%    15.25%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::seeding::smem::generate_smems_for_strand
+            |          
+            |--7.81%--ferrous_align::pipelines::linear::seeding::smem::generate_smems_for_strand
+            |          
+             --6.44%--0xd0f
+                       ferrous_align::pipelines::linear::seeding::smem::generate_smems_for_strand
+
+    13.46%     4.86%  ferrous-align  libc.so.6             [.] malloc
+            |          
+            |--8.63%--malloc
+            |          |          
+            |           --8.62%--_int_malloc
+            |          
+             --1.75%--0x93
+                       <T as alloc::vec::spec_from_elem::SpecFromElem>::from_elem
+                       malloc
+
+    11.07%     2.93%  ferrous-align  libc.so.6             [.] cfree@GLIBC_2.2.5
+            |          
+             --8.14%--cfree@GLIBC_2.2.5
+                       |          
+                        --7.50%--_int_free_chunk
+                                  |          
+                                  |--1.72%--_int_free_maybe_consolidate.part.0
+                                  |          |          
+                                  |           --1.72%--malloc_consolidate
+                                  |          
+                                   --1.33%--_int_free_merge_chunk
+
+     9.80%     0.48%  ferrous-align  ferrous-align         [.] <T as alloc::vec::spec_from_elem::SpecFromElem>::from_elem
+            |          
+             --9.40%--<T as alloc::vec::spec_from_elem::SpecFromElem>::from_elem
+                       |          
+                       |--7.05%--malloc
+                       |          |          
+                       |           --4.49%--_int_malloc
+                       |          
+                        --2.06%--__memmove_avx512_unaligned_erms
+
+     9.57%     7.77%  ferrous-align  libc.so.6             [.] _int_malloc
+            |          
+            |--2.75%--0x93
+            |          <T as alloc::vec::spec_from_elem::SpecFromElem>::from_elem
+            |          malloc
+            |          _int_malloc
+            |          
+             --1.80%--_int_malloc
+                       |          
+                        --1.07%--malloc_consolidate
+
+     8.32%     8.32%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::seeding::bwt::get_bwt
+            |          
+             --3.43%--0x77ffffffff
+                       ferrous_align::pipelines::linear::seeding::bwt::get_bwt
+
+     7.66%     4.60%  ferrous-align  libc.so.6             [.] _int_free_chunk
+            |          
+            |--3.06%--_int_free_chunk
+            |          |          
+            |          |--1.72%--_int_free_maybe_consolidate.part.0
+            |          |          |          
+            |          |           --1.72%--malloc_consolidate
+            |          |          
+            |           --1.33%--_int_free_merge_chunk
+            |          
+             --2.53%--0xff
+                       ferrous_align::pipelines::linear::region::cigar::generate_cigar_from_region
+                       |          
+                        --2.52%--ferrous_align::core::alignment::banded_swa::scalar::implementation::scalar_banded_swa
+                                  cfree@GLIBC_2.2.5
+                                  _int_free_chunk
+
+     7.18%     0.00%  ferrous-align  ferrous-align         [.] std::thread::local::LocalKey<T>::with
+            |
+            ---std::thread::local::LocalKey<T>::with
+               |          
+                --7.16%--ferrous_align::pipelines::linear::seeding::smem::generate_smems_from_position
+
+     7.16%     7.16%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::seeding::smem::generate_smems_from_position
+            |          
+             --7.16%--std::thread::local::LocalKey<T>::with
+                       ferrous_align::pipelines::linear::seeding::smem::generate_smems_from_position
+
+     7.12%     0.00%  ferrous-align  [unknown]             [.] 0x0000000000000093
+            |
+            ---0x93
+               |          
+                --6.59%--<T as alloc::vec::spec_from_elem::SpecFromElem>::from_elem
+                          |          
+                          |--4.60%--malloc
+                          |          |          
+                          |           --2.85%--_int_malloc
+                          |          
+                           --1.58%--__memmove_avx512_unaligned_erms
+
+     7.10%     0.00%  ferrous-align  [unknown]             [.] 0x0000000000000d0f
+            |
+            ---0xd0f
+               |          
+                --6.45%--ferrous_align::pipelines::linear::seeding::smem::generate_smems_for_strand
+
+     6.01%     0.25%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::region::cigar::generate_cigar_from_region
+            |          
+             --5.93%--ferrous_align::pipelines::linear::region::cigar::generate_cigar_from_region
+                       |          
+                        --5.41%--ferrous_align::core::alignment::banded_swa::scalar::implementation::scalar_banded_swa
+                                  |          
+                                   --5.13%--cfree@GLIBC_2.2.5
+                                             |          
+                                              --4.05%--_int_free_chunk
+                                                        |          
+                                                         --1.06%--_int_free_merge_chunk
+
+     5.39%     3.88%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::index::index::BwaIndex::bwa_idx_load
+            |          
+             --4.61%--ferrous_align::pipelines::linear::index::index::BwaIndex::bwa_idx_load
+
+     4.43%     4.43%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::seeding::smem::forward_only_seed_strategy
+            |          
+             --4.40%--ferrous_align::pipelines::linear::seeding::smem::forward_only_seed_strategy
+
+     4.40%     0.00%  ferrous-align  [unknown]             [.] 0x00000000000000ff
+            |
+            ---0xff
+               |          
+                --4.40%--ferrous_align::pipelines::linear::region::cigar::generate_cigar_from_region
+                          |          
+                           --4.35%--ferrous_align::core::alignment::banded_swa::scalar::implementation::scalar_banded_swa
+                                     |          
+                                      --4.21%--cfree@GLIBC_2.2.5
+                                                |          
+                                                 --3.53%--_int_free_chunk
+                                                           |          
+                                                            --1.01%--_int_free_merge_chunk
+
+     3.53%     3.14%  ferrous-align  libc.so.6             [.] __memmove_avx512_unaligned_erms
+            |          
+             --1.58%--0x93
+                       <T as alloc::vec::spec_from_elem::SpecFromElem>::from_elem
+                       __memmove_avx512_unaligned_erms
+
+     3.44%     0.00%  ferrous-align  [unknown]             [.] 0x00000077ffffffff
+            |
+            ---0x77ffffffff
+               |          
+                --3.43%--ferrous_align::pipelines::linear::seeding::bwt::get_bwt
+
+     3.05%     0.34%  ferrous-align  ferrous-align         [.] <alloc::string::String as core::clone::Clone>::clone
+            |          
+             --2.84%--<alloc::string::String as core::clone::Clone>::clone
+                       |          
+                        --2.49%--malloc
+                                  |          
+                                   --1.47%--_int_malloc
+
+     3.00%     0.70%  ferrous-align  ferrous-align         [.] core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+            |          
+             --2.53%--core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+
+     2.82%     2.08%  ferrous-align  libc.so.6             [.] malloc_consolidate
+     2.36%     2.36%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::index::bntseq::BntSeq::extract_forward_batch
+     2.22%     0.00%  ferrous-align  [unknown]             [.] 0x000000000001849f
+            |
+            ---0x1849f
+               |          
+                --1.04%--core::ptr::drop_in_place<ferrous_align::pipelines::linear::batch_extension::types::SoAAlignmentResult>
+
+     2.16%     0.70%  ferrous-align  libc.so.6             [.] realloc
+            |          
+             --1.46%--realloc
+                       |          
+                        --1.45%--_int_realloc
+
+     2.09%     0.00%  ferrous-align  ferrous-align         [.] rayon::iter::plumbing::Folder::consume_iter
+            |
+            ---rayon::iter::plumbing::Folder::consume_iter
+               core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+
+     2.06%     0.00%  ferrous-align  [unknown]             [.] 0x0000000000000003
+            |
+            ---0x3
+
+     2.01%     1.80%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::seeding::collection::find_seeds_batch
+     1.97%     1.97%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::seeding::bwt::get_sa_entry
+            |          
+             --1.48%--0xffffffffffffff6c
+                       ferrous_align::pipelines::linear::seeding::bwt::get_sa_entry
+
+     1.86%     0.12%  ferrous-align  ferrous-align         [.] core::ptr::drop_in_place<ferrous_align::pipelines::linear::batch_extension::types::SoAAlignmentResult>
+            |          
+             --1.77%--core::ptr::drop_in_place<ferrous_align::pipelines::linear::batch_extension::types::SoAAlignmentResult>
+                       |          
+                        --1.75%--cfree@GLIBC_2.2.5
+
+     1.81%     0.00%  ferrous-align  [unknown]             [.] 0x0000000000000004
+            |
+            ---0x4
+               |          
+                --1.22%--rayon::iter::plumbing::Folder::consume_iter
+                          core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+
+     1.76%     0.20%  ferrous-align  ferrous-align         [.] alloc::raw_vec::finish_grow
+            |          
+             --1.56%--alloc::raw_vec::finish_grow
+                       |          
+                        --1.30%--realloc
+
+     1.72%     0.00%  ferrous-align  libc.so.6             [.] _int_free_maybe_consolidate.part.0
+            |          
+             --1.72%--_int_free_maybe_consolidate.part.0
+                       |          
+                        --1.72%--malloc_consolidate
+
+     1.66%     0.00%  ferrous-align  [unknown]             [.] 0xffffffffffffff6c
+            |
+            ---0xffffffffffffff6c
+               ferrous_align::pipelines::linear::seeding::bwt::get_sa_entry
+
+     1.66%     1.66%  ferrous-align  ferrous-align         [.] core::core_arch::x86_64::abm::_popcnt64
+     1.57%     0.20%  ferrous-align  ferrous-align         [.] alloc::raw_vec::RawVec<T,A>::grow_one
+            |          
+             --1.39%--alloc::raw_vec::RawVec<T,A>::grow_one
+                       |          
+                        --1.34%--alloc::raw_vec::finish_grow
+                                  |          
+                                   --1.00%--realloc
+
+     1.45%     0.18%  ferrous-align  libc.so.6             [.] _int_realloc
+            |          
+             --1.27%--_int_realloc
+
+     1.41%     0.64%  ferrous-align  libc.so.6             [.] _int_free_merge_chunk
+     1.40%     0.00%  ferrous-align  ferrous-align         [.] <ferrous_align::pipelines::linear::stages::seeding::SeedingStage as ferrous_align::pipelines::linear::stages::PipelineStage>::process
+            |
+            ---<ferrous_align::pipelines::linear::stages::seeding::SeedingStage as ferrous_align::pipelines::linear::stages::PipelineStage>::process
+               |          
+                --1.40%--ferrous_align::pipelines::linear::seeding::collection::find_seeds_batch
+
+     1.35%     0.10%  ferrous-align  ferrous-align         [.] alloc::fmt::format::format_inner
+            |          
+             --1.26%--alloc::fmt::format::format_inner
+
+     1.31%     0.54%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::batch_extension::finalize_soa::finalize_alignments_soa
+     1.31%     0.97%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::chaining::btree::chain_seeds_batch
+     1.23%     1.23%  ferrous-align  libc.so.6             [.] unlink_chunk.isra.0
+     1.20%     0.15%  ferrous-align  ferrous-align         [.] <core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::fold
+            |          
+             --1.20%--<core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::fold
+                       |          
+                        --1.04%--<alloc::string::String as core::clone::Clone>::clone
+
+     1.18%     0.07%  ferrous-align  ferrous-align         [.] ferrous_align::pipelines::linear::batch_extension::types::SoAAlignmentResult::to_aos
+            |
+            ---ferrous_align::pipelines::linear::batch_extension::types::SoAAlignmentResult::to_aos
+
+
+
+#
+# (Tip: For latency profiling, try: perf record/report --latency)
+#

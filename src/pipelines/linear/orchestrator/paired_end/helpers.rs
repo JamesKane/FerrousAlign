@@ -207,6 +207,7 @@ mod tests {
             seed_coverage: 50,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: false,
         };
 
         let mate = Alignment {
@@ -229,6 +230,7 @@ mod tests {
             seed_coverage: 50,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: false,
         };
 
         PairedEndOrchestrator::set_mate_info(&mut aln, &mate, true);

@@ -92,7 +92,15 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
     alignments.truncate(write_idx);
 
     // Sort by score for subsequent processing
-    alignments.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.hash.cmp(&b.hash)));
+    // Match BWA-MEM2's tie-breaking logic:
+    // 1. Primary: Score (descending - higher is better)
+    // 2. Tie-break 1: is_alt (ascending - prefer primary assembly over alternates)
+    // 3. Tie-break 2: Hash (ascending - deterministic ordering)
+    alignments.sort_by(|a, b| {
+        b.score.cmp(&a.score)
+            .then_with(|| a.is_alt.cmp(&b.is_alt))  // NEW: prefer primary assembly (false < true)
+            .then_with(|| a.hash.cmp(&b.hash))
+    });
 
     // Remove exact duplicates
     alignments.dedup_by(|a, b| {
@@ -196,6 +204,7 @@ mod tests {
             seed_coverage: score,
             hash: (pos * 1000 + score as u64),
             frac_rep: 0.0,
+            is_alt: false,
         }
     }
 

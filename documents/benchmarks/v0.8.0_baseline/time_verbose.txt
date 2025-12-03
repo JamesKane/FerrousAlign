@@ -1,0 +1,56 @@
+[INFO ] Aligning reads to index: /home/jkane/Genomics/Reference/chm13v2.0/chm13v2.0.fa.gz
+[INFO ] Using compute backend: AVX2 (256-bit, 32-way parallelism)
+[INFO ] Loaded .pac file into memory: 779323019 bytes (743.2 MB)
+[INFO ] Index loaded via mmap in 4.660s (seq_len=6234584141, cp_occ=97415378, sa=779323018)
+[INFO ] PairedEndOrchestrator: Processing /home/jkane/Genomics/HG002/test_100k_R1.fq and /home/jkane/Genomics/HG002/test_100k_R2.fq using CpuSimd(Engine256)
+[INFO ] Phase 1: Bootstrapping insert size statistics
+[INFO ] [PE] Inferring insert size distribution from data (n=1024)
+[INFO ] [PE] # candidate unique pairs for (FF, FR, RF, RR): (0, 418, 0, 0)
+[INFO ] [PE] skip orientation FF as there are not enough pairs
+[INFO ] [PE] analyzing insert size distribution for orientation FR...
+[INFO ] [PE] (25, 50, 75) percentile: (489, 579, 687)
+[INFO ] [PE] low and high boundaries for computing mean and std.dev: (93, 1083)
+[INFO ] [PE] mean and std.dev: (584.91, 158.50)
+[INFO ] [PE] low and high boundaries for proper pairs: (1, 1281)
+[INFO ] [PE] skip orientation RF as there are not enough pairs
+[INFO ] [PE] skip orientation RR as there are not enough pairs
+[INFO ] First batch: 94 pairs rescued
+[INFO ] Phase 2: Streaming remaining batches (batch_size=100000)
+[INFO ] Batch 2: read_chunk: 100000, work_chunk_size: 29448448, nseq: 198976
+[INFO ] [PE] Inferring insert size distribution from data (n=198976)
+[INFO ] [PE] # candidate unique pairs for (FF, FR, RF, RR): (1, 83677, 8, 1)
+[INFO ] [PE] skip orientation FF as there are not enough pairs
+[INFO ] [PE] analyzing insert size distribution for orientation FR...
+[INFO ] [PE] (25, 50, 75) percentile: (483, 578, 675)
+[INFO ] [PE] low and high boundaries for computing mean and std.dev: (99, 1059)
+[INFO ] [PE] mean and std.dev: (577.57, 155.27)
+[INFO ] [PE] low and high boundaries for proper pairs: (1, 1251)
+[INFO ] [PE] skip orientation RF as there are not enough pairs
+[INFO ] [PE] skip orientation RR as there are not enough pairs
+[INFO ] Processed 198976 reads in 10.261s
+[INFO ] PairedEndOrchestrator complete: Processed 200000 reads (29.60 Mbases) in 11.05s (18098.75 reads/sec, 2.68 Mbases/sec) (rescued: 11714 pairs)
+[INFO ] Pipeline complete: 200000 reads, 29.60 Mbases, 11.05s wall, 28.95s CPU
+[INFO ] Throughput: 18098.75 reads/sec, 2.68 Mbases/sec
+	Command being timed: "./target/release/ferrous-align mem -t 16 /home/jkane/Genomics/Reference/chm13v2.0/chm13v2.0.fa.gz /home/jkane/Genomics/HG002/test_100k_R1.fq /home/jkane/Genomics/HG002/test_100k_R2.fq"
+	User time (seconds): 28.28
+	System time (seconds): 6.17
+	Percent of CPU this job got: 207%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:16.58
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 24441284
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 4657075
+	Voluntary context switches: 57859
+	Involuntary context switches: 610
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

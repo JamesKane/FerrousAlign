@@ -235,6 +235,7 @@ mod tests {
             seed_coverage: score,
             hash: (pos * 1000 + score as u64),
             frac_rep: 0.0,
+            is_alt: false,
         }
     }
 

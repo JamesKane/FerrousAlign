@@ -371,6 +371,8 @@ pub struct SoAAlignmentResult {
     pub hashes: Vec<u64>,
     /// Repetitive fraction values
     pub frac_reps: Vec<f32>,
+    /// Alternate contig flags (for BWA-MEM2 compatible tie-breaking)
+    pub is_alts: Vec<bool>,
 
     // Per-read boundaries
     /// Boundaries for alignments belonging to each read: (start_idx, count)
@@ -406,6 +408,7 @@ impl SoAAlignmentResult {
             seed_coverages: Vec::with_capacity(alignment_capacity),
             hashes: Vec::with_capacity(alignment_capacity),
             frac_reps: Vec::with_capacity(alignment_capacity),
+            is_alts: Vec::with_capacity(alignment_capacity),
             read_alignment_boundaries: Vec::with_capacity(num_reads),
         }
     }
@@ -508,6 +511,7 @@ impl SoAAlignmentResult {
                     seed_coverage: self.seed_coverages[aln_idx],
                     hash: self.hashes[aln_idx],
                     frac_rep: self.frac_reps[aln_idx],
+                    is_alt: self.is_alts[aln_idx],
                 });
             }
 
@@ -563,6 +567,7 @@ impl SoAAlignmentResult {
                 result.seed_coverages.push(aln.seed_coverage);
                 result.hashes.push(aln.hash);
                 result.frac_reps.push(aln.frac_rep);
+                result.is_alts.push(aln.is_alt);
 
                 // CIGAR data
                 let cigar_start = result.cigar_ops.len();

@@ -820,6 +820,7 @@ pub fn align_read_deferred(
         let flag = if region.is_rev { sam_flags::REVERSE } else { 0 };
 
         let hash = crate::utils::hash_64(read_id + idx as u64);
+        let is_alt = Alignment::is_alternate_contig(&region.ref_name);
 
         alignments.push(Alignment {
             query_name: query_name.to_string(),
@@ -845,6 +846,7 @@ pub fn align_read_deferred(
             seed_coverage: region.seedcov,
             hash,
             frac_rep: region.frac_rep,
+            is_alt,
         });
     }
 
@@ -941,6 +943,7 @@ fn create_unmapped_alignment(query_name: &str) -> Alignment {
         seed_coverage: 0,
         hash: 0,
         frac_rep: 0.0,
+        is_alt: false,  // Unmapped reads don't map to alternate contigs
     }
 }
 

@@ -27,6 +27,7 @@ fn create_unmapped_alignment_internal(query_name: &str) -> Alignment {
         seed_coverage: 0,
         hash: 0,
         frac_rep: 0.0,
+        is_alt: false,  // Unmapped reads don't map to alternate contigs
     }
 }
 
@@ -113,6 +114,7 @@ fn convert_alignments_to_soa(all_alignments: Vec<Vec<Alignment>>) -> SoAAlignmen
             result.seed_coverages.push(alignment.seed_coverage);
             result.hashes.push(alignment.hash);
             result.frac_reps.push(alignment.frac_rep);
+            result.is_alts.push(alignment.is_alt);
         }
 
         // Record per-read boundary
@@ -364,6 +366,7 @@ pub fn finalize_alignments_soa(
                 };
 
                 let hash = crate::utils::hash_64(read_id + idx as u64);
+                let is_alt = Alignment::is_alternate_contig(&region.ref_name);
 
                 alignments.push(Alignment {
                     query_name: query_name.clone(),
@@ -389,6 +392,7 @@ pub fn finalize_alignments_soa(
                     seed_coverage: region.seedcov,
                     hash,
                     frac_rep: region.frac_rep,
+                    is_alt,
                 });
             }
 

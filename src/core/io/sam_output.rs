@@ -401,6 +401,7 @@ pub fn create_unmapped_single_end(query_name: &str, seq_len: usize) -> Alignment
         seed_coverage: 0,
         hash: 0,
         frac_rep: 0.0,
+        is_alt: false,  // Unmapped reads don't map to alternate contigs
     }
 }
 
@@ -432,6 +433,7 @@ pub fn create_unmapped_paired(query_name: &str, seq: &[u8], is_first_in_pair: bo
         seed_coverage: 0,
         hash: 0,
         frac_rep: 0.0,
+        is_alt: false,  // Unmapped reads don't map to alternate contigs
     }
 }
 
@@ -1362,6 +1364,7 @@ mod tests {
             seed_coverage: score,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: false,
         }
     }
 

@@ -23,9 +23,27 @@ pub struct Alignment {
     pub(crate) seed_coverage: i32,
     pub(crate) hash: u64,
     pub(crate) frac_rep: f32,
+    pub(crate) is_alt: bool,  // True if alignment to alternate contig/haplotype
 }
 
 impl Alignment {
+    /// Detect if reference name refers to an alternate contig/haplotype
+    /// Matches BWA-MEM2's logic for preferring primary assembly in tie-breaking
+    #[inline]
+    pub fn is_alternate_contig(ref_name: &str) -> bool {
+        // Common patterns in alternate contig names:
+        // - Contains "alt" (e.g., chr1_KI270706v1_alt)
+        // - Contains "random" (e.g., chr1_KI270706v1_random)
+        // - Contains "fix" (e.g., chr1_KI270706v1_fix)
+        // - Contains "HLA" (e.g., HLA-A*01:01:01:01)
+        // - Contains underscore after chr prefix (common in alternate names)
+        ref_name.contains("alt")
+            || ref_name.contains("random")
+            || ref_name.contains("fix")
+            || ref_name.contains("HLA")
+            || (ref_name.starts_with("chr") && ref_name.contains('_'))
+    }
+
     /// Get CIGAR string as formatted string (e.g., "50M2I48M")
     pub fn cigar_string(&self) -> String {
         if self.cigar.is_empty() {
@@ -240,6 +258,7 @@ impl Alignment {
             hash: 0,
             seed_coverage: 0,
             frac_rep: 0.0,
+            is_alt: false,  // Unmapped reads don't map to alternate contigs
         }
     }
 }
@@ -279,6 +298,7 @@ mod tests {
             seed_coverage: score,
             hash: (pos * 1000 + score as u64),
             frac_rep: 0.0,
+            is_alt: false,
         }
     }
 
@@ -304,6 +324,7 @@ mod tests {
             seed_coverage: 50,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: false,
         };
 
         let supplementary = Alignment {
@@ -326,6 +347,7 @@ mod tests {
             seed_coverage: 50,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: false,
         };
 
         assert_eq!(primary.cigar_string(), "5S50M10S");

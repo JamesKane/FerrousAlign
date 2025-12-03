@@ -505,6 +505,7 @@ pub fn mem_matesw(
             seed_coverage: (ref_aligned_len.min(query_aligned) >> 1) as i32,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: Alignment::is_alternate_contig(&anchor.ref_name),
         };
 
         if is_debug_read {
@@ -979,6 +980,7 @@ pub fn result_to_alignment(
         seed_coverage: (ref_aligned_len.min(query_aligned) >> 1),
         hash: 0,
         frac_rep: 0.0,
+        is_alt: Alignment::is_alternate_contig(&job.anchor_ref_name),
     })
 }
 
@@ -1627,10 +1629,13 @@ pub fn compact_result_to_alignment(
 
     let (nm, md_tag) = edit_distance::compute_nm_and_md(&forward_ref, aligned_query, &cigar);
 
+    let ref_name = job.get_anchor_ref_name(ctx).to_string();
+    let is_alt = Alignment::is_alternate_contig(&ref_name);
+
     Some(Alignment {
         query_name: mate_name.to_string(),
         flag,
-        ref_name: job.get_anchor_ref_name(ctx).to_string(),
+        ref_name,
         ref_id: job.anchor_ref_id as usize,
         pos: chr_pos,
         mapq: 0,
@@ -1651,6 +1656,7 @@ pub fn compact_result_to_alignment(
         seed_coverage: (ref_aligned_len.min(query_aligned) >> 1),
         hash: 0,
         frac_rep: 0.0,
+        is_alt,
     })
 }
 

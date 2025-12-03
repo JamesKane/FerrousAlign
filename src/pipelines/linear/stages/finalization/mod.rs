@@ -319,6 +319,7 @@ mod tests {
             seed_coverage: 50,
             hash: 0,
             frac_rep: 0.0,
+            is_alt: false,
         }
     }
 }
