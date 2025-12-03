@@ -282,10 +282,12 @@ impl PipelineTimer {
 // ============================================================================
 
 pub mod conversions;
-// These will be added when implementations are ready:
-// pub mod single_end;
-// pub mod paired_end;
-// pub mod statistics;
+pub mod paired_end;
+pub mod single_end;
+
+// Re-export orchestrator implementations
+pub use paired_end::PairedEndOrchestrator;
+pub use single_end::SingleEndOrchestrator;
 
 // ============================================================================
 // TESTS

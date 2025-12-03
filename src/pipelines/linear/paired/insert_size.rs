@@ -19,7 +19,7 @@ const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignments (BWA-MEM2 bwa
 const MAX_INS: i64 = 10000; // Maximum insert size to consider (default opt->max_ins)
 
 // Insert size statistics for one orientation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct InsertSizeStats {
     pub avg: f64,     // Mean insert size
     pub std: f64,     // Standard deviation

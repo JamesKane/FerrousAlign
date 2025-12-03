@@ -10,6 +10,7 @@ use std::io::{self, BufReader, Read};
 /// `SoAReadBatch` holds a batch of reads in a Structure-of-Arrays (SoA) format.
 /// This layout is designed for efficient processing in later stages of the pipeline,
 /// particularly for SIMD-heavy operations.
+#[derive(Clone)]
 pub struct SoAReadBatch {
     /// Sequence data for all reads in the batch, stored contiguously.
     pub seqs: Vec<u8>,
