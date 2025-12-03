@@ -175,42 +175,15 @@ impl<'a> PairedEndOrchestrator<'a> {
         let mut pairs_processed: u64 = 0;
         let mut total_rescued: usize = 0;
 
-        // === PHASE 1: Bootstrap insert size from first batch ===
-        log::info!("Phase 1: Bootstrapping insert size statistics");
-
-        let first_batch1 = reader1
-            .read_batch(BOOTSTRAP_BATCH_SIZE)
-            .map_err(OrchestratorError::Io)?;
-        let first_batch2 = reader2
-            .read_batch(BOOTSTRAP_BATCH_SIZE)
-            .map_err(OrchestratorError::Io)?;
-
-        if first_batch1.len() != first_batch2.len() {
-            return Err(OrchestratorError::PairedEndMismatch {
-                r1_count: first_batch1.len(),
-                r2_count: first_batch2.len(),
-            });
-        }
-
-        if first_batch1.is_empty() {
-            log::warn!("No data to process (empty input files)");
-            return Ok(self.stats.clone());
-        }
-
-        let first_batch1_for_output = first_batch1.clone();
-        let first_batch2_for_output = first_batch2.clone();
-
-        let (soa_result1, soa_result2) =
-            self.process_pair_batches(first_batch1, first_batch2, pairs_processed)?;
-
-        // Bootstrap or use override
-        self.insert_stats = if let Some(ref is_override) = self.options.insert_size_override {
+        // Check if insert size override is provided (BWA-MEM2 -I flag behavior)
+        let use_insert_override = self.options.insert_size_override.is_some();
+        if let Some(ref is_override) = self.options.insert_size_override {
             log::info!(
-                "Using manual insert size: mean={:.1}, std={:.1}",
+                "Using manual insert size override: mean={:.1}, std={:.1}",
                 is_override.mean,
                 is_override.stddev
             );
-            [
+            self.insert_stats = [
                 InsertSizeStats::default(),
                 InsertSizeStats {
                     avg: is_override.mean,
@@ -221,59 +194,16 @@ impl<'a> PairedEndOrchestrator<'a> {
                 },
                 InsertSizeStats::default(),
                 InsertSizeStats::default(),
-            ]
-        } else {
-            bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac)
-        };
+            ];
+        }
 
-        // AoS pairing for first batch
-        let mut alignments1 = soa_result1.to_aos();
-        let mut alignments2 = soa_result2.to_aos();
-        self.pair_alignments_aos(&mut alignments1, &mut alignments2, pairs_processed);
-
-        // Mate rescue
-        let rescued = self.perform_mate_rescue(
-            &mut alignments1,
-            &mut alignments2,
-            &first_batch1_for_output,
-            &first_batch2_for_output,
-        );
-        total_rescued += rescued;
-        log::info!("First batch: {} pairs rescued", rescued);
-
-        // Output first batch
-        self.write_paired_output(
-            &alignments1,
-            &alignments2,
-            &first_batch1_for_output,
-            &first_batch2_for_output,
-            output,
-        )?;
-
-        // Update stats
-        let first_batch_size = first_batch1_for_output.len();
-        let first_batch_bp: usize = first_batch1_for_output
-            .read_boundaries
-            .iter()
-            .map(|(_, len)| *len)
-            .sum::<usize>()
-            + first_batch2_for_output
-                .read_boundaries
-                .iter()
-                .map(|(_, len)| *len)
-                .sum::<usize>();
-        self.stats.total_reads += first_batch_size * 2;
-        self.stats.total_bases += first_batch_bp;
-        self.stats.batches_processed += 1;
-        pairs_processed += first_batch_size as u64;
-
-        // === PHASE 2: Process remaining batches ===
+        // === Uniform batch processing loop (BWA-MEM2 behavior) ===
         log::info!(
-            "Phase 2: Streaming remaining batches (batch_size={})",
+            "Processing paired-end reads (batch_size={})",
             self.options.batch_size
         );
 
-        let mut batch_num = 1u64;
+        let mut batch_num = 0u64;
 
         loop {
             let batch1 = reader1
@@ -323,7 +253,10 @@ impl<'a> PairedEndOrchestrator<'a> {
             let (soa_result1, soa_result2) =
                 self.process_pair_batches(batch1, batch2, pairs_processed)?;
 
-            self.insert_stats = bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac);
+            // Infer insert size from current batch (BWA-MEM2 behavior: per-batch unless override)
+            if !use_insert_override {
+                self.insert_stats = bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac);
+            }
 
             let mut alignments1 = soa_result1.to_aos();
             let mut alignments2 = soa_result2.to_aos();
