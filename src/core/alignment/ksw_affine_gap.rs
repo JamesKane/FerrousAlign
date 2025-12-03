@@ -206,7 +206,7 @@ pub unsafe fn ksw_qalloc(qlen: i32, m: i32, size: i32) -> *mut Kswq {
 ///
 /// # Arguments
 /// * `q_ptr` - A pointer to the `Kswq` structure to be freed.
-pub fn ksw_qfree(q_ptr: *mut Kswq) {
+pub unsafe fn ksw_qfree(q_ptr: *mut Kswq) {
     if q_ptr.is_null() {
         return;
     }
@@ -337,15 +337,17 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
             S::store_si128(q.h1.add(j) as *mut S::Vec8, h); // Save H'(i,j) to H1
 
             // E (deletion) calculation for E(i+1,j)
-            let mut e_new = S::subs_epu8(e, e_del); // E'(i,j) - e_del
-            let t_del = S::subs_epu8(h, oe_del); // H'(i,j) - o_del - e_del
-            e_new = S::max_epu8(e_new, t_del); // e_new = E'(i+1,j)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
+            let e_extend = S::subs_epu8(e, e_del); // E'(i,j) - e_del
+            let e_open = S::subs_epu8(h, oe_del); // H'(i,j) - o_del - e_del
+            let e_new = S::max_epu8(e_extend, e_open); // e_new = E'(i+1,j)
             S::store_si128(q.e.add(j) as *mut S::Vec8, e_new); // Save E'(i+1,j)
 
             // F (insertion) calculation for F(i,j+1)
-            f = S::subs_epu8(f, e_ins); // F'(i,j) - e_ins
-            let t_ins = S::subs_epu8(h, oe_ins); // H'(i,j) - o_ins - e_ins
-            f = S::max_epu8(f, t_ins); // f = F'(i,j+1)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
+            let f_extend = S::subs_epu8(f, e_ins); // F'(i,j) - e_ins
+            let f_open = S::subs_epu8(h, oe_ins); // H'(i,j) - o_ins - e_ins
+            f = S::max_epu8(f_extend, f_open); // f = F'(i,j+1)
 
             // Prepare for next segment: h becomes H(i-1,j)
             h = S::load_si128(q.h0.add(j) as *const S::Vec8);
@@ -367,7 +369,6 @@ pub unsafe fn ksw_u8_impl<S: SimdEngine>(
                 current_f_loop_h_val = S::max_epu8(current_f_loop_h_val, f); // h = H'(i,j) update
                 S::store_si128(q.h1.add(j) as *mut S::Vec8, current_f_loop_h_val);
 
-                let _h_minus_oe_ins = S::subs_epu8(current_f_loop_h_val, oe_ins);
                 f = S::subs_epu8(f, e_ins);
 
                 // Check if any lane value was different after max(h,f) operation
@@ -584,15 +585,17 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
             S::store_si128_16(q.h1.add(j) as *mut S::Vec16, h); // Save H'(i,j) to H1
 
             // E (deletion) calculation for E(i+1,j)
-            let mut e_new = S::subs_epi16(e, e_del_v); // E'(i,j) - e_del
-            let t_del = S::subs_epi16(h, oe_del_v); // H'(i,j) - o_del - e_del
-            e_new = S::max_epi16(e_new, t_del); // e_new = E'(i+1,j)
+            // Note: subs_epi16 is saturating - clamps to 0, so max_epi16 chooses between opening new gap or extending
+            let e_extend = S::subs_epi16(e, e_del_v); // E'(i,j) - e_del
+            let e_open = S::subs_epi16(h, oe_del_v); // H'(i,j) - o_del - e_del
+            let e_new = S::max_epi16(e_extend, e_open); // e_new = E'(i+1,j)
             S::store_si128_16(q.e.add(j) as *mut S::Vec16, e_new); // Save E'(i+1,j)
 
             // F (insertion) calculation for F(i,j+1)
-            f = S::subs_epi16(f, e_ins_v); // F'(i,j) - e_ins
-            let t_ins = S::subs_epi16(h, oe_ins_v); // H'(i,j) - o_ins - e_ins
-            f = S::max_epi16(f, t_ins); // f = F'(i,j+1)
+            // Note: subs_epi16 is saturating - clamps to 0, so max_epi16 chooses between opening new gap or extending
+            let f_extend = S::subs_epi16(f, e_ins_v); // F'(i,j) - e_ins
+            let f_open = S::subs_epi16(h, oe_ins_v); // H'(i,j) - o_ins - e_ins
+            f = S::max_epi16(f_extend, f_open); // f = F'(i,j+1)
 
             // Prepare for next segment: h becomes H(i-1,j)
             h = S::load_si128_16(q.h0.add(j) as *const S::Vec16);
@@ -614,7 +617,6 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
                 current_f_loop_h_val = S::max_epi16(current_f_loop_h_val, f); // h = H'(i,j) update
                 S::store_si128_16(q.h1.add(j) as *mut S::Vec16, current_f_loop_h_val);
 
-                let _h_minus_oe_ins = S::subs_epi16(current_f_loop_h_val, oe_ins_v);
                 f = S::subs_epi16(f, e_ins_v);
 
                 // Check if any lane value was different after max(h,f) operation
@@ -733,9 +735,9 @@ pub unsafe fn ksw_i16_impl<S: SimdEngine>(
 }
 
 /// Reverse a portion of a sequence in place.
-/// Equivalent to C's `revseq`.
+/// Equivalent to C's `reverse_sequence`.
 #[inline]
-fn revseq(seq: &mut [u8], len: usize) {
+fn reverse_sequence(seq: &mut [u8], len: usize) {
     let half = len / 2;
     for i in 0..half {
         seq.swap(i, len - 1 - i);
@@ -808,15 +810,15 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
         let qe_len = (r.qe + 1) as usize;
         let te_len = (r.te + 1) as usize;
 
-        revseq(query, qe_len);
-        revseq(target, te_len);
+        reverse_sequence(query, qe_len);
+        reverse_sequence(target, te_len);
 
         // Create new query profile for reversed sequence
         let q2_ptr = ksw_qinit(q.size as i32, r.qe + 1, query, m, mat);
         if q2_ptr.is_null() {
             // Restore original sequences
-            revseq(query, qe_len);
-            revseq(target, te_len);
+            reverse_sequence(query, qe_len);
+            reverse_sequence(target, te_len);
             ksw_qfree(q_ptr);
             return r;
         }
@@ -831,8 +833,8 @@ pub unsafe fn ksw_align2<S: SimdEngine>(
         };
 
         // Restore original sequences
-        revseq(query, qe_len);
-        revseq(target, te_len);
+        reverse_sequence(query, qe_len);
+        reverse_sequence(target, te_len);
 
         // Free reverse query profile
         ksw_qfree(q2_ptr);
@@ -1226,23 +1228,23 @@ mod tests {
     }
 
     #[test]
-    fn test_revseq_basic() {
+    fn test_reverse_sequence_basic() {
         let mut seq = vec![0, 1, 2, 3, 4];
-        revseq(&mut seq, 5);
+        reverse_sequence(&mut seq, 5);
         assert_eq!(seq, vec![4, 3, 2, 1, 0]);
     }
 
     #[test]
-    fn test_revseq_partial() {
+    fn test_reverse_sequence_partial() {
         let mut seq = vec![0, 1, 2, 3, 4, 5, 6];
-        revseq(&mut seq, 4); // Only reverse first 4 elements
+        reverse_sequence(&mut seq, 4); // Only reverse first 4 elements
         assert_eq!(seq, vec![3, 2, 1, 0, 4, 5, 6]);
     }
 
     #[test]
-    fn test_revseq_empty() {
+    fn test_reverse_sequence_empty() {
         let mut seq: Vec<u8> = vec![];
-        revseq(&mut seq, 0);
+        reverse_sequence(&mut seq, 0);
         assert_eq!(seq, Vec::<u8>::new());
     }
 

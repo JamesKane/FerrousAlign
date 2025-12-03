@@ -1,5 +1,4 @@
 use super::mem_opt::MemOpt;
-use crate::alignment::edit_distance;
 
 /// SAM flag bit masks (SAM specification v1.6)
 /// Used for setting and querying alignment flags in SAM/BAM format
@@ -206,110 +205,6 @@ impl Alignment {
                 _ => None,
             })
             .sum()
-    }
-
-    /// Calculate edit distance (NM tag) from CIGAR string (APPROXIMATION)
-    ///
-    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` for exact calculation.
-    /// This method only counts indels and cannot detect mismatches in M operations.
-    ///
-    /// NM = number of mismatches + insertions + deletions
-    /// Approximation: counts I, D, X operations (M operations may contain mismatches)
-    /// For exact NM, use `edit_distance::compute_nm_and_md()` with aligned sequences.
-    #[deprecated(
-        since = "0.5.3",
-        note = "Use edit_distance::compute_nm_and_md() for exact NM calculation"
-    )]
-    pub fn calculate_edit_distance(&self) -> i32 {
-        self.cigar
-            .iter()
-            .filter_map(|&(op, len)| {
-                match op as char {
-                    'I' | 'D' | 'X' => Some(len), // Count indels and explicit mismatches
-                    'M' => {
-                        // M includes both matches and mismatches
-                        // Approximate as 0 for now (would need sequence comparison for exact count)
-                        None
-                    }
-                    _ => None,
-                }
-            })
-            .sum()
-    }
-
-    /// Calculate NM tag (edit distance) from alignment score (APPROXIMATION)
-    ///
-    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` for exact calculation.
-    /// This method estimates mismatches from score, which is not always accurate.
-    ///
-    /// Formula: NM = indels + estimated_mismatches
-    /// Where: estimated_mismatches ≈ (perfect_score - actual_score) / mismatch_penalty
-    #[deprecated(
-        since = "0.5.3",
-        note = "Use edit_distance::compute_nm_and_md() for exact NM calculation"
-    )]
-    pub fn calculate_nm_from_score(&self) -> i32 {
-        // Count indels from CIGAR
-        let indels: i32 = self
-            .cigar
-            .iter()
-            .filter_map(|&(op, len)| match op as char {
-                'I' | 'D' => Some(len),
-                _ => None,
-            })
-            .sum();
-
-        // Estimate mismatches from score difference
-        let query_len = self.query_length();
-        let perfect_score = query_len; // Match score = 1
-        let score_diff = (perfect_score - self.score).max(0); // Clamp to non-negative
-        let estimated_mismatches = (score_diff / 5).max(0); // Match(1) + Mismatch(4) = 5 penalty
-
-        indels + estimated_mismatches
-    }
-
-    /// Generate MD tag from aligned sequences and CIGAR
-    ///
-    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` instead, which
-    /// computes both NM and MD in a single pass.
-    ///
-    /// The MD tag is a string representing the reference bases at mismatching positions
-    /// and deleted reference bases. Format:
-    /// - Numbers: count of matching bases
-    /// - Letters: mismatching reference base
-    /// - ^LETTERS: deleted reference bases
-    ///
-    /// Examples:
-    /// - "100" = 100 perfect matches
-    /// - "50A49" = 50 matches, mismatch at ref base A, 49 matches
-    /// - "25^AC25" = 25 matches, deletion of AC, 25 matches
-    #[deprecated(
-        since = "0.5.3",
-        note = "Use edit_distance::compute_nm_and_md() instead"
-    )]
-    pub fn generate_md_tag(
-        ref_aligned: &[u8],
-        query_aligned: &[u8],
-        cigar: &[(u8, i32)],
-    ) -> String {
-        // Delegate to the unified module
-        let (_nm, md) = edit_distance::compute_nm_and_md(ref_aligned, query_aligned, cigar);
-        md
-    }
-
-    /// Calculate exact NM (edit distance) from MD tag and CIGAR
-    ///
-    /// **Deprecated**: Use `edit_distance::compute_nm_and_md()` for exact calculation
-    /// from sequences, or `edit_distance::compute_nm_from_md()` if you only have the MD tag.
-    ///
-    /// NM = mismatches + insertions + deletions
-    #[deprecated(
-        since = "0.5.3",
-        note = "Use edit_distance::compute_nm_from_md() instead"
-    )]
-    pub fn calculate_exact_nm(md_tag: &str, cigar: &[(u8, i32)]) -> i32 {
-        // Delegate to the unified module
-        edit_distance::compute_nm_from_md(md_tag, cigar)
     }
 
     /// Generate XA tag entry for this alignment (alternative alignment format)
@@ -872,7 +767,8 @@ fn find_primary_alignments(
     mask_level: f32,
     score_gap_threshold: i32,
 ) -> (Vec<usize>, Vec<i32>, Vec<i32>) {
-    let mut primary_indices: Vec<usize> = Vec::new();
+    // Pre-size with capacity to avoid reallocations (typically 1-3 primaries per read)
+    let mut primary_indices: Vec<usize> = Vec::with_capacity(alignments.len().min(4));
     let mut sub_scores: Vec<i32> = vec![0; alignments.len()];
     let mut sub_counts: Vec<i32> = vec![0; alignments.len()];
 
@@ -920,6 +816,9 @@ fn find_primary_alignments(
 fn apply_supplementary_flags(alignments: &mut [Alignment], primary_indices: &[usize]) {
     for (idx, &i) in primary_indices.iter().enumerate() {
         if idx > 0 {
+            // Clear SECONDARY flag before setting SUPPLEMENTARY
+            // An alignment is either secondary OR supplementary, never both
+            alignments[i].flag &= !sam_flags::SECONDARY;
             alignments[i].flag |= sam_flags::SUPPLEMENTARY;
             log::debug!(
                 "Marked alignment {} as SUPPLEMENTARY ({}:{}, score={})",
@@ -981,7 +880,8 @@ fn filter_supplementary_by_score(
     let before_filter = alignments.len();
 
     // Mark low-scoring supplementary for removal
-    let mut to_remove: Vec<usize> = Vec::new();
+    // Pre-size with capacity (typically 0-2 supplementary per read)
+    let mut to_remove: Vec<usize> = Vec::with_capacity(alignments.len().min(4));
     for i in 0..alignments.len() {
         if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0
             && alignments[i].score < supp_threshold
@@ -1776,32 +1676,6 @@ mod tests {
         );
         // Soft clips don't consume reference
         assert_eq!(alignment_ref_length(&alignment), 80);
-    }
-
-    // ------------------------------------------------------------------------
-    // generate_md_tag() tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_generate_md_tag_perfect_match() {
-        // Perfect match of 50bp
-        // generate_md_tag takes (ref_aligned, query_aligned, cigar)
-        let reference = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAC"; // 50bp
-        let query = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAC"; // 50bp same
-        let cigar = vec![(b'M', 50)];
-        let md = Alignment::generate_md_tag(reference, query, &cigar);
-        assert_eq!(md, "50");
-    }
-
-    #[test]
-    fn test_generate_md_tag_with_mismatch() {
-        // 10M with mismatch at position 5
-        let reference = b"ACGTANGTAC"; // Mismatch at position 5: C -> N
-        let query = b"ACGTACGTAC"; // 10bp
-        let cigar = vec![(b'M', 10)];
-        let md = Alignment::generate_md_tag(reference, query, &cigar);
-        // Format should indicate the mismatch
-        assert!(!md.is_empty());
     }
 
     // ------------------------------------------------------------------------

@@ -25,9 +25,13 @@ use super::chaining::{Chain, cal_max_gap};
 use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
-use crate::alignment::banded_swa::{BandedPairWiseSW, OutScore};
+use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 use crate::alignment::edit_distance;
 use crate::compute::ComputeBackend;
+use crate::core::alignment::banded_swa::BandedPairWiseSW;
+use crate::core::alignment::banded_swa::OutScore;
+use crate::pipelines::linear::batch_extension::dispatch::execute_batch_simd_scoring;
+use crate::pipelines::linear::batch_extension::types::{ExtensionDirection, ExtensionJobBatch};
 
 /// Alignment region with boundaries but NO CIGAR
 ///
@@ -247,6 +251,7 @@ struct ExtensionJob {
     pub chain_idx: usize,
     #[allow(dead_code)] // Preserved for debugging
     pub seed_idx: usize,
+    pub direction: ExtensionDirection,
 }
 
 // ============================================================================
@@ -429,6 +434,7 @@ pub fn extend_chains_to_regions(
                         h0: seed.len * opt.a,
                         chain_idx,
                         seed_idx: seed_chain_idx,
+                        direction: ExtensionDirection::Left,
                     });
                 }
             }
@@ -465,6 +471,7 @@ pub fn extend_chains_to_regions(
                         h0: 0, // Right extension starts from zero
                         chain_idx,
                         seed_idx: seed_chain_idx,
+                        direction: ExtensionDirection::Right,
                     });
                 }
             }
@@ -694,127 +701,33 @@ fn execute_simd_scoring(
         return Vec::new();
     }
 
-    // Convert ExtensionJob to the tuple format expected by batch functions
-    // Format: (qlen, &query, tlen, &target, w, h0)
-    let batch: Vec<(i32, &[u8], i32, &[u8], i32, i32)> = jobs
-        .iter()
-        .map(|job| {
-            (
-                job.query.len() as i32,
-                job.query.as_slice(),
-                job.target.len() as i32,
-                job.target.as_slice(),
-                band_width,
-                job.h0,
-            )
+    let mut batch = ExtensionJobBatch::new();
+    for job in jobs {
+        batch.add_job(
+            0, // read_idx is not used in this context
+            job.chain_idx,
+            job.seed_idx,
+            job.direction,
+            &job.query,
+            &job.target,
+            job.h0,
+            band_width,
+        );
+    }
+
+    let results = execute_batch_simd_scoring(sw_params, &mut batch, engine);
+
+    results
+        .into_iter()
+        .map(|res| OutScore {
+            score: res.score,
+            query_end_pos: res.query_end,
+            target_end_pos: res.ref_end,
+            global_score: res.gscore,
+            gtarget_end_pos: res.gref_end,
+            max_offset: res.max_off,
         })
-        .collect();
-
-    // Dispatch to engine-specific batch function with vectorized scoring
-    // Session 51: Implemented BWA-MEM2 compare-and-blend approach for vectorized scoring
-    // This eliminates the scalar matrix lookup bottleneck that made larger batches slower.
-    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-    {
-        use crate::compute::simd_abstraction::simd::SimdEngineType;
-        match engine {
-            SimdEngineType::Engine512 => {
-                // AVX-512: 32-wide batch with vectorized scoring
-                unsafe {
-                    crate::alignment::banded_swa_avx512::simd_banded_swa_batch32_int16(
-                        &batch,
-                        sw_params.o_del(),
-                        sw_params.e_del(),
-                        sw_params.o_ins(),
-                        sw_params.e_ins(),
-                        sw_params.zdrop(),
-                        sw_params.scoring_matrix(),
-                        5,
-                    )
-                }
-            }
-            SimdEngineType::Engine256 => {
-                // AVX2: 16-wide batch with vectorized scoring
-                unsafe {
-                    crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
-                        &batch,
-                        sw_params.o_del(),
-                        sw_params.e_del(),
-                        sw_params.o_ins(),
-                        sw_params.e_ins(),
-                        sw_params.zdrop(),
-                        sw_params.scoring_matrix(),
-                        5,
-                    )
-                }
-            }
-            SimdEngineType::Engine128 => {
-                // SSE/NEON: Use 8-wide batch function
-                sw_params.simd_banded_swa_batch8_int16(&batch)
-            }
-        }
-    }
-
-    #[cfg(all(target_arch = "x86_64", not(feature = "avx512")))]
-    {
-        use crate::compute::simd_abstraction::simd::SimdEngineType;
-        match engine {
-            SimdEngineType::Engine256 => {
-                // BWA-MEM2 style size-based routing:
-                // - 8-bit path (32 lanes): sequences < 100bp, avoids score overflow
-                // - 16-bit path (16 lanes): longer sequences or higher scores
-                let max_qlen = batch.iter().map(|(q, _, _, _, _, _)| *q).max().unwrap_or(0);
-                let max_tlen = batch.iter().map(|(_, _, t, _, _, _)| *t).max().unwrap_or(0);
-                let max_h0 = batch.iter().map(|(_, _, _, _, _, h)| *h).max().unwrap_or(0);
-
-                // 8-bit path can overflow if scores exceed 127
-                // Conservative threshold: 100bp sequences, low initial scores
-                const MAX_SEQ_LEN_8BIT: i32 = 100;
-                let can_use_8bit =
-                    max_qlen < MAX_SEQ_LEN_8BIT && max_tlen < MAX_SEQ_LEN_8BIT && max_h0 < 50;
-
-                if can_use_8bit {
-                    // AVX2 8-bit path: 32 lanes (2x parallelism)
-                    unsafe {
-                        crate::alignment::banded_swa_avx2::simd_banded_swa_batch32(
-                            &batch,
-                            sw_params.o_del(),
-                            sw_params.e_del(),
-                            sw_params.o_ins(),
-                            sw_params.e_ins(),
-                            sw_params.zdrop(),
-                            sw_params.scoring_matrix(),
-                            5,
-                        )
-                    }
-                } else {
-                    // AVX2 16-bit path: 16 lanes
-                    unsafe {
-                        crate::alignment::banded_swa_avx2::simd_banded_swa_batch16_int16(
-                            &batch,
-                            sw_params.o_del(),
-                            sw_params.e_del(),
-                            sw_params.o_ins(),
-                            sw_params.e_ins(),
-                            sw_params.zdrop(),
-                            sw_params.scoring_matrix(),
-                            5,
-                        )
-                    }
-                }
-            }
-            SimdEngineType::Engine128 => {
-                // SSE/NEON: Use 8-wide batch function
-                sw_params.simd_banded_swa_batch8_int16(&batch)
-            }
-        }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        // Non-x86: Use 8-wide batch function
-        let _ = engine;
-        sw_params.simd_banded_swa_batch8_int16(&batch)
-    }
+        .collect()
 }
 
 /// Merge left/right extension scores into AlignmentRegions
@@ -1009,7 +922,7 @@ pub fn generate_cigar_from_region(
     region: &AlignmentRegion,
     opt: &MemOpt,
 ) -> Option<(Vec<(u8, i32)>, i32, String)> {
-    use crate::alignment::banded_swa::BandedPairWiseSW;
+    use crate::core::alignment::banded_swa::BandedPairWiseSW;
 
     // Debug: show what query we received
     log::debug!(
@@ -1142,7 +1055,8 @@ pub fn generate_cigar_from_region(
     );
 
     // Run global alignment to generate CIGAR
-    let result = sw_params.banded_swa(
+    let result = scalar_banded_swa(
+        &sw_params,
         query_for_sw.len() as i32,
         &query_for_sw,
         rseq_for_sw.len() as i32,

@@ -84,15 +84,31 @@ impl BwaIndex {
 
         // 3. Read cp_occ array using bulk copy
         // CpOcc struct is 64 bytes: 4×i64 + 4×u64
-        let cp_occ_size = (bwt.seq_len >> CP_SHIFT) + 1;
-        let cp_occ_bytes = cp_occ_size as usize * std::mem::size_of::<CpOcc>();
-        let mut cp_occ: Vec<CpOcc> = Vec::with_capacity(cp_occ_size as usize);
-        unsafe {
-            let src = mmap[offset..offset + cp_occ_bytes].as_ptr() as *const CpOcc;
-            cp_occ.set_len(cp_occ_size as usize);
-            std::ptr::copy_nonoverlapping(src, cp_occ.as_mut_ptr(), cp_occ_size as usize);
+        // Helper to read CpOcc from mmap
+        fn read_cp_occ(mmap: &[u8], offset: &mut usize) -> CpOcc {
+            let mut cp_occ = CpOcc {
+                checkpoint_counts: [0; 4],
+                bwt_encoding_bits: [0; 4],
+            };
+
+            for i in 0..4 {
+                cp_occ.checkpoint_counts[i] =
+                    i64::from_le_bytes(mmap[*offset..*offset + 8].try_into().unwrap());
+                *offset += 8;
+            }
+            for i in 0..4 {
+                cp_occ.bwt_encoding_bits[i] =
+                    u64::from_le_bytes(mmap[*offset..*offset + 8].try_into().unwrap());
+                *offset += 8;
+            }
+            cp_occ
         }
-        offset += cp_occ_bytes;
+
+        let cp_occ_size = (bwt.seq_len >> CP_SHIFT) + 1;
+        let mut cp_occ: Vec<CpOcc> = Vec::with_capacity(cp_occ_size as usize);
+        for _ in 0..cp_occ_size {
+            cp_occ.push(read_cp_occ(&mmap, &mut offset));
+        }
 
         // In C++, SA_COMPX is 3 (defined in macro.h), so sa_intv is 8
         let sa_compx = 3;
@@ -101,23 +117,25 @@ impl BwaIndex {
         // 4. Read sa_ms_byte array using bulk copy
         let sa_high_bytes_len = sa_len as usize;
         bwt.sa_high_bytes = Vec::with_capacity(sa_high_bytes_len);
-        unsafe {
-            let src = mmap[offset..offset + sa_high_bytes_len].as_ptr() as *const i8;
-            bwt.sa_high_bytes.set_len(sa_high_bytes_len);
-            std::ptr::copy_nonoverlapping(src, bwt.sa_high_bytes.as_mut_ptr(), sa_high_bytes_len);
-        }
+        bwt.sa_high_bytes.extend_from_slice(
+            // Directly copy bytes from mmap.
+            // Cast from u8 to i8, assuming valid byte representation.
+            &mmap[offset..offset + sa_high_bytes_len]
+                .iter()
+                .map(|&b| b as i8)
+                .collect::<Vec<i8>>(),
+        );
         offset += sa_high_bytes_len;
 
         // 5. Read sa_ls_word array using bulk copy
         let sa_low_words_len = sa_len as usize;
-        let sa_low_words_bytes = sa_low_words_len * std::mem::size_of::<u32>();
         bwt.sa_low_words = Vec::with_capacity(sa_low_words_len);
-        unsafe {
-            let src = mmap[offset..offset + sa_low_words_bytes].as_ptr() as *const u32;
-            bwt.sa_low_words.set_len(sa_low_words_len);
-            std::ptr::copy_nonoverlapping(src, bwt.sa_low_words.as_mut_ptr(), sa_low_words_len);
+        for _ in 0..sa_low_words_len {
+            bwt.sa_low_words.push(u32::from_le_bytes(
+                mmap[offset..offset + 4].try_into().unwrap(),
+            ));
+            offset += 4;
         }
-        offset += sa_low_words_bytes;
 
         // 6. Read sentinel_index
         let sentinel_index = read_i64(&mmap, &mut offset);

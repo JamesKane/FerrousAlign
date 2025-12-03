@@ -1,0 +1,31 @@
+//! Banded Smith–Waterman: shared kernel + thin ISA wrappers + dispatch
+
+pub mod engines; // SwEngine128/256/512 adapters (used in tests)
+pub mod kernel; // SwSimd trait + sw_kernel + KernelParams
+pub mod scalar;
+pub mod scoring;
+pub mod shared; // pad_batch, soa_transform (no‑op when pre‑SoA), pack_outscores
+pub mod types;
+pub mod utils;
+
+#[cfg(target_arch = "x86_64")]
+pub mod isa_avx2;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+pub mod isa_avx512_int16;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+pub mod isa_avx512_int8;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub mod isa_sse_neon;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+pub mod kernel_avx512;
+
+pub mod dispatch;
+mod engines16;
+pub mod kernel_i16;
+
+// Re‑exports (keep external API stable)
+pub use dispatch::*;
+pub use kernel::KernelParams;
+pub use scoring::bwa_fill_scmat;
+pub use types::*;
+pub use utils::{reverse_cigar, reverse_sequence};

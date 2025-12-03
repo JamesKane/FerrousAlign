@@ -11,7 +11,7 @@ use ferrous_align::pipelines::linear::finalization::sam_flags;
 /// 1. Primary alignments never have SECONDARY flag (sam_flags::SECONDARY)
 /// 2. Non-primary alignments are marked as secondary
 /// 3. Paired-end logic correctly overrides single-read secondary marking
-
+///
 /// Test that primary alignments don't have secondary flag set
 #[test]
 fn test_primary_alignment_not_secondary() {

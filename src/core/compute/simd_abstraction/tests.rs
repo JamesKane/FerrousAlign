@@ -266,7 +266,7 @@ mod tests {
         {
             if is_x86_feature_detected!("avx512bw") {
                 use super::super::SimdEngine512;
-                let mut avx512_test_pattern = [5u8; 64];
+                let avx512_test_pattern = [5u8; 64];
                 let mut avx512_result = [0u8; 64];
 
                 unsafe {

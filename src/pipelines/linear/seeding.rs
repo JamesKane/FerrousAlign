@@ -4,7 +4,11 @@ use super::index::fm_index::backward_ext;
 use super::index::fm_index::forward_ext;
 use super::index::fm_index::get_occ;
 use super::index::index::BwaIndex;
+use super::mem_opt::MemOpt;
+use crate::alignment::utils::{base_to_code, reverse_complement_code};
+use crate::alignment::workspace::with_workspace;
 use crate::core::compute::simd_abstraction::portable_intrinsics;
+pub use crate::core::io::soa_readers::SoAReadBatch;
 
 // Define a struct to represent a seed
 #[derive(Debug, Clone)]
@@ -34,6 +38,84 @@ pub struct SMEM {
     pub interval_size: u64,
     /// Whether this SMEM is from the reverse complement strand
     pub is_reverse_complement: bool,
+}
+
+// Define a struct to represent a batch of seeds in SoA format
+#[derive(Debug, Clone, Default)]
+pub struct SoASeedBatch {
+    pub query_pos: Vec<i32>,
+    pub ref_pos: Vec<u64>,
+    pub len: Vec<i32>,
+    pub is_rev: Vec<bool>,
+    pub interval_size: Vec<u64>,
+    pub rid: Vec<i32>,
+    // Store (start_idx, count) for seeds belonging to each read in the batch
+    pub read_seed_boundaries: Vec<(usize, usize)>,
+}
+
+impl SoASeedBatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(capacity: usize, num_reads: usize) -> Self {
+        Self {
+            query_pos: Vec::with_capacity(capacity),
+            ref_pos: Vec::with_capacity(capacity),
+            len: Vec::with_capacity(capacity),
+            is_rev: Vec::with_capacity(capacity),
+            interval_size: Vec::with_capacity(capacity),
+            rid: Vec::with_capacity(capacity),
+            read_seed_boundaries: Vec::with_capacity(num_reads),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.query_pos.clear();
+        self.ref_pos.clear();
+        self.len.clear();
+        self.is_rev.clear();
+        self.interval_size.clear();
+        self.rid.clear();
+        self.read_seed_boundaries.clear();
+    }
+
+    pub fn push(&mut self, seed: &Seed, _read_idx: usize) {
+        self.query_pos.push(seed.query_pos);
+        self.ref_pos.push(seed.ref_pos);
+        self.len.push(seed.len);
+        self.is_rev.push(seed.is_rev);
+        self.interval_size.push(seed.interval_size);
+        self.rid.push(seed.rid);
+        // This push logic will need to be handled carefully with read_seed_boundaries
+        // For now, it's a direct push, boundary management will be done at batching
+    }
+}
+
+// Define a struct to represent a batch of encoded queries in SoA format
+#[derive(Debug, Clone, Default)]
+pub struct SoAEncodedQueryBatch {
+    pub encoded_seqs: Vec<u8>,
+    // Store (start_offset, length) for each encoded query within `encoded_seqs`
+    pub query_boundaries: Vec<(usize, usize)>,
+}
+
+impl SoAEncodedQueryBatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(total_seq_len: usize, num_reads: usize) -> Self {
+        Self {
+            encoded_seqs: Vec::with_capacity(total_seq_len),
+            query_boundaries: Vec::with_capacity(num_reads),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.encoded_seqs.clear();
+        self.query_boundaries.clear();
+    }
 }
 
 /// Generate SMEMs for a single strand (forward or reverse complement)
@@ -699,7 +781,9 @@ pub fn get_sa_entries(
     interval_size: u64,
     max_occurrences: u32,
 ) -> Vec<u64> {
-    let mut ref_positions = Vec::new();
+    // Pre-size with exact capacity since we know the size
+    let num_to_retrieve = (interval_size as u32).min(max_occurrences);
+    let mut ref_positions = Vec::with_capacity(num_to_retrieve as usize);
 
     // For repetitive seeds, we need to sample evenly across the ENTIRE interval
     // to ensure we cover all reference positions, not just a clustered subset.
@@ -709,8 +793,6 @@ pub fn get_sa_entries(
     //
     // We use floating-point arithmetic to ensure even distribution across the
     // full interval range.
-    let num_to_retrieve = (interval_size as u32).min(max_occurrences);
-
     let actual_num = num_to_retrieve;
 
     if num_to_retrieve == 0 {
@@ -898,6 +980,607 @@ pub fn forward_only_seed_strategy(
 
         x = next_x;
     }
+}
+
+pub fn find_seeds_batch(
+    bwa_idx: &BwaIndex,
+    read_batch: &SoAReadBatch,
+    opt: &MemOpt,
+) -> (SoASeedBatch, SoAEncodedQueryBatch, SoAEncodedQueryBatch) {
+    let num_reads = read_batch.len();
+    let total_query_len: usize = read_batch.read_boundaries.iter().map(|(_, len)| *len).sum();
+
+    let mut soa_seed_batch = SoASeedBatch::with_capacity(num_reads * 50, num_reads); // Heuristic capacity
+    let mut soa_encoded_query_batch =
+        SoAEncodedQueryBatch::with_capacity(total_query_len, num_reads);
+    let mut soa_encoded_query_rc_batch =
+        SoAEncodedQueryBatch::with_capacity(total_query_len, num_reads);
+
+    for read_idx in 0..num_reads {
+        let (seq_start, query_len) = read_batch.read_boundaries[read_idx];
+        let query_name = &read_batch.names[read_idx];
+        let query_seq = &read_batch.seqs[seq_start..(seq_start + query_len)];
+
+        // Create encoded versions of the query sequence
+        let mut encoded_query = Vec::with_capacity(query_len);
+        let mut encoded_query_rc = Vec::with_capacity(query_len); // Reverse complement
+        for &base in query_seq {
+            let code = base_to_code(base);
+            encoded_query.push(code);
+            encoded_query_rc.push(reverse_complement_code(code));
+        }
+        encoded_query_rc.reverse();
+
+        // Store encoded queries in SoA batches
+        let current_encoded_query_start = soa_encoded_query_batch.encoded_seqs.len();
+        soa_encoded_query_batch
+            .encoded_seqs
+            .extend_from_slice(&encoded_query);
+        soa_encoded_query_batch
+            .query_boundaries
+            .push((current_encoded_query_start, query_len));
+
+        let current_encoded_query_rc_start = soa_encoded_query_rc_batch.encoded_seqs.len();
+        soa_encoded_query_rc_batch
+            .encoded_seqs
+            .extend_from_slice(&encoded_query_rc);
+        soa_encoded_query_rc_batch
+            .query_boundaries
+            .push((current_encoded_query_rc_start, query_len));
+
+        if query_len == 0 {
+            soa_seed_batch
+                .read_seed_boundaries
+                .push((soa_seed_batch.query_pos.len(), 0));
+            continue;
+        }
+
+        #[cfg(feature = "debug-logging")]
+        let is_debug_read = query_name.contains("1150:14380");
+
+        #[cfg(feature = "debug-logging")]
+        if is_debug_read {
+            log::debug!("[DEBUG_READ] Generating seeds for: {}", query_name);
+            log::debug!("[DEBUG_READ] Query length: {}", query_len);
+        }
+
+        let min_seed_len = opt.min_seed_len;
+        let min_intv = 1u64;
+
+        log::debug!(
+            "{query_name}: Starting SMEM generation: min_seed_len={min_seed_len}, min_intv={min_intv}, query_len={query_len}"
+        );
+
+        // PHASE 1 VALIDATION: Log SMEM generation parameters
+        log::debug!(
+            "SMEM_VALIDATION {}: Parameters: min_seed_len={}, max_occ={}, split_factor={:.2}, split_width={}, max_mem_intv={}",
+            query_name,
+            opt.min_seed_len,
+            opt.max_occ,
+            opt.split_factor,
+            opt.split_width,
+            opt.max_mem_intv
+        );
+
+        let mut max_smem_count = 0usize;
+
+        let current_read_seed_start_idx = soa_seed_batch.query_pos.len();
+
+        // BWA-MEM2 SMEM algorithm: Search ONLY with the original query.
+        // The bidirectional FM-index automatically finds matches on both strands:
+        // - Positions in [0, l_pac): forward strand alignments
+        // - Positions in [l_pac, 2*l_pac): reverse strand alignments
+        //
+        // Searching with the reverse complement query would find DIFFERENT positions
+        // (where the revcomp pattern matches), not the same alignment on the other strand.
+        // The strand is determined later based on whether the FM-index position >= l_pac.
+        //
+        // Use thread-local workspace buffers to avoid per-read allocations
+        // CRITICAL: Use ws.all_smems instead of allocating new Vec per read
+        let mut all_smems = with_workspace(|ws| {
+            // Clear workspace buffer for reuse (retains capacity)
+            ws.all_smems.clear();
+
+            generate_smems_for_strand(
+                bwa_idx,
+                query_name,
+                query_len,
+                &encoded_query,
+                false, // is_reverse_complement = false for all SMEMs (strand determined by position)
+                min_seed_len,
+                min_intv,
+                &mut ws.all_smems,
+                &mut max_smem_count,
+                &mut ws.smem_prev_buf,
+                &mut ws.smem_curr_buf,
+            );
+
+            // Move data out of workspace (retains capacity in ws.all_smems for next use)
+            std::mem::take(&mut ws.all_smems)
+        });
+
+        // PHASE 1 VALIDATION: Log initial SMEMs
+        let pass1_count = all_smems.len();
+        log::debug!("SMEM_VALIDATION {query_name}: Pass 1 (initial) generated {pass1_count} SMEMs");
+        if log::log_enabled!(log::Level::Debug) {
+            for (idx, smem) in all_smems.iter().enumerate().take(10) {
+                log::debug!(
+                    "SMEM_VALIDATION {}:   Pass1[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                    query_name,
+                    idx,
+                    smem.query_start,
+                    smem.query_end,
+                    smem.query_end - smem.query_start + 1,
+                    smem.bwt_interval_start,
+                    smem.bwt_interval_end,
+                    smem.interval_size
+                );
+            }
+            if all_smems.len() > 10 {
+                log::debug!(
+                    "SMEM_VALIDATION {}:   ... ({} more SMEMs)",
+                    query_name,
+                    all_smems.len() - 10
+                );
+            }
+        }
+
+        // Re-seeding pass: For long unique SMEMs, re-seed from middle to find split alignments
+        // This matches C++ bwamem.cpp:695-714
+        // C++ uses: (int)(min_seed_len * split_factor + 0.499) which rounds to nearest
+        let split_len = (opt.min_seed_len as f32 * opt.split_factor + 0.499) as i32;
+        let split_width = opt.split_width as u64;
+
+        // Collect re-seeding candidates from initial SMEMs
+        // NOTE: Re-seeding always uses original query since all SMEMs come from original query search
+        let mut reseed_candidates: Vec<(usize, u64)> = Vec::with_capacity(32); // (middle_pos, min_intv)
+
+        for smem in all_smems.iter() {
+            let smem_len = smem.query_end - smem.query_start + 1;
+            // Re-seed if: length >= split_len AND interval_size <= split_width
+            if smem_len >= split_len && smem.interval_size <= split_width {
+                // Calculate middle position: (start + end + 1) >> 1 to match C++
+                let middle_pos = ((smem.query_start + smem.query_end + 1) >> 1) as usize;
+                let new_min_intv = smem.interval_size + 1;
+
+                log::debug!(
+                    "{}: Re-seed candidate: smem m={}, n={}, len={}, s={}, middle_pos={}, new_min_intv={}",
+                    query_name,
+                    smem.query_start,
+                    smem.query_end,
+                    smem_len,
+                    smem.interval_size,
+                    middle_pos,
+                    new_min_intv
+                );
+
+                reseed_candidates.push((middle_pos, new_min_intv));
+            }
+        }
+
+        // Execute re-seeding for each candidate (always use original query)
+        // Use thread-local workspace buffers to avoid per-call allocations
+        let initial_smem_count = all_smems.len();
+        with_workspace(|ws| {
+            for (middle_pos, new_min_intv) in &reseed_candidates {
+                generate_smems_from_position(
+                    bwa_idx,
+                    query_name,
+                    query_len,
+                    &encoded_query,
+                    false, // is_reverse_complement = false for all SMEMs (strand determined by position)
+                    min_seed_len,
+                    *new_min_intv,
+                    *middle_pos,
+                    &mut all_smems,
+                    &mut ws.smem_prev_buf,
+                    &mut ws.smem_curr_buf,
+                );
+            }
+        });
+
+        // PHASE 1 VALIDATION: Log Pass 2 (re-seeding) results
+        let pass2_added = all_smems.len() - initial_smem_count;
+        if pass2_added > 0 {
+            log::debug!(
+                "SMEM_VALIDATION {}: Pass 2 (re-seeding) added {} new SMEMs (total: {})",
+                query_name,
+                pass2_added,
+                all_smems.len()
+            );
+            if log::log_enabled!(log::Level::Debug) {
+                for (idx, smem) in all_smems
+                    .iter()
+                    .skip(initial_smem_count)
+                    .enumerate()
+                    .take(10)
+                {
+                    log::debug!(
+                        "SMEM_VALIDATION {}:   Pass2[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                        query_name,
+                        idx,
+                        smem.query_start,
+                        smem.query_end,
+                        smem.query_end - smem.query_start + 1,
+                        smem.bwt_interval_start,
+                        smem.bwt_interval_end,
+                        smem.interval_size
+                    );
+                }
+                if all_smems.len() > 10 {
+                    log::debug!(
+                        "SMEM_VALIDATION {}:   ... ({} more SMEMs)",
+                        query_name,
+                        all_smems.len() - 10
+                    );
+                }
+            }
+        } else {
+            log::debug!("SMEM_VALIDATION {query_name}: Pass 2 (re-seeding) added 0 new SMEMs");
+        }
+
+        // 3rd round seeding: Additional seeding pass with forward-only strategy
+        // BWA-MEM2 runs this unconditionally when max_mem_intv > 0 (default 20)
+        // Uses min_seed_len + 1 as minimum length and max_mem_intv as the interval threshold
+        // This finds seeds that might be missed by the supermaximal SMEM algorithm
+        let smems_before_3rd_round = all_smems.len();
+        let mut used_3rd_round_seeding = false;
+
+        // Match BWA-MEM2: run 3rd round seeding unconditionally when max_mem_intv > 0
+        // (Previously required all SMEMs to exceed max_occ, which was incorrect)
+        if opt.max_mem_intv > 0 {
+            used_3rd_round_seeding = true;
+            log::debug!(
+                "{}: Running 3rd round seeding (max_mem_intv={}) with {} existing SMEMs",
+                query_name,
+                opt.max_mem_intv,
+                all_smems.len()
+            );
+
+            // Use forward-only seed strategy matching BWA-MEM2's bwtSeedStrategyAllPosOneThread
+            // This iterates through ALL positions, doing forward extension only,
+            // and outputs seeds when interval drops BELOW max_mem_intv
+            // NOTE: Only search with original query - bidirectional index handles both strands
+            forward_only_seed_strategy(
+                bwa_idx,
+                query_name,
+                query_len,
+                &encoded_query,
+                false, // is_reverse_complement = false for all SMEMs (strand determined by position)
+                min_seed_len,
+                opt.max_mem_intv,
+                &mut all_smems,
+            );
+
+            // PHASE 1 VALIDATION: Log Pass 3 (forward-only) results
+            let pass3_added = all_smems.len() - smems_before_3rd_round;
+            if pass3_added > 0 {
+                log::debug!(
+                    "SMEM_VALIDATION {}: Pass 3 (forward-only) added {} new SMEMs (total: {})",
+                    query_name,
+                    pass3_added,
+                    all_smems.len()
+                );
+                if log::log_enabled!(log::Level::Debug) {
+                    for (idx, smem) in all_smems
+                        .iter()
+                        .skip(smems_before_3rd_round)
+                        .enumerate()
+                        .take(10)
+                    {
+                        log::debug!(
+                            "SMEM_VALIDATION {}:   Pass3[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                            query_name,
+                            idx,
+                            smem.query_start,
+                            smem.query_end,
+                            smem.query_end - smem.query_start + 1,
+                            smem.bwt_interval_start,
+                            smem.bwt_interval_end,
+                            smem.interval_size
+                        );
+                    }
+                    if all_smems.len() > 10 {
+                        log::debug!(
+                            "SMEM_VALIDATION {}:   ... ({} more SMEMs)",
+                            query_name,
+                            all_smems.len() - 10
+                        );
+                    }
+                }
+            } else {
+                log::debug!(
+                    "SMEM_VALIDATION {query_name}: Pass 3 (forward-only) added 0 new SMEMs"
+                );
+            }
+        } else {
+            log::debug!(
+                "SMEM_VALIDATION {query_name}: Pass 3 (forward-only) skipped (max_mem_intv=0)"
+            );
+        }
+
+        // Filter SMEMs
+        // Pre-size with capacity based on input size
+        let mut unique_filtered_smems: Vec<SMEM> = Vec::with_capacity(all_smems.len());
+        all_smems.sort_by_key(|smem| {
+            (
+                smem.query_start,
+                smem.query_end,
+                smem.bwt_interval_start,
+                smem.is_reverse_complement,
+            )
+        });
+
+        // NOTE: split_factor and split_width control RE-SEEDING for chimeric detection,
+        // NOT seed filtering. The basic filter (min_seed_len + max_occ) is sufficient.
+        // The previous "chimeric filter" was incorrectly discarding valid seeds.
+        // See C++ bwamem.cpp:639-695 - split logic is for creating additional sub-seeds,
+        // not for removing seeds that pass the basic quality checks.
+
+        // For 3rd round seeding: if all SMEMs still exceed max_occ, use a much higher threshold
+        // to allow some seeds through. This is the fallback for highly repetitive regions.
+        // BWA-MEM2 uses seed_occurrence_3rd parameter for this purpose.
+        let effective_max_occ = if used_3rd_round_seeding {
+            // Find the minimum occurrence among all SMEMs and use that as the threshold
+            // This ensures at least some seeds pass through
+            let min_occ = all_smems
+                .iter()
+                .map(|s| s.interval_size)
+                .min()
+                .unwrap_or(opt.max_occ as u64);
+            // Use min_occ + 1 to ensure seeds pass
+            let relaxed_threshold = (min_occ + 1).max(opt.max_occ as u64);
+            log::debug!(
+                "{}: 3rd round seeding used, relaxing max_occ filter from {} to {} (min_occ={})",
+                query_name,
+                opt.max_occ,
+                relaxed_threshold,
+                min_occ
+            );
+            relaxed_threshold
+        } else {
+            opt.max_occ as u64
+        };
+
+        // CRITICAL FIX: DO NOT filter duplicate SMEMs!
+        // BWA-MEM2 preserves all SMEMs including duplicates from different passes.
+        // Filtering duplicates here causes chains to have fewer seeds, leading to
+        // different extension boundaries and lower proper pairing rates.
+        for smem in all_smems.iter() {
+            let seed_len = smem.query_end - smem.query_start + 1;
+            let occurrences = smem.interval_size;
+            // Keep seeds that pass basic quality filter (min_seed_len AND max_occ)
+            if seed_len >= opt.min_seed_len && occurrences <= effective_max_occ {
+                unique_filtered_smems.push(*smem);
+            }
+        }
+
+        // PHASE 1 VALIDATION: Log filtering summary
+        log::debug!(
+            "SMEM_VALIDATION {}: Filtering summary: {} total SMEMs -> {} unique (min_seed_len={}, max_occ={})",
+            query_name,
+            all_smems.len(),
+            unique_filtered_smems.len(),
+            opt.min_seed_len,
+            effective_max_occ
+        );
+
+        log::debug!(
+            "{}: Generated {} SMEMs, filtered to {} unique",
+            query_name,
+            all_smems.len(),
+            unique_filtered_smems.len()
+        );
+
+        // SMEM OVERLAP DEBUG: Log ALL SMEMs to identify overlapping/duplicate SMEMs
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!(
+                "SMEM_OVERLAP {}: {} SMEMs after filtering:",
+                query_name,
+                unique_filtered_smems.len()
+            );
+            for (idx, smem) in unique_filtered_smems.iter().enumerate().take(10) {
+                log::debug!(
+                    "SMEM_OVERLAP {}:   SMEM[{}]: query[{}..{}] len={} bwt=[{}, {}) size={}",
+                    query_name,
+                    idx,
+                    smem.query_start,
+                    smem.query_end,
+                    smem.query_end - smem.query_start + 1,
+                    smem.bwt_interval_start,
+                    smem.bwt_interval_end,
+                    smem.interval_size
+                );
+            }
+            if unique_filtered_smems.len() > 10 {
+                log::debug!(
+                    "SMEM_OVERLAP {}:   ... ({} more SMEMs)",
+                    query_name,
+                    unique_filtered_smems.len() - 10
+                );
+            }
+        }
+
+        let mut sorted_smems = unique_filtered_smems;
+        sorted_smems.sort_by_key(|smem| -(smem.query_end - smem.query_start + 1));
+
+        // Match C++ SEEDS_PER_READ limit (see bwa-mem2/src/macro.h)
+        const SEEDS_PER_READ: usize = 500;
+
+        // For highly repetitive reads (small number of SMEMs all covering full query),
+        // allow more seeds per SMEM to get full coverage of the reference range.
+        // Otherwise divide SEEDS_PER_READ among all SMEMs.
+        let is_highly_repetitive = sorted_smems.len() <= 4
+            && sorted_smems
+                .iter()
+                .all(|s| s.query_end - s.query_start > (query_len as i32 * 3 / 4));
+
+        let seeds_per_smem = if sorted_smems.is_empty() {
+            SEEDS_PER_READ
+        } else if is_highly_repetitive {
+            // For highly repetitive: use full max_occ per SMEM
+            SEEDS_PER_READ
+        } else {
+            (SEEDS_PER_READ / sorted_smems.len()).max(1)
+        };
+
+        // Pre-size seed accumulator based on expected seeds per read
+        let mut current_read_seeds: Vec<Seed> = Vec::with_capacity(SEEDS_PER_READ);
+        let mut seeds_per_smem_count = Vec::with_capacity(sorted_smems.len()); // Track seeds generated per SMEM for Phase 2 validation
+
+        for (smem_idx, smem) in sorted_smems.iter().enumerate() {
+            let seeds_before = current_read_seeds.len();
+
+            // Limit positions per SMEM to ensure coverage from multiple SMEMs
+            // The get_sa_entries function will sample evenly across the interval
+            let max_positions_this_smem = (seeds_per_smem as u32).min(opt.max_occ as u32);
+
+            // Use the new get_sa_entries function to get multiple reference positions
+            // It samples evenly across the entire BWT interval using floating-point step
+            let ref_positions = get_sa_entries(
+                bwa_idx,
+                smem.bwt_interval_start,
+                smem.interval_size,
+                max_positions_this_smem,
+            );
+
+            let seed_len = smem.query_end - smem.query_start;
+            let l_pac = bwa_idx.bns.packed_sequence_length;
+
+            // PHASE 2 VALIDATION: Log ALL SMEMs for exhaustive comparison
+            if log::log_enabled!(log::Level::Debug) {
+                log::debug!(
+                    "SEED_CONVERSION {}: SMEM[{}] query[{}..{}] → {} ref positions (requested: {})",
+                    query_name,
+                    smem_idx,
+                    smem.query_start,
+                    smem.query_end,
+                    ref_positions.len(),
+                    max_positions_this_smem
+                );
+            }
+
+            let mut skipped_boundary = 0;
+            for (pos_idx, ref_pos) in ref_positions.iter().enumerate() {
+                // Compute rid (chromosome ID) - skip seeds that span chromosome boundaries
+                // Matches C++ bwamem.cpp:911-914
+                let rid = bwa_idx.bns.pos_to_rid(*ref_pos, *ref_pos + seed_len as u64);
+                if rid < 0 {
+                    // Seed spans multiple chromosomes or forward-reverse boundary - skip
+                    skipped_boundary += 1;
+                    continue;
+                }
+
+                // BWA-MEM2 determines strand from reference position, not SMEM flag:
+                // - Positions in [0, l_pac): forward strand (read matches forward ref)
+                // - Positions in [l_pac, 2*l_pac): reverse strand (read matches revcomp ref)
+                // See bns_depos() in bntseq.h: (*is_rev = (pos >= bns->l_pac))
+                let is_rev = *ref_pos >= l_pac;
+
+                // PHASE 2 VALIDATION: Log ALL seeds for exhaustive comparison
+                if log::log_enabled!(log::Level::Debug) {
+                    log::debug!(
+                        "SEED_CONVERSION {}:   Seed[{}]: ref_pos={} is_rev={} rid={} chr={}",
+                        query_name,
+                        pos_idx,
+                        ref_pos,
+                        is_rev,
+                        rid,
+                        if rid >= 0 {
+                            bwa_idx.bns.annotations[rid as usize].name.as_str()
+                        } else {
+                            "N/A"
+                        }
+                    );
+                }
+
+                let seed = Seed {
+                    query_pos: smem.query_start,
+                    ref_pos: *ref_pos,
+                    len: seed_len,
+                    is_rev,
+                    interval_size: smem.interval_size,
+                    rid,
+                };
+                current_read_seeds.push(seed);
+
+                // Hard limit on seeds per read to prevent memory explosion
+                if current_read_seeds.len() >= SEEDS_PER_READ {
+                    log::debug!(
+                        "{query_name}: Hit SEEDS_PER_READ limit ({SEEDS_PER_READ}), truncating"
+                    );
+                    break;
+                }
+            }
+
+            let seeds_added = current_read_seeds.len() - seeds_before;
+            seeds_per_smem_count.push((smem_idx, seeds_added, skipped_boundary));
+
+            if current_read_seeds.len() >= SEEDS_PER_READ {
+                break;
+            }
+        }
+
+        // PHASE 2 VALIDATION: Log seed conversion summary
+        log::debug!(
+            "SEED_CONVERSION {}: Total {} SMEMs → {} seeds ({} seeds/SMEM limit)",
+            query_name,
+            sorted_smems.len(),
+            current_read_seeds.len(),
+            seeds_per_smem
+        );
+
+        // Log per-SMEM breakdown for first few SMEMs
+        if log::log_enabled!(log::Level::Debug) {
+            for &(idx, count, skipped) in seeds_per_smem_count.iter().take(10) {
+                if count > 0 || skipped > 0 {
+                    log::debug!(
+                        "SEED_CONVERSION {query_name}:   SMEM[{idx}] → {count} seeds ({skipped} skipped at boundary)"
+                    );
+                }
+            }
+            if seeds_per_smem_count.len() > 10 {
+                log::debug!(
+                    "SEED_CONVERSION {}:   ... ({} more SMEMs)",
+                    query_name,
+                    seeds_per_smem_count.len() - 10
+                );
+            }
+        }
+
+        if max_smem_count > query_len {
+            log::debug!(
+                "{query_name}: SMEM buffer grew beyond initial capacity! max_smem_count={max_smem_count} > query_len={query_len}"
+            );
+        }
+
+        log::debug!(
+            "{}: Created {} seeds from {} SMEMs",
+            query_name,
+            current_read_seeds.len(),
+            sorted_smems.len()
+        );
+
+        // Populate SoASeedBatch for the current read
+        for seed in current_read_seeds {
+            soa_seed_batch.query_pos.push(seed.query_pos);
+            soa_seed_batch.ref_pos.push(seed.ref_pos);
+            soa_seed_batch.len.push(seed.len);
+            soa_seed_batch.is_rev.push(seed.is_rev);
+            soa_seed_batch.interval_size.push(seed.interval_size);
+            soa_seed_batch.rid.push(seed.rid);
+        }
+        let num_seeds_for_read = soa_seed_batch.query_pos.len() - current_read_seed_start_idx;
+        soa_seed_batch
+            .read_seed_boundaries
+            .push((current_read_seed_start_idx, num_seeds_for_read));
+    }
+
+    (
+        soa_seed_batch,
+        soa_encoded_query_batch,
+        soa_encoded_query_rc_batch,
+    )
 }
 
 #[cfg(test)]

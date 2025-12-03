@@ -2,6 +2,7 @@
 // Extracted from inline tests to reduce clutter in production code
 use ferrous_align::alignment::banded_swa::BandedPairWiseSW;
 use ferrous_align::alignment::banded_swa::bwa_fill_scmat;
+use ferrous_align::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
 
 #[test]
 fn test_soft_clipping_at_end() {
@@ -15,7 +16,7 @@ fn test_soft_clipping_at_end() {
     let query = vec![0u8, 1, 2, 3, 0, 0, 0, 0, 0, 0]; // ACGTAAAAAA
     let target = vec![0u8, 1, 2, 3]; // ACGT (only matches first 4 bases)
 
-    let (out_score, cigar, _, _) = bsw.scalar_banded_swa(10, &query, 4, &target, 100, 0);
+    let (out_score, cigar, _, _) = scalar_banded_swa(&bsw, 10, &query, 4, &target, 100, 0);
 
     assert!(
         out_score.score > 0,
@@ -49,7 +50,7 @@ fn test_soft_clipping_at_beginning() {
     let query = vec![3u8, 3, 3, 3, 3, 0, 1, 2, 3]; // TTTTTACGT
     let target = vec![0u8, 1, 2, 3]; // ACGT (matches last 4 bases of query)
 
-    let (out_score, cigar, _, _) = bsw.scalar_banded_swa(9, &query, 4, &target, 100, 0);
+    let (out_score, cigar, _, _) = scalar_banded_swa(&bsw, 9, &query, 4, &target, 100, 0);
 
     assert!(
         out_score.score > 0,
@@ -78,7 +79,7 @@ fn test_soft_clipping_both_ends() {
     let query = vec![3u8, 3, 3, 3, 3, 0, 1, 2, 3, 0, 0, 0, 0, 0];
     let target = vec![0u8, 1, 2, 3]; // ACGT (matches middle of query)
 
-    let (out_score, cigar, _, _) = bsw.scalar_banded_swa(14, &query, 4, &target, 100, 0);
+    let (out_score, cigar, _, _) = scalar_banded_swa(&bsw, 14, &query, 4, &target, 100, 0);
 
     assert!(out_score.score > 0, "Should have positive score");
 
@@ -99,7 +100,7 @@ fn test_no_soft_clipping_for_full_alignment() {
     let query = vec![0u8, 1, 2, 3]; // ACGT
     let target = vec![0u8, 1, 2, 3]; // ACGT (perfect match)
 
-    let (_out_score, cigar, _, _) = bsw.scalar_banded_swa(4, &query, 4, &target, 100, 0);
+    let (_out_score, cigar, _, _) = scalar_banded_swa(&bsw, 4, &query, 4, &target, 100, 0);
 
     // Should NOT have soft clipping for full alignment
     let has_soft_clip = cigar.iter().any(|(op, _)| *op == b'S');

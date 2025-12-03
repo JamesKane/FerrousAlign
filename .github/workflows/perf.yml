@@ -1,0 +1,58 @@
+name: Perf (Criterion)
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'benches/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'benches/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build benches
+        run: cargo build --benches --locked
+
+      - name: Run simd_benchmarks (quick) and save baseline
+        env:
+          RUST_LOG: warn
+        run: cargo bench --bench simd_benchmarks -- --quick --save-baseline sse_baseline
+
+      - name: Upload Criterion results
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.sha }}
+          path: target/criterion
+
+      # Placeholder for future baseline compare and SoA guard
+      - name: TODO Baseline compare
+        run: echo "Baseline comparison will be added after we establish storage for golden baselines."

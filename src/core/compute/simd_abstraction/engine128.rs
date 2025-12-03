@@ -278,6 +278,11 @@ impl SimdEngine for SimdEngine128 {
         unsafe { _mm_min_epu8(a, b) }
     }
 
+    #[inline]
+    unsafe fn min_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8 {
+        unsafe { _mm_min_epi8(a, b) }
+    }
+
     // ===== 16-bit Integer Arithmetic =====
 
     #[inline]

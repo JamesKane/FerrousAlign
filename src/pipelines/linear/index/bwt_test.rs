@@ -83,6 +83,9 @@ mod tests {
         assert_eq!(bwt.cumulative_count, l2); // Compare with the calculated l2
     }
 
+    // This test depends on external files on disk and is brittle in CI/clean envs.
+    // Ignore by default; run explicitly with `cargo test -- --ignored` when fixtures are available.
+    #[ignore]
     #[test]
     fn test_bwt_dump_bwt() -> io::Result<()> {
         let bwt = create_dummy_bwt();

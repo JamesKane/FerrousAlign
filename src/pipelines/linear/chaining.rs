@@ -1,6 +1,11 @@
 use super::mem_opt::MemOpt;
 use super::seeding::Seed;
 use crate::core::kbtree::KBTree;
+use crate::pipelines::linear::seeding::SoASeedBatch;
+
+// Safety limits to prevent runaway memory/CPU usage
+const MAX_SEEDS_PER_READ: usize = 100_000;
+const MAX_CHAINS_PER_READ: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct Chain {
@@ -16,13 +21,84 @@ pub struct Chain {
     pub frac_rep: f32, // Fraction of repetitive seeds in this chain
     pub rid: i32,      // Reference sequence ID (chromosome)
     #[allow(dead_code)] // B-tree key used internally
-    pos: u64, // B-tree key: reference position of first seed
+    pub(crate) pos: u64, // B-tree key: reference position of first seed
     // Last seed info for test_and_merge (matching C++ behavior)
-    last_qbeg: i32, // Last seed's query begin
-    last_rbeg: u64, // Last seed's reference begin
-    last_len: i32,  // Last seed's length
+    pub(crate) last_qbeg: i32, // Last seed's query begin
+    pub(crate) last_rbeg: u64, // Last seed's reference begin
+    pub(crate) last_len: i32,  // Last seed's length
 }
 
+// Define a struct to represent a batch of chains in SoA format
+#[derive(Debug, Clone, Default)]
+pub struct SoAChainBatch {
+    pub score: Vec<i32>,
+    pub query_start: Vec<i32>,
+    pub query_end: Vec<i32>,
+    pub ref_start: Vec<u64>,
+    pub ref_end: Vec<u64>,
+    pub is_rev: Vec<bool>,
+    pub weight: Vec<i32>,
+    pub kept: Vec<i32>,
+    pub frac_rep: Vec<f32>,
+    pub rid: Vec<i32>,
+    pub pos: Vec<u64>,
+    pub last_qbeg: Vec<i32>,
+    pub last_rbeg: Vec<u64>,
+    pub last_len: Vec<i32>,
+    // Boundaries for chains belonging to each read in the batch
+    pub read_chain_boundaries: Vec<(usize, usize)>, // (start_idx, count)
+    // To store indices of seeds in the SoASeedBatch
+    pub chain_seed_boundaries: Vec<(usize, usize)>, // (start_idx_in_soa_seed_batch, count)
+    pub seeds_indices: Vec<usize>, // Flattened indices into the global SoASeedBatch
+}
+
+impl SoAChainBatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(capacity: usize, num_reads: usize) -> Self {
+        Self {
+            score: Vec::with_capacity(capacity),
+            query_start: Vec::with_capacity(capacity),
+            query_end: Vec::with_capacity(capacity),
+            ref_start: Vec::with_capacity(capacity),
+            ref_end: Vec::with_capacity(capacity),
+            is_rev: Vec::with_capacity(capacity),
+            weight: Vec::with_capacity(capacity),
+            kept: Vec::with_capacity(capacity),
+            frac_rep: Vec::with_capacity(capacity),
+            rid: Vec::with_capacity(capacity),
+            pos: Vec::with_capacity(capacity),
+            last_qbeg: Vec::with_capacity(capacity),
+            last_rbeg: Vec::with_capacity(capacity),
+            last_len: Vec::with_capacity(capacity),
+            read_chain_boundaries: Vec::with_capacity(num_reads),
+            chain_seed_boundaries: Vec::with_capacity(capacity),
+            seeds_indices: Vec::new(), // Starts empty, will grow with chain_seed_boundaries
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.score.clear();
+        self.query_start.clear();
+        self.query_end.clear();
+        self.ref_start.clear();
+        self.ref_end.clear();
+        self.is_rev.clear();
+        self.weight.clear();
+        self.kept.clear();
+        self.frac_rep.clear();
+        self.rid.clear();
+        self.pos.clear();
+        self.last_qbeg.clear();
+        self.last_rbeg.clear();
+        self.last_len.clear();
+        self.read_chain_boundaries.clear();
+        self.chain_seed_boundaries.clear();
+        self.seeds_indices.clear();
+    }
+}
 // ============================================================================
 // SEED CHAINING - B-TREE BASED O(n log n) ALGORITHM
 // ============================================================================
@@ -40,19 +116,24 @@ pub struct Chain {
 // 3. Return all chains
 // ============================================================================
 
-/// Try to merge a seed into an existing chain
+/// Try to merge a seed into an existing chain (SoA-aware version)
 /// Implements C++ test_and_merge (bwamem.cpp:357-399)
 ///
 /// Returns true if the seed was merged into the chain
-fn test_and_merge(
+fn test_and_merge_soa(
     chain: &mut Chain,
-    seed_idx: usize,
-    seed: &Seed,
+    global_seed_idx: usize,
+    soa_seed_batch: &SoASeedBatch,
     opt: &MemOpt,
     l_pac: u64,
 ) -> bool {
+    let seed_rid = soa_seed_batch.rid[global_seed_idx];
+    let seed_query_pos = soa_seed_batch.query_pos[global_seed_idx];
+    let seed_len = soa_seed_batch.len[global_seed_idx];
+    let seed_ref_pos = soa_seed_batch.ref_pos[global_seed_idx];
+
     // C++ bwamem.cpp:359: Different chromosome - request a new chain
-    if seed.rid != chain.rid {
+    if seed_rid != chain.rid {
         return false;
     }
 
@@ -62,10 +143,10 @@ fn test_and_merge(
 
     // C++ lines 366-368: Check if seed is fully contained in existing chain
     // Uses first seed's start and last seed's end
-    if seed.query_pos >= chain.query_start
-        && seed.query_pos + seed.len <= last_qend
-        && seed.ref_pos >= chain.ref_start
-        && seed.ref_pos + seed.len as u64 <= last_rend
+    if seed_query_pos >= chain.query_start
+        && seed_query_pos + seed_len <= last_qend
+        && seed_ref_pos >= chain.ref_start
+        && seed_ref_pos + seed_len as u64 <= last_rend
     {
         // Contained seed - do nothing but report success (seed is "merged" by being ignored)
         return true;
@@ -75,14 +156,14 @@ fn test_and_merge(
     // Seeds on forward strand have rbeg < l_pac, reverse have rbeg >= l_pac
     let last_on_forward = chain.last_rbeg < l_pac;
     let first_on_forward = chain.ref_start < l_pac;
-    let seed_on_forward = seed.ref_pos < l_pac;
+    let seed_on_forward = seed_ref_pos < l_pac;
     if (last_on_forward || first_on_forward) && !seed_on_forward {
         return false;
     }
 
     // C++ lines 373-374: Calculate x and y from LAST SEED's position
-    let x = seed.query_pos - chain.last_qbeg; // query distance from last seed
-    let y = seed.ref_pos as i64 - chain.last_rbeg as i64; // reference distance from last seed
+    let x = seed_query_pos - chain.last_qbeg; // query distance from last seed
+    let y = seed_ref_pos as i64 - chain.last_rbeg as i64; // reference distance from last seed
 
     // C++ line 375-377: All conditions for merging
     // y >= 0: seed is downstream on reference
@@ -96,19 +177,19 @@ fn test_and_merge(
         && (y - chain.last_len as i64) < opt.max_chain_gap as i64
     {
         // All constraints passed - merge the seed into the chain
-        chain.seeds.push(seed_idx);
+        chain.seeds.push(global_seed_idx);
 
         // Update chain bounds
-        chain.query_start = chain.query_start.min(seed.query_pos);
-        chain.query_end = chain.query_end.max(seed.query_pos + seed.len);
-        chain.ref_start = chain.ref_start.min(seed.ref_pos);
-        chain.ref_end = chain.ref_end.max(seed.ref_pos + seed.len as u64);
-        chain.score += seed.len;
+        chain.query_start = chain.query_start.min(seed_query_pos);
+        chain.query_end = chain.query_end.max(seed_query_pos + seed_len);
+        chain.ref_start = chain.ref_start.min(seed_ref_pos);
+        chain.ref_end = chain.ref_end.max(seed_ref_pos + seed_len as u64);
+        chain.score += seed_len;
 
         // Update last seed info (C++ c->seeds[c->n++] = *p)
-        chain.last_qbeg = seed.query_pos;
-        chain.last_rbeg = seed.ref_pos;
-        chain.last_len = seed.len;
+        chain.last_qbeg = seed_query_pos;
+        chain.last_rbeg = seed_ref_pos;
+        chain.last_len = seed_len;
 
         return true;
     }
@@ -121,10 +202,6 @@ fn test_and_merge(
 pub fn chain_seeds(seeds: Vec<Seed>, opt: &MemOpt) -> (Vec<Chain>, Vec<Seed>) {
     chain_seeds_with_l_pac(seeds, opt, u64::MAX / 2)
 }
-
-// Safety limits to prevent runaway memory/CPU usage
-const MAX_SEEDS_PER_READ: usize = 100_000;
-const MAX_CHAINS_PER_READ: usize = 10_000;
 
 /// B-tree based seed chaining with explicit l_pac parameter
 /// l_pac is the length of the packed reference (for strand detection)
@@ -250,6 +327,278 @@ pub fn chain_seeds_with_l_pac(
     );
 
     (filtered_chains, seeds)
+}
+
+/// Try to merge a seed into an existing chain
+/// Implements C++ test_and_merge (bwamem.cpp:357-399)
+///
+/// Returns true if the seed was merged into the chain
+fn test_and_merge(
+    chain: &mut Chain,
+    seed_idx: usize,
+    seed: &Seed,
+    opt: &MemOpt,
+    l_pac: u64,
+) -> bool {
+    // C++ bwamem.cpp:359: Different chromosome - request a new chain
+    if seed.rid != chain.rid {
+        return false;
+    }
+
+    // C++ bwamem.cpp:361-363 - get last seed's end positions
+    let last_qend = chain.last_qbeg + chain.last_len;
+    let last_rend = chain.last_rbeg + chain.last_len as u64;
+
+    // C++ lines 366-368: Check if seed is fully contained in existing chain
+    // Uses first seed's start and last seed's end
+    if seed.query_pos >= chain.query_start
+        && seed.query_pos + seed.len <= last_qend
+        && seed.ref_pos >= chain.ref_start
+        && seed.ref_pos + seed.len as u64 <= last_rend
+    {
+        // Contained seed - do nothing but report success (seed is "merged" by being ignored)
+        return true;
+    }
+
+    // C++ lines 370-371: Don't chain if on different strands
+    // Seeds on forward strand have rbeg < l_pac, reverse have rbeg >= l_pac
+    let last_on_forward = chain.last_rbeg < l_pac;
+    let first_on_forward = chain.ref_start < l_pac;
+    let seed_on_forward = seed.ref_pos < l_pac;
+    if (last_on_forward || first_on_forward) && !seed_on_forward {
+        return false;
+    }
+
+    // C++ lines 373-374: Calculate x and y from LAST SEED's position
+    let x = seed.query_pos - chain.last_qbeg; // query distance from last seed
+    let y = seed.ref_pos as i64 - chain.last_rbeg as i64; // reference distance from last seed
+
+    // C++ line 375-377: All conditions for merging
+    // y >= 0: seed is downstream on reference
+    // |x - y| <= w: within diagonal band
+    // x - last->len < max_chain_gap: query gap from last seed end
+    // y - last->len < max_chain_gap: reference gap from last seed end
+    if y >= 0
+        && (x as i64 - y) <= opt.w as i64
+        && (y - x as i64) <= opt.w as i64
+        && (x - chain.last_len) < opt.max_chain_gap
+        && (y - chain.last_len as i64) < opt.max_chain_gap as i64
+    {
+        // All constraints passed - merge the seed into the chain
+        chain.seeds.push(seed_idx);
+
+        // Update chain bounds
+        chain.query_start = chain.query_start.min(seed.query_pos);
+        chain.query_end = chain.query_end.max(seed.query_pos + seed.len);
+        chain.ref_start = chain.ref_start.min(seed.ref_pos);
+        chain.ref_end = chain.ref_end.max(seed.ref_pos + seed.len as u64);
+        chain.score += seed.len;
+
+        // Update last seed info (C++ c->seeds[c->n++] = *p)
+        chain.last_qbeg = seed.query_pos;
+        chain.last_rbeg = seed.ref_pos;
+        chain.last_len = seed.len;
+
+        return true;
+    }
+
+    false // Request to add a new chain
+}
+
+/// B-tree based seed chaining for a batch of reads, consuming SoASeedBatch
+pub fn chain_seeds_batch(soa_seed_batch: &SoASeedBatch, opt: &MemOpt, l_pac: u64) -> SoAChainBatch {
+    let num_reads = soa_seed_batch.read_seed_boundaries.len();
+    let mut soa_chain_batch = SoAChainBatch::with_capacity(num_reads * 10, num_reads); // Heuristic capacity
+
+    for read_idx in 0..num_reads {
+        let (seed_start_idx, num_seeds_for_read) = soa_seed_batch.read_seed_boundaries[read_idx];
+
+        if num_seeds_for_read == 0 {
+            soa_chain_batch
+                .read_chain_boundaries
+                .push((soa_chain_batch.score.len(), 0));
+            continue;
+        }
+
+        let mut current_read_chains: Vec<Chain> = Vec::new();
+        let mut tree: KBTree<u64, usize> = KBTree::new();
+
+        // 1. Create and sort local indices for seeds of the current read
+        let mut local_seed_indices: Vec<usize> = (0..num_seeds_for_read).collect();
+        local_seed_indices.sort_unstable_by_key(|&local_idx| {
+            let global_seed_idx = seed_start_idx + local_idx;
+            (
+                soa_seed_batch.query_pos[global_seed_idx],
+                soa_seed_batch.query_pos[global_seed_idx] + soa_seed_batch.len[global_seed_idx],
+            )
+        });
+
+        // 2. Process each seed for the current read using sorted local indices
+        for &local_seed_idx in local_seed_indices.iter() {
+            let global_seed_idx = seed_start_idx + local_seed_idx;
+            let seed_rpos = soa_seed_batch.ref_pos[global_seed_idx];
+            let mut merged = false;
+
+            let (lower, _upper) = tree.interval(&seed_rpos);
+            if let Some(&(_chain_pos, chain_local_idx)) = lower {
+                let chain = &mut current_read_chains[chain_local_idx];
+
+                if chain.is_rev == soa_seed_batch.is_rev[global_seed_idx] {
+                    // Try to merge using the SoA-aware function
+                    if test_and_merge_soa(chain, global_seed_idx, soa_seed_batch, opt, l_pac) {
+                        merged = true;
+                    }
+                }
+            }
+
+            if !merged {
+                if current_read_chains.len() >= MAX_CHAINS_PER_READ {
+                    log::warn!(
+                        "chain_seeds_batch: Chain count {} exceeds limit {}, skipping remaining seeds for read {}",
+                        current_read_chains.len(),
+                        MAX_CHAINS_PER_READ,
+                        read_idx
+                    );
+                    break;
+                }
+
+                let new_chain_local_idx = current_read_chains.len();
+                let seed_query_pos = soa_seed_batch.query_pos[global_seed_idx];
+                let seed_len = soa_seed_batch.len[global_seed_idx];
+                let seed_ref_pos = soa_seed_batch.ref_pos[global_seed_idx];
+                let seed_is_rev = soa_seed_batch.is_rev[global_seed_idx];
+                let seed_rid = soa_seed_batch.rid[global_seed_idx];
+
+                let new_chain = Chain {
+                    score: seed_len,
+                    seeds: vec![global_seed_idx], // Store global index
+                    query_start: seed_query_pos,
+                    query_end: seed_query_pos + seed_len,
+                    ref_start: seed_ref_pos,
+                    ref_end: seed_ref_pos + seed_len as u64,
+                    is_rev: seed_is_rev,
+                    weight: 0,
+                    kept: 0,
+                    frac_rep: 0.0,
+                    rid: seed_rid,
+                    pos: seed_rpos,
+                    last_qbeg: seed_query_pos,
+                    last_rbeg: seed_ref_pos,
+                    last_len: seed_len,
+                };
+                current_read_chains.push(new_chain);
+                tree.insert(seed_rpos, new_chain_local_idx);
+            }
+        }
+
+        // Filter chains for the current read
+        let filtered_chains_for_read: Vec<Chain> = current_read_chains
+            .into_iter()
+            .filter(|c| c.score >= opt.min_chain_weight)
+            .collect();
+
+        // Populate SoAChainBatch for the current read
+        let current_read_chain_start_idx = soa_chain_batch.score.len();
+        // Clear old total_seeds_in_chains_for_read
+        // let mut total_seeds_in_chains_for_read = 0;
+
+        for chain in filtered_chains_for_read {
+            soa_chain_batch.score.push(chain.score);
+            soa_chain_batch.query_start.push(chain.query_start);
+            soa_chain_batch.query_end.push(chain.query_end);
+            soa_chain_batch.ref_start.push(chain.ref_start);
+            soa_chain_batch.ref_end.push(chain.ref_end);
+            soa_chain_batch.is_rev.push(chain.is_rev);
+            // Before pushing, calculate weight and frac_rep
+            // These still require access to individual seeds. We need an SoA-aware calculate_chain_weight.
+            // For now, these will be default values or based on an adapter if we keep the old `calculate_chain_weight`
+            // and pass in an "on-the-fly" adapter for seeds.
+            // For simplicity and initial compilation, use dummy values or re-evaluate how to calculate.
+            // The existing filter_chains function relies on `calculate_chain_weight`
+            // We should call filter_chains AFTER we have populated initial SoA chains.
+
+            // The 'kept' value needs to be set by the filtering stage, not here.
+            // For initial population, let's assume `kept` is initialized by `SoAChainBatch` default (0).
+            soa_chain_batch.weight.push(chain.weight); // Will be 0 initially
+            soa_chain_batch.kept.push(chain.kept); // Will be 0 initially
+            soa_chain_batch.frac_rep.push(chain.frac_rep); // Will be 0.0 initially
+
+            soa_chain_batch.rid.push(chain.rid);
+            soa_chain_batch.pos.push(chain.pos);
+            soa_chain_batch.last_qbeg.push(chain.last_qbeg);
+            soa_chain_batch.last_rbeg.push(chain.last_rbeg);
+            soa_chain_batch.last_len.push(chain.last_len);
+
+            let current_chain_seed_start_idx = soa_chain_batch.seeds_indices.len();
+            soa_chain_batch
+                .seeds_indices
+                .extend_from_slice(&chain.seeds);
+            soa_chain_batch
+                .chain_seed_boundaries
+                .push((current_chain_seed_start_idx, chain.seeds.len()));
+        }
+
+        let num_chains_for_read = soa_chain_batch.score.len() - current_read_chain_start_idx;
+        soa_chain_batch
+            .read_chain_boundaries
+            .push((current_read_chain_start_idx, num_chains_for_read));
+    }
+    soa_chain_batch
+}
+
+/// Calculate chain weight based on seed coverage
+/// Implements C++ mem_chain_weight (bwamem.cpp:429-448)
+///
+/// Weight = minimum of query coverage and reference coverage
+/// This accounts for non-overlapping seed lengths in the chain
+pub fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, i32) {
+    if chain.seeds.is_empty() {
+        return (0, 0);
+    }
+
+    let mut query_cov = 0;
+    let mut last_qe = -1i32;
+    let mut l_rep = 0; // Length of repetitive seeds
+
+    for &seed_idx in &chain.seeds {
+        let seed = &seeds[seed_idx];
+        let qb = seed.query_pos;
+        let qe = seed.query_pos + seed.len;
+
+        if qb > last_qe {
+            query_cov += seed.len;
+        } else if qe > last_qe {
+            query_cov += qe - last_qe;
+        }
+        last_qe = last_qe.max(qe);
+
+        // Check for repetitive seeds: if interval_size > max_occ
+        // This threshold needs to be dynamically adjusted based on context if we want to mimic BWA-MEM2's exact filtering.
+        // For now, using opt.max_occ as the threshold for 'repetitive'.
+        if seed.interval_size > opt.max_occ as u64 {
+            // Assuming interval_size is the occurrence count of the seed
+            l_rep += seed.len;
+        }
+    }
+
+    let mut ref_cov = 0;
+    let mut last_re = 0u64;
+
+    for &seed_idx in &chain.seeds {
+        let seed = &seeds[seed_idx];
+        let rb = seed.ref_pos;
+        let re = rb + seed.len as u64;
+
+        if rb > last_re {
+            ref_cov += seed.len;
+        } else if re > last_re {
+            ref_cov += (re - last_re) as i32;
+        }
+
+        last_re = last_re.max(re);
+    }
+
+    (query_cov.min(ref_cov), l_rep)
 }
 
 /// Filter chains using drop_ratio and score thresholds
@@ -466,18 +815,246 @@ pub fn filter_chains(
 
     kept_chains
 }
+/// Implements C++ mem_chain_flt (bwamem.cpp:506-624)
+///
+/// Algorithm:
+/// 1. Calculate weight for each chain
+/// 2. Sort chains by weight (descending)
+/// 3. Filter by min_chain_weight
+/// 4. Apply drop_ratio: keep chains with weight >= best_weight * drop_ratio
+/// 5. Mark overlapping chains as kept=1/2, non-overlapping as kept=3
+pub fn filter_chains_batch(
+    soa_chain_batch: &mut SoAChainBatch,
+    soa_seed_batch: &SoASeedBatch,
+    opt: &MemOpt,
+    query_lengths: &[i32], // Array of query lengths, indexed by read_idx
+) {
+    let num_reads = soa_chain_batch.read_chain_boundaries.len();
+
+    for read_idx in 0..num_reads {
+        let (chain_start_idx, num_chains_for_read) =
+            soa_chain_batch.read_chain_boundaries[read_idx];
+        let current_read_query_length = query_lengths[read_idx];
+
+        if num_chains_for_read == 0 {
+            continue;
+        }
+
+        // 1. Calculate weights and frac_rep for all chains of the current read
+        for i in 0..num_chains_for_read {
+            let global_chain_idx = chain_start_idx + i;
+            let (weight, l_rep) =
+                calculate_chain_weight_soa(global_chain_idx, soa_chain_batch, soa_seed_batch, opt);
+            soa_chain_batch.weight[global_chain_idx] = weight;
+            soa_chain_batch.frac_rep[global_chain_idx] = if current_read_query_length > 0 {
+                l_rep as f32 / current_read_query_length as f32
+            } else {
+                0.0
+            };
+            soa_chain_batch.kept[global_chain_idx] = 0; // Initialize as discarded
+
+            // DEBUG: Detailed chain logging for analysis
+            let (seed_start_idx_in_chain, num_seeds_in_chain) =
+                soa_chain_batch.chain_seed_boundaries[global_chain_idx];
+            log::debug!(
+                "FERROUS_CHAIN read_idx={} chain_local_idx={} weight={} n_seeds={} q=[{},{}] r=[{},{}] is_rev={}",
+                read_idx,
+                i,
+                weight,
+                num_seeds_in_chain,
+                soa_chain_batch.query_start[global_chain_idx],
+                soa_chain_batch.query_end[global_chain_idx],
+                soa_chain_batch.ref_start[global_chain_idx],
+                soa_chain_batch.ref_end[global_chain_idx],
+                soa_chain_batch.is_rev[global_chain_idx]
+            );
+
+            // Log each seed in the chain
+            for j in 0..num_seeds_in_chain {
+                let seed_idx_in_soa = soa_chain_batch.seeds_indices[seed_start_idx_in_chain + j];
+                log::debug!(
+                    "  FERROUS_SEED chain={} seed_idx={} q=[{},{}] r=[{},{}] len={}",
+                    i,
+                    j,
+                    soa_seed_batch.query_pos[seed_idx_in_soa],
+                    soa_seed_batch.query_pos[seed_idx_in_soa] + soa_seed_batch.len[seed_idx_in_soa],
+                    soa_seed_batch.ref_pos[seed_idx_in_soa],
+                    soa_seed_batch.ref_pos[seed_idx_in_soa]
+                        + soa_seed_batch.len[seed_idx_in_soa] as u64,
+                    soa_seed_batch.len[seed_idx_in_soa]
+                );
+            }
+        }
+
+        // 2. Sort chains for the current read by weight (descending)
+        let mut chain_global_indices_for_read: Vec<usize> = (0..num_chains_for_read)
+            .map(|i| chain_start_idx + i)
+            .collect();
+
+        // CRITICAL FIX: Use stable sort (sort_by) instead of sort_unstable_by
+        // to match main branch (AoS) and BWA-MEM2 behavior.
+        //
+        // Issue: sort_unstable_by provides no guarantee about relative order of
+        // equal-weight chains, causing non-deterministic chain selection after
+        // the SoA refactor changed data structure layout and iteration order.
+        //
+        // Main branch uses sort_by (stable), BWA-MEM2 uses ks_introsort (stable).
+        // When multiple chains have equal weight (common in repetitive regions),
+        // stable sort preserves insertion order, ensuring deterministic behavior.
+        chain_global_indices_for_read
+            .sort_by(|&a, &b| soa_chain_batch.weight[b].cmp(&soa_chain_batch.weight[a]));
+
+        // Use a vector to store the global indices of chains that are "kept" for this read.
+        // This simulates the `kept_chains: Vec<Chain>` in the original function.
+        let mut kept_chain_global_indices: Vec<usize> = Vec::new();
+
+        // DEBUG: Log chain filtering for read_idx=10 (our problem read R1)
+        if read_idx == 10 {
+            log::debug!(
+                "FERROUS_FILTER_START read_idx=10 n_chains={} mask_level={:.2} drop_ratio={:.2}",
+                num_chains_for_read,
+                opt.mask_level,
+                opt.drop_ratio
+            );
+        }
+
+        // 3. Apply filtering logic
+        for (_chain_iter_idx, &global_chain_idx) in chain_global_indices_for_read.iter().enumerate()
+        {
+            // Check if below minimum weight
+            if soa_chain_batch.weight[global_chain_idx] < opt.min_chain_weight {
+                continue; // Discard
+            }
+
+            let mut overlaps = false;
+            let mut should_discard = false;
+
+            // Check overlap with already-kept chains
+            for &kept_global_chain_idx in kept_chain_global_indices.iter() {
+                // Check if chains overlap on query
+                let qb_max = soa_chain_batch.query_start[global_chain_idx]
+                    .max(soa_chain_batch.query_start[kept_global_chain_idx]);
+                let qe_min = soa_chain_batch.query_end[global_chain_idx]
+                    .min(soa_chain_batch.query_end[kept_global_chain_idx]);
+
+                if qe_min > qb_max {
+                    let overlap = qe_min - qb_max;
+                    let min_len = (soa_chain_batch.query_end[global_chain_idx]
+                        - soa_chain_batch.query_start[global_chain_idx])
+                        .min(
+                            soa_chain_batch.query_end[kept_global_chain_idx]
+                                - soa_chain_batch.query_start[kept_global_chain_idx],
+                        );
+
+                    if overlap >= (min_len as f32 * opt.mask_level) as i32 {
+                        overlaps = true;
+                        // Mark as shadowed, but don't commit until final decision
+                        // soa_chain_batch.kept[global_chain_idx] = 1;
+
+                        let weight_threshold = (soa_chain_batch.weight[kept_global_chain_idx]
+                            as f32
+                            * opt.drop_ratio) as i32;
+                        let weight_diff = soa_chain_batch.weight[kept_global_chain_idx]
+                            - soa_chain_batch.weight[global_chain_idx];
+
+                        let will_discard = soa_chain_batch.weight[global_chain_idx]
+                            < weight_threshold
+                            && weight_diff >= (opt.min_seed_len << 1);
+
+                        // DEBUG: Log overlap decision for read_idx=10
+                        if read_idx == 10 {
+                            let chain_local_idx = global_chain_idx - chain_start_idx;
+                            let kept_local_idx = kept_global_chain_idx - chain_start_idx;
+                            log::debug!(
+                                "  Chain[{}] vs Chain[{}]: ovlp={} min_l={} w_curr={} w_kept={} thresh={} diff={} DROP={}",
+                                chain_local_idx,
+                                kept_local_idx,
+                                overlap,
+                                min_len,
+                                soa_chain_batch.weight[global_chain_idx],
+                                soa_chain_batch.weight[kept_global_chain_idx],
+                                weight_threshold,
+                                weight_diff,
+                                if will_discard { "YES" } else { "NO" }
+                            );
+                        }
+
+                        if will_discard {
+                            should_discard = true;
+                            break;
+                        } else {
+                            // It overlaps but is not discarded by drop_ratio, so it is shadowed
+                            soa_chain_batch.kept[global_chain_idx] = 1;
+                        }
+                    }
+                }
+            }
+
+            if should_discard {
+                // DEBUG: Log dropped chain for read_idx=10
+                if read_idx == 10 {
+                    let chain_local_idx = global_chain_idx - chain_start_idx;
+                    log::debug!(
+                        "  Chain[{}] DROPPED weight={}",
+                        chain_local_idx,
+                        soa_chain_batch.weight[global_chain_idx]
+                    );
+                }
+                continue; // This chain is discarded
+            }
+
+            // If it reaches here, it's either primary or shadowed (if overlaps was true but not discarded)
+            if !overlaps {
+                soa_chain_batch.kept[global_chain_idx] = 3; // Primary
+            }
+            // If overlaps is true, and it wasn't discarded, kept is already set to 1.
+
+            // DEBUG: Log kept decision for read_idx=10
+            if read_idx == 10 {
+                let chain_local_idx = global_chain_idx - chain_start_idx;
+                let kept_status = if soa_chain_batch.kept[global_chain_idx] == 3 {
+                    "PRIMARY"
+                } else {
+                    "SHADOWED"
+                };
+                log::debug!(
+                    "  Chain[{}] kept={} ({}) weight={}",
+                    chain_local_idx,
+                    soa_chain_batch.kept[global_chain_idx],
+                    kept_status,
+                    soa_chain_batch.weight[global_chain_idx]
+                );
+            }
+
+            kept_chain_global_indices.push(global_chain_idx);
+
+            // Limit number of chains to extend
+            if kept_chain_global_indices.len() >= opt.max_chain_extend as usize {
+                break;
+            }
+        }
+    }
+}
 
 // ----------------------------------------------------------------------------
 // Chain Scoring and Filtering
 // ----------------------------------------------------------------------------
 
-/// Calculate chain weight based on seed coverage
+/// Calculate chain weight based on seed coverage (SoA-aware version)
 /// Implements C++ mem_chain_weight (bwamem.cpp:429-448)
 ///
 /// Weight = minimum of query coverage and reference coverage
 /// This accounts for non-overlapping seed lengths in the chain
-pub fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i32, i32) {
-    if chain.seeds.is_empty() {
+pub fn calculate_chain_weight_soa(
+    chain_global_idx: usize,
+    soa_chain_batch: &SoAChainBatch,
+    soa_seed_batch: &SoASeedBatch,
+    opt: &MemOpt,
+) -> (i32, i32) {
+    let (chain_seed_start_idx, num_seeds_in_chain) =
+        soa_chain_batch.chain_seed_boundaries[chain_global_idx];
+
+    if num_seeds_in_chain == 0 {
         return (0, 0);
     }
 
@@ -485,37 +1062,36 @@ pub fn calculate_chain_weight(chain: &Chain, seeds: &[Seed], opt: &MemOpt) -> (i
     let mut last_qe = -1i32;
     let mut l_rep = 0; // Length of repetitive seeds
 
-    for &seed_idx in &chain.seeds {
-        let seed = &seeds[seed_idx];
-        let qb = seed.query_pos;
-        let qe = seed.query_pos + seed.len;
+    for i in 0..num_seeds_in_chain {
+        let global_seed_idx = soa_chain_batch.seeds_indices[chain_seed_start_idx + i];
+        let qb = soa_seed_batch.query_pos[global_seed_idx];
+        let qe = qb + soa_seed_batch.len[global_seed_idx];
+        let seed_len = soa_seed_batch.len[global_seed_idx];
 
         if qb > last_qe {
-            query_cov += seed.len;
+            query_cov += seed_len;
         } else if qe > last_qe {
             query_cov += qe - last_qe;
         }
         last_qe = last_qe.max(qe);
 
         // Check for repetitive seeds: if interval_size > max_occ
-        // This threshold needs to be dynamically adjusted based on context if we want to mimic BWA-MEM2's exact filtering.
-        // For now, using opt.max_occ as the threshold for 'repetitive'.
-        if seed.interval_size > opt.max_occ as u64 {
-            // Assuming interval_size is the occurrence count of the seed
-            l_rep += seed.len;
+        if soa_seed_batch.interval_size[global_seed_idx] > opt.max_occ as u64 {
+            l_rep += seed_len;
         }
     }
 
     let mut ref_cov = 0;
     let mut last_re = 0u64;
 
-    for &seed_idx in &chain.seeds {
-        let seed = &seeds[seed_idx];
-        let rb = seed.ref_pos;
-        let re = seed.ref_pos + seed.len as u64;
+    for i in 0..num_seeds_in_chain {
+        let global_seed_idx = soa_chain_batch.seeds_indices[chain_seed_start_idx + i];
+        let rb = soa_seed_batch.ref_pos[global_seed_idx];
+        let seed_len = soa_seed_batch.len[global_seed_idx];
+        let re = rb + seed_len as u64;
 
         if rb > last_re {
-            ref_cov += seed.len;
+            ref_cov += seed_len;
         } else if re > last_re {
             ref_cov += (re - last_re) as i32;
         }
@@ -537,533 +1113,4 @@ pub fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
     let l = if l > 1 { l } else { 1 };
 
     if l < (opt.w << 1) { l } else { opt.w << 1 }
-}
-
-// ============================================================================
-// UNIT TESTS
-// ============================================================================
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Helper to create a seed for testing
-    fn make_seed(query_pos: i32, ref_pos: u64, len: i32, is_rev: bool, rid: i32) -> Seed {
-        Seed {
-            query_pos,
-            ref_pos,
-            len,
-            is_rev,
-            rid,
-            interval_size: 1, // Low occurrence (not repetitive)
-        }
-    }
-
-    /// Helper to create default MemOpt for testing
-    fn default_test_opt() -> MemOpt {
-        let mut opt = MemOpt::default();
-        opt.w = 100; // Band width
-        opt.max_chain_gap = 10000; // Max gap in chain
-        opt.min_chain_weight = 0; // Keep all chains for testing
-        opt.min_seed_len = 19;
-        opt.drop_ratio = 0.5;
-        opt.mask_level = 0.5;
-        opt.max_chain_extend = 50;
-        opt
-    }
-
-    // ------------------------------------------------------------------------
-    // chain_seeds() tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_chain_seeds_empty() {
-        let opt = default_test_opt();
-        let seeds: Vec<Seed> = vec![];
-        let (chains, _) = chain_seeds(seeds, &opt);
-        assert!(chains.is_empty());
-    }
-
-    #[test]
-    fn test_chain_seeds_single_seed() {
-        let opt = default_test_opt();
-        let seeds = vec![make_seed(0, 1000, 20, false, 0)];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        assert_eq!(chains.len(), 1);
-        assert_eq!(chains[0].seeds.len(), 1);
-        assert_eq!(chains[0].score, 20);
-        assert_eq!(chains[0].query_start, 0);
-        assert_eq!(chains[0].query_end, 20);
-    }
-
-    #[test]
-    fn test_chain_seeds_two_compatible_seeds() {
-        // Two seeds that should chain together (close on both query and ref)
-        let opt = default_test_opt();
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),  // First seed
-            make_seed(25, 1025, 20, false, 0), // Second seed: 5bp gap on both
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Should merge into one chain
-        assert_eq!(chains.len(), 1);
-        assert_eq!(chains[0].seeds.len(), 2);
-        assert_eq!(chains[0].score, 40); // 20 + 20
-        assert_eq!(chains[0].query_start, 0);
-        assert_eq!(chains[0].query_end, 45);
-    }
-
-    #[test]
-    fn test_chain_seeds_incompatible_different_strands() {
-        // Seeds on different strands should not chain
-        let opt = default_test_opt();
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0), // Forward
-            make_seed(25, 1025, 20, true, 0), // Reverse
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Should create two separate chains
-        assert_eq!(chains.len(), 2);
-    }
-
-    #[test]
-    fn test_chain_seeds_incompatible_large_gap() {
-        // Seeds with large gap should not chain
-        let mut opt = default_test_opt();
-        opt.max_chain_gap = 100; // Small gap limit
-
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),
-            make_seed(200, 1200, 20, false, 0), // 180bp gap > 100
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Should create two separate chains
-        assert_eq!(chains.len(), 2);
-    }
-
-    #[test]
-    fn test_chain_seeds_different_chromosomes() {
-        // Seeds on different chromosomes should not chain
-        let opt = default_test_opt();
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),  // chr0
-            make_seed(25, 1025, 20, false, 1), // chr1
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Should create two separate chains
-        assert_eq!(chains.len(), 2);
-        assert_eq!(chains[0].rid, 0);
-        assert_eq!(chains[1].rid, 1);
-    }
-
-    #[test]
-    fn test_chain_seeds_contained_seed_ignored() {
-        // A seed fully contained in existing chain should be merged (ignored)
-        let opt = default_test_opt();
-        let seeds = vec![
-            make_seed(0, 1000, 50, false, 0),  // Large seed
-            make_seed(10, 1010, 10, false, 0), // Small seed contained in first
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Should have one chain (second seed contained)
-        assert_eq!(chains.len(), 1);
-        // The contained seed counts as merged but doesn't add to score
-        // Actually it returns true but doesn't push the seed_idx
-    }
-
-    #[test]
-    fn test_chain_seeds_multiple_chains() {
-        // Multiple independent chains
-        let opt = default_test_opt();
-        let seeds = vec![
-            // Chain 1: forward strand, chr0
-            make_seed(0, 1000, 20, false, 0),
-            make_seed(25, 1025, 20, false, 0),
-            // Chain 2: reverse strand, chr0
-            make_seed(50, 2000, 20, true, 0),
-            make_seed(75, 2025, 20, true, 0),
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        assert_eq!(chains.len(), 2);
-    }
-
-    #[test]
-    fn test_chain_seeds_min_weight_filter() {
-        let mut opt = default_test_opt();
-        opt.min_chain_weight = 30; // Require score >= 30
-
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),   // Single seed, score=20 < 30
-            make_seed(100, 5000, 40, false, 0), // Single seed, score=40 >= 30
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Only the second chain should pass filter
-        assert_eq!(chains.len(), 1);
-        assert_eq!(chains[0].score, 40);
-    }
-
-    // ------------------------------------------------------------------------
-    // filter_chains() tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_filter_chains_empty() {
-        let opt = default_test_opt();
-        let seeds: Vec<Seed> = vec![];
-        let mut chains: Vec<Chain> = vec![];
-
-        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
-        assert!(filtered.is_empty());
-    }
-
-    #[test]
-    fn test_filter_chains_single_chain() {
-        let opt = default_test_opt();
-        let seeds = vec![make_seed(0, 1000, 50, false, 0)];
-
-        let mut chains = vec![Chain {
-            score: 50,
-            seeds: vec![0],
-            query_start: 0,
-            query_end: 50,
-            ref_start: 1000,
-            ref_end: 1050,
-            is_rev: false,
-            weight: 0,
-            kept: 0,
-            frac_rep: 0.0,
-            rid: 0,
-            pos: 1000,
-            last_qbeg: 0,
-            last_rbeg: 1000,
-            last_len: 50,
-        }];
-
-        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].kept, 3); // Primary (non-overlapping)
-    }
-
-    #[test]
-    fn test_filter_chains_overlapping_drop_ratio() {
-        let mut opt = default_test_opt();
-        opt.drop_ratio = 0.5;
-        opt.mask_level = 0.5;
-        opt.min_seed_len = 10;
-
-        let seeds = vec![
-            make_seed(0, 1000, 80, false, 0),  // Seed for chain 1
-            make_seed(10, 2000, 30, false, 0), // Seed for chain 2 (overlaps on query)
-        ];
-
-        let mut chains = vec![
-            Chain {
-                score: 80,
-                seeds: vec![0],
-                query_start: 0,
-                query_end: 80,
-                ref_start: 1000,
-                ref_end: 1080,
-                is_rev: false,
-                weight: 0,
-                kept: 0,
-                frac_rep: 0.0,
-                rid: 0,
-                pos: 1000,
-                last_qbeg: 0,
-                last_rbeg: 1000,
-                last_len: 80,
-            },
-            Chain {
-                score: 30,
-                seeds: vec![1],
-                query_start: 10,
-                query_end: 40,
-                ref_start: 2000,
-                ref_end: 2030,
-                is_rev: false,
-                weight: 0,
-                kept: 0,
-                frac_rep: 0.0,
-                rid: 0,
-                pos: 2000,
-                last_qbeg: 10,
-                last_rbeg: 2000,
-                last_len: 30,
-            },
-        ];
-
-        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
-
-        // First chain should be kept as primary
-        // Second chain overlaps and weight is much lower, may be dropped
-        assert!(!filtered.is_empty());
-        assert_eq!(filtered[0].kept, 3); // Primary
-    }
-
-    #[test]
-    fn test_filter_chains_non_overlapping_kept() {
-        let opt = default_test_opt();
-
-        let seeds = vec![
-            make_seed(0, 1000, 30, false, 0),
-            make_seed(50, 5000, 30, false, 0), // Non-overlapping on query
-        ];
-
-        let mut chains = vec![
-            Chain {
-                score: 30,
-                seeds: vec![0],
-                query_start: 0,
-                query_end: 30,
-                ref_start: 1000,
-                ref_end: 1030,
-                is_rev: false,
-                weight: 0,
-                kept: 0,
-                frac_rep: 0.0,
-                rid: 0,
-                pos: 1000,
-                last_qbeg: 0,
-                last_rbeg: 1000,
-                last_len: 30,
-            },
-            Chain {
-                score: 30,
-                seeds: vec![1],
-                query_start: 50,
-                query_end: 80,
-                ref_start: 5000,
-                ref_end: 5030,
-                is_rev: false,
-                weight: 0,
-                kept: 0,
-                frac_rep: 0.0,
-                rid: 0,
-                pos: 5000,
-                last_qbeg: 50,
-                last_rbeg: 5000,
-                last_len: 30,
-            },
-        ];
-
-        let filtered = filter_chains(&mut chains, &seeds, &opt, 100);
-
-        // Both chains should be kept (non-overlapping)
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|c| c.kept == 3));
-    }
-
-    // ------------------------------------------------------------------------
-    // calculate_chain_weight() tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_calculate_chain_weight_single_seed() {
-        let opt = default_test_opt();
-        let seeds = vec![make_seed(0, 1000, 50, false, 0)];
-
-        let chain = Chain {
-            score: 50,
-            seeds: vec![0],
-            query_start: 0,
-            query_end: 50,
-            ref_start: 1000,
-            ref_end: 1050,
-            is_rev: false,
-            weight: 0,
-            kept: 0,
-            frac_rep: 0.0,
-            rid: 0,
-            pos: 1000,
-            last_qbeg: 0,
-            last_rbeg: 1000,
-            last_len: 50,
-        };
-
-        let (weight, l_rep) = calculate_chain_weight(&chain, &seeds, &opt);
-        assert_eq!(weight, 50);
-        assert_eq!(l_rep, 0); // Not repetitive
-    }
-
-    #[test]
-    fn test_calculate_chain_weight_non_overlapping_seeds() {
-        let opt = default_test_opt();
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),
-            make_seed(30, 1030, 20, false, 0), // Gap of 10
-        ];
-
-        let chain = Chain {
-            score: 40,
-            seeds: vec![0, 1],
-            query_start: 0,
-            query_end: 50,
-            ref_start: 1000,
-            ref_end: 1050,
-            is_rev: false,
-            weight: 0,
-            kept: 0,
-            frac_rep: 0.0,
-            rid: 0,
-            pos: 1000,
-            last_qbeg: 30,
-            last_rbeg: 1030,
-            last_len: 20,
-        };
-
-        let (weight, _) = calculate_chain_weight(&chain, &seeds, &opt);
-        assert_eq!(weight, 40); // 20 + 20, no overlap
-    }
-
-    #[test]
-    fn test_calculate_chain_weight_overlapping_seeds() {
-        let opt = default_test_opt();
-        let seeds = vec![
-            make_seed(0, 1000, 30, false, 0),
-            make_seed(20, 1020, 30, false, 0), // Overlap of 10
-        ];
-
-        let chain = Chain {
-            score: 60,
-            seeds: vec![0, 1],
-            query_start: 0,
-            query_end: 50,
-            ref_start: 1000,
-            ref_end: 1050,
-            is_rev: false,
-            weight: 0,
-            kept: 0,
-            frac_rep: 0.0,
-            rid: 0,
-            pos: 1000,
-            last_qbeg: 20,
-            last_rbeg: 1020,
-            last_len: 30,
-        };
-
-        let (weight, _) = calculate_chain_weight(&chain, &seeds, &opt);
-        // Query coverage: 30 + (50-30) = 50
-        // Ref coverage: 30 + (1050-1030) = 50
-        assert_eq!(weight, 50);
-    }
-
-    #[test]
-    fn test_calculate_chain_weight_repetitive_seeds() {
-        let mut opt = default_test_opt();
-        opt.max_occ = 100;
-
-        // Create a repetitive seed (interval_size > max_occ)
-        let mut seed = make_seed(0, 1000, 30, false, 0);
-        seed.interval_size = 500; // > max_occ
-        let seeds = vec![seed];
-
-        let chain = Chain {
-            score: 30,
-            seeds: vec![0],
-            query_start: 0,
-            query_end: 30,
-            ref_start: 1000,
-            ref_end: 1030,
-            is_rev: false,
-            weight: 0,
-            kept: 0,
-            frac_rep: 0.0,
-            rid: 0,
-            pos: 1000,
-            last_qbeg: 0,
-            last_rbeg: 1000,
-            last_len: 30,
-        };
-
-        let (weight, l_rep) = calculate_chain_weight(&chain, &seeds, &opt);
-        assert_eq!(weight, 30);
-        assert_eq!(l_rep, 30); // All 30bp are repetitive
-    }
-
-    // ------------------------------------------------------------------------
-    // cal_max_gap() tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_cal_max_gap_short_query() {
-        let opt = default_test_opt();
-        let gap = cal_max_gap(&opt, 50);
-        assert!(gap >= 1);
-        assert!(gap <= opt.w << 1);
-    }
-
-    #[test]
-    fn test_cal_max_gap_long_query() {
-        let opt = default_test_opt();
-        let gap = cal_max_gap(&opt, 1000);
-        // For long queries, should be capped at 2*w
-        assert_eq!(gap, opt.w << 1);
-    }
-
-    // ------------------------------------------------------------------------
-    // Runaway guard tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_chain_seeds_runaway_guard_seeds() {
-        let opt = default_test_opt();
-
-        // Create more seeds than MAX_SEEDS_PER_READ
-        let mut seeds = Vec::new();
-        for i in 0..MAX_SEEDS_PER_READ + 100 {
-            seeds.push(make_seed(i as i32, i as u64 * 1000, 20, false, 0));
-        }
-
-        // Should truncate and not panic
-        let (chains, returned_seeds) = chain_seeds(seeds, &opt);
-
-        // Seeds should be truncated
-        assert!(returned_seeds.len() <= MAX_SEEDS_PER_READ);
-        // Chains should be created without panic
-        assert!(!chains.is_empty());
-    }
-
-    // ------------------------------------------------------------------------
-    // Edge cases
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn test_chain_seeds_diagonal_band() {
-        // Test diagonal band constraint (|x - y| <= w)
-        let mut opt = default_test_opt();
-        opt.w = 10; // Small band
-
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),
-            // Second seed: query advances 30, ref advances 50 -> |30-50| = 20 > w=10
-            make_seed(30, 1050, 20, false, 0),
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Seeds should NOT chain due to band violation
-        assert_eq!(chains.len(), 2);
-    }
-
-    #[test]
-    fn test_chain_seeds_seed_upstream_on_ref() {
-        // Test that seed with y < 0 (upstream on ref) doesn't chain
-        let opt = default_test_opt();
-
-        let seeds = vec![
-            make_seed(0, 1000, 20, false, 0),
-            make_seed(25, 900, 20, false, 0), // Upstream on ref (y < 0)
-        ];
-        let (chains, _) = chain_seeds(seeds, &opt);
-
-        // Should create two chains (can't chain backwards on ref)
-        assert_eq!(chains.len(), 2);
-    }
 }

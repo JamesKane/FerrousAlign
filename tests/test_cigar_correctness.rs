@@ -10,7 +10,7 @@
 /// 2. CIGAR operations correctly represent alignment
 /// 3. Seed coordinates are correctly used in CIGAR generation
 /// 4. Off-by-one errors don't creep back in
-
+///
 /// Test that CIGAR length matches query length
 #[test]
 fn test_cigar_length_matches_query() {

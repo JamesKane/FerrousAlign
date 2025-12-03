@@ -21,11 +21,14 @@ use super::super::finalization::Alignment;
 use super::super::finalization::sam_flags;
 use super::super::index::index::BwaIndex;
 use super::insert_size::InsertSizeStats;
-use crate::alignment::edit_distance;
-use crate::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
-use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
+use crate::core::alignment::edit_distance;
+use crate::core::alignment::ksw_affine_gap::{KSW_XBYTE, KSW_XSTART, KSW_XSUBO, Kswr, ksw_align2};
+
 use crate::compute::simd_abstraction::SimdEngine128;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
+use crate::core::alignment::shared_types::AlignJob;
+use crate::core::alignment::workspace::with_workspace;
+use crate::pipelines::linear::batch_extension::dispatch::dispatch_kswv_soa;
 use rayon::prelude::*;
 
 /// A mate rescue SW job prepared for batch execution
@@ -707,35 +710,17 @@ fn execute_mate_rescue_batch_simd(
     }
 
     // Determine batch size from engine
-    let batch_size = match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => 64,
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => 32,
-        SimdEngineType::Engine128 => 16,
-    };
-
-    // Find max lengths across all jobs (for buffer allocation)
-    let max_ref_len = jobs.iter().map(|j| j.ref_seq.len()).max().unwrap_or(0);
-    let max_query_len = jobs.iter().map(|j| j.query_seq.len()).max().unwrap_or(0);
-
-    log::debug!(
-        "SIMD mate rescue: {} jobs, engine={:?}, batch_size={}, max_ref={}, max_query={}",
-        jobs.len(),
-        engine,
-        batch_size,
-        max_ref_len,
-        max_query_len
-    );
+    let (batch_size, _) = crate::compute::simd_abstraction::simd::get_simd_batch_sizes(engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults for mate rescue)
     let match_score: i8 = 1;
     let mismatch_penalty: i8 = -4;
-    let gap_open: i32 = 6;
-    let gap_extend: i32 = 1;
+    let o_del: i32 = 6;
+    let e_del: i32 = 1;
+    let o_ins: i32 = 6;
+    let e_ins: i32 = 1;
 
     // Process batches in parallel using rayon
-    // Each thread gets its own SoABuffer to avoid contention
     let results: Vec<MateRescueResult> = jobs
         .par_chunks(batch_size)
         .enumerate()
@@ -743,79 +728,35 @@ fn execute_mate_rescue_batch_simd(
             let chunk_start = chunk_idx * batch_size;
             let chunk_len = chunk.len();
 
-            // Each thread allocates its own SoA buffer
-            let mut soa = SoABuffer::new(max_ref_len + 16, max_query_len + 16, engine);
-
-            // Find max lengths for this chunk
-            let chunk_max_ref = chunk.iter().map(|j| j.ref_seq.len()).max().unwrap_or(0);
-            let chunk_max_query = chunk.iter().map(|j| j.query_seq.len()).max().unwrap_or(0);
-
-            // Create SeqPair metadata for the chunk
-            let mut pairs: Vec<SeqPair> = chunk
+            let align_jobs: Vec<AlignJob> = chunk
                 .iter()
-                .enumerate()
-                .map(|(i, job)| SeqPair {
-                    ref_idx: i,
-                    query_idx: i,
-                    id: chunk_start + i,
-                    ref_len: job.ref_seq.len() as i32,
-                    query_len: job.query_seq.len() as i32,
+                .map(|job| AlignJob {
+                    query: &job.query_seq,
+                    target: &job.ref_seq,
+                    qlen: job.query_seq.len(),
+                    tlen: job.ref_seq.len(),
+                    band: -1,
                     h0: 0,
-                    score: 0,
-                    te: -1,
-                    qe: -1,
-                    score2: -1,
-                    te2: -1,
-                    tb: -1,
-                    qb: -1,
                 })
                 .collect();
 
-            // Pad to batch_size with dummy entries
-            while pairs.len() < batch_size {
-                pairs.push(SeqPair {
-                    ref_len: 1,
-                    query_len: 1,
-                    ..Default::default()
-                });
-            }
-
-            // Collect sequence slices for transpose
-            let ref_seqs: Vec<&[u8]> = chunk.iter().map(|j| j.ref_seq.as_slice()).collect();
-            let query_seqs: Vec<&[u8]> = chunk.iter().map(|j| j.query_seq.as_slice()).collect();
-
-            // Extend with padding sequences
-            let padding_ref: Vec<u8> = vec![4; 1]; // N base
-            let padding_query: Vec<u8> = vec![4; 1];
-            let mut ref_seqs_padded: Vec<&[u8]> = ref_seqs;
-            let mut query_seqs_padded: Vec<&[u8]> = query_seqs;
-            while ref_seqs_padded.len() < batch_size {
-                ref_seqs_padded.push(&padding_ref);
-                query_seqs_padded.push(&padding_query);
-            }
-
-            // Transpose sequences into SoA layout
-            soa.transpose(&pairs, &ref_seqs_padded, &query_seqs_padded);
-
-            // Allocate results for this batch
-            let mut batch_results: Vec<KswResult> = vec![KswResult::default(); batch_size];
-
-            // Set max dimensions for the kernel
-            pairs[0].ref_len = chunk_max_ref as i32;
-            pairs[0].query_len = chunk_max_query as i32;
-
-            // Execute horizontal SIMD alignment
-            let _processed = batch_ksw_align(
-                &soa,
-                &mut pairs,
-                &mut batch_results,
-                engine,
-                match_score,
-                mismatch_penalty,
-                gap_open,
-                gap_extend,
-                false, // debug
-            );
+            let batch_results = with_workspace(|ws| {
+                dispatch_kswv_soa(
+                    &align_jobs,
+                    ws,
+                    batch_size,
+                    chunk_len,
+                    match_score,
+                    mismatch_penalty,
+                    o_del,
+                    e_del,
+                    o_ins,
+                    e_ins,
+                    0,     // ambig_penalty
+                    false, // debug
+                    engine,
+                )
+            });
 
             // Convert results back to MateRescueResult format
             batch_results
@@ -1484,27 +1425,21 @@ pub fn execute_compact_batch(
     ctx: &MateRescueBatchContext,
     engine: Option<SimdEngineType>,
 ) -> Vec<MateRescueResultCompact> {
-    use crate::alignment::kswv_batch::{KswResult, SeqPair, SoABuffer, batch_ksw_align};
-
     if jobs.is_empty() {
         return Vec::new();
     }
 
     // Determine SIMD engine and batch size
     let engine = engine.unwrap_or(SimdEngineType::Engine128);
-    let simd_batch_size: usize = match engine {
-        #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-        SimdEngineType::Engine512 => 64,
-        #[cfg(target_arch = "x86_64")]
-        SimdEngineType::Engine256 => 32,
-        SimdEngineType::Engine128 => 16,
-    };
+    let (simd_batch_size, _) = crate::compute::simd_abstraction::simd::get_simd_batch_sizes(engine);
 
     // Scoring parameters (matching BWA-MEM2 defaults)
-    let match_score: i8 = 1;
-    let mismatch_penalty: i8 = -4;
-    let gap_open: i32 = 6;
-    let gap_extend: i32 = 1;
+    let _match_score: i8 = 1;
+    let _mismatch_penalty: i8 = -4;
+    let o_del: i8 = 6;
+    let e_del: i8 = 1;
+    let o_ins: i8 = 6;
+    let e_ins: i8 = 1;
 
     // Process in chunks matching SIMD batch size
     // Use Rayon to parallelize across chunks
@@ -1521,68 +1456,45 @@ pub fn execute_compact_batch(
             // Materialize sequences for this chunk
             let mut ref_seqs: Vec<Vec<u8>> = Vec::with_capacity(chunk_size);
             let mut query_seqs: Vec<Vec<u8>> = Vec::with_capacity(chunk_size);
-            let mut max_ref_len: usize = 0;
-            let mut max_query_len: usize = 0;
 
             for job in chunk_jobs {
                 let query_seq = job.get_query_seq(ctx);
                 let (ref_seq, _, _, _) = job.fetch_ref_seq(ctx);
-
-                max_ref_len = max_ref_len.max(ref_seq.len());
-                max_query_len = max_query_len.max(query_seq.len());
-
-                ref_seqs.push(ref_seq);
                 query_seqs.push(query_seq);
+                ref_seqs.push(ref_seq);
             }
 
-            // Build SeqPair metadata
-            let mut pairs: Vec<SeqPair> = chunk_jobs
+            let align_jobs: Vec<AlignJob> = chunk_jobs
                 .iter()
-                .enumerate()
-                .map(|(i, job)| SeqPair {
-                    ref_idx: i,
-                    query_idx: i,
-                    id: chunk_start + i,
-                    ref_len: ref_seqs[i].len() as i32,
-                    query_len: job.mate_len as i32,
+                .zip(query_seqs.iter())
+                .zip(ref_seqs.iter())
+                .map(|((_job, query), target)| AlignJob {
+                    query,
+                    target,
+                    qlen: query.len(),
+                    tlen: target.len(),
+                    band: -1,
                     h0: 0,
-                    score: 0,
-                    te: 0,
-                    qe: 0,
-                    score2: 0,
-                    te2: 0,
-                    tb: 0,
-                    qb: 0,
                 })
                 .collect();
 
-            // Pad pairs to SIMD batch size with dummies
-            while pairs.len() < simd_batch_size {
-                pairs.push(SeqPair::default());
-            }
-
-            // Create SoA buffer and transpose sequences
-            let mut soa = SoABuffer::new(max_ref_len.max(1), max_query_len.max(1), engine);
-
-            let ref_slices: Vec<&[u8]> = ref_seqs.iter().map(|s| s.as_slice()).collect();
-            let query_slices: Vec<&[u8]> = query_seqs.iter().map(|s| s.as_slice()).collect();
-            soa.transpose(&pairs[..chunk_size], &ref_slices, &query_slices);
-
-            // Allocate results
-            let mut results = vec![KswResult::default(); simd_batch_size];
-
-            // Call batched SIMD kernel
-            batch_ksw_align(
-                &soa,
-                &mut pairs,
-                &mut results,
-                engine,
-                match_score,
-                mismatch_penalty,
-                gap_open,
-                gap_extend,
-                false, // debug
-            );
+            let results = with_workspace(|ws| {
+                dispatch_kswv_soa(
+                    &align_jobs,
+                    ws,
+                    simd_batch_size,
+                    chunk_size,
+                    5,
+                    o_del,
+                    e_del as i32,
+                    o_ins as i32,
+                    e_ins as i32,
+                    0,
+                    -1,
+                    false,
+                    engine,
+                )
+            });
 
             // Convert results to MateRescueResultCompact
             let chunk_results: Vec<MateRescueResultCompact> = (0..chunk_size)
@@ -1740,6 +1652,529 @@ pub fn compact_result_to_alignment(
         hash: 0,
         frac_rep: 0.0,
     })
+}
+
+// ============================================================================
+// SoA-NATIVE MATE RESCUE (Pure SoA Pipeline - Phase 3)
+// ============================================================================
+
+/// SoA-native mate rescue for paired-end reads
+///
+/// This function performs mate rescue entirely in SoA format, without converting
+/// to Alignment structs. It:
+/// 1. Collects rescue jobs from SoA alignment results
+/// 2. Executes them in batches using horizontal SIMD
+/// 3. Appends rescued alignments back to SoA buffers
+///
+/// # Arguments
+/// * `soa_r1` - Mutable SoA alignment results for read 1
+/// * `soa_r2` - Mutable SoA alignment results for read 2
+/// * `reads_r1` - SoA read batch for read 1 (for sequences)
+/// * `reads_r2` - SoA read batch for read 2 (for sequences)
+/// * `primary_r1` - Indices of primary alignments for read 1
+/// * `primary_r2` - Indices of primary alignments for read 2
+/// * `pac` - PAC data for reference sequence fetching
+/// * `bwa_idx` - BWA index for coordinate conversion
+/// * `stats` - Insert size statistics for each orientation [FF, FR, RF, RR]
+/// * `pen_unpaired` - Score penalty threshold for rescue attempts (default 17)
+/// * `max_matesw` - Maximum number of rescue attempts per read (default 50)
+/// * `simd_engine` - SIMD engine type for batch execution
+///
+/// # Returns
+/// Number of alignments rescued (total across both reads)
+pub fn mate_rescue_soa(
+    soa_r1: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_r2: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    reads_r1: &crate::core::io::soa_readers::SoAReadBatch,
+    reads_r2: &crate::core::io::soa_readers::SoAReadBatch,
+    primary_r1: &[usize],
+    primary_r2: &[usize],
+    pac: &[u8],
+    bwa_idx: &BwaIndex,
+    stats: &[InsertSizeStats; 4],
+    pen_unpaired: i32,
+    max_matesw: i32,
+    simd_engine: Option<SimdEngineType>,
+) -> usize {
+    let num_reads = soa_r1.num_reads();
+
+    // Phase 1: Collect rescue jobs from all read pairs
+    let mut jobs: Vec<MateRescueJob> = Vec::new();
+
+    for read_idx in 0..num_reads {
+        // Get primary alignments for this pair
+        let r1_primary_idx = primary_r1[read_idx];
+        let r2_primary_idx = primary_r2[read_idx];
+
+        // Try to rescue R1 using R2 as anchor
+        collect_rescue_jobs_for_read_soa(
+            soa_r1,
+            soa_r2,
+            reads_r1,
+            read_idx,
+            r1_primary_idx,
+            r2_primary_idx,
+            true, // rescuing R1
+            pac,
+            bwa_idx,
+            stats,
+            pen_unpaired,
+            max_matesw,
+            &mut jobs,
+        );
+
+        // Try to rescue R2 using R1 as anchor
+        collect_rescue_jobs_for_read_soa(
+            soa_r2,
+            soa_r1,
+            reads_r2,
+            read_idx,
+            r2_primary_idx,
+            r1_primary_idx,
+            false, // rescuing R2
+            pac,
+            bwa_idx,
+            stats,
+            pen_unpaired,
+            max_matesw,
+            &mut jobs,
+        );
+    }
+
+    if jobs.is_empty() {
+        return 0;
+    }
+
+    log::debug!("[PE] Executing {} mate rescue alignments", jobs.len());
+
+    // Phase 2: Execute all rescue jobs in batch
+    let results = execute_mate_rescue_batch_with_engine(&mut jobs, simd_engine);
+
+    // Phase 3: Append rescued alignments to SoA buffers
+    let mut rescued_count = 0;
+    let mut failed_score = 0;
+    let mut failed_qb = 0;
+    let mut max_score_seen = 0;
+    for result in results {
+        let job = &jobs[result.job_index];
+        max_score_seen = max_score_seen.max(result.aln.score);
+
+        // Check if alignment is good enough
+        if result.aln.score < job.min_seed_len {
+            failed_score += 1;
+            continue;
+        }
+        if result.aln.qb < 0 {
+            failed_qb += 1;
+            continue;
+        }
+
+        // Convert SW result to SoA format and append
+        if append_rescue_result_to_soa(
+            job,
+            &result.aln,
+            if job.rescuing_read1 { soa_r1 } else { soa_r2 },
+            job.pair_index,
+            bwa_idx,
+        ) {
+            rescued_count += 1;
+        }
+    }
+
+    if failed_score > 0 || failed_qb > 0 {
+        log::debug!(
+            "[PE] Rescue filtering: {} failed score check (min_seed_len={}), {} failed qb check, {} succeeded (max_score_seen={})",
+            failed_score,
+            if !jobs.is_empty() {
+                jobs[0].min_seed_len
+            } else {
+                0
+            },
+            failed_qb,
+            rescued_count,
+            max_score_seen
+        );
+    }
+
+    rescued_count
+}
+
+/// Collect rescue jobs for a single read using its mate as anchor
+#[allow(clippy::too_many_arguments)]
+fn collect_rescue_jobs_for_read_soa(
+    soa_rescued: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    soa_anchor: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    reads_rescued: &crate::core::io::soa_readers::SoAReadBatch,
+    read_idx: usize,
+    rescued_primary_idx: usize,
+    anchor_primary_idx: usize,
+    rescuing_read1: bool,
+    pac: &[u8],
+    bwa_idx: &BwaIndex,
+    stats: &[InsertSizeStats; 4],
+    pen_unpaired: i32,
+    max_matesw: i32,
+    jobs: &mut Vec<MateRescueJob>,
+) {
+    // BWA-MEM2 approach: Find alignments within score threshold and attempt rescue
+    // First, find the best score for this read
+    let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
+
+    let best_score = (rescued_start..rescued_start + rescued_count)
+        .map(|idx| soa_rescued.scores[idx])
+        .max()
+        .unwrap_or(0);
+
+    // Compute rescue threshold: best_score - pen_unpaired
+    let rescue_threshold = best_score.saturating_sub(pen_unpaired);
+
+    log::debug!(
+        "read_idx={} best_score={} rescue_threshold={} (pen_unpaired={})",
+        read_idx,
+        best_score,
+        rescue_threshold,
+        pen_unpaired
+    );
+
+    // Count how many rescue attempts we'll make for this read
+    // BWA-MEM2 attempts rescue for all alignments above threshold, up to max_matesw
+    let alignments_above_threshold = (rescued_start..rescued_start + rescued_count)
+        .filter(|&idx| soa_rescued.scores[idx] >= rescue_threshold)
+        .take(max_matesw as usize)
+        .count();
+
+    log::debug!(
+        "read_idx={} alignments_above_threshold={} (total={} primary_score={})",
+        read_idx,
+        alignments_above_threshold,
+        rescued_count,
+        soa_rescued.scores[rescued_primary_idx]
+    );
+
+    // If no alignments are above threshold, skip rescue
+    if alignments_above_threshold == 0 {
+        return;
+    }
+
+    // NOTE: Currently we only process rescue from the primary alignment.
+    // BWA-MEM2 attempts rescue from multiple alignments, but this requires
+    // restructuring the loop. For now, check if primary is above threshold.
+    let rescued_score = soa_rescued.scores[rescued_primary_idx];
+    if rescued_score < rescue_threshold {
+        log::debug!(
+            "read_idx={} primary_score={} < threshold={}, skipping rescue",
+            read_idx,
+            rescued_score,
+            rescue_threshold
+        );
+        return; // Primary score too low, no rescue from this alignment
+    }
+
+    log::debug!(
+        "read_idx={} attempting rescue (primary_score={} >= threshold={})",
+        read_idx,
+        rescued_score,
+        rescue_threshold
+    );
+
+    // Get anchor alignment info
+    let anchor_flag = soa_anchor.flags[anchor_primary_idx];
+    let anchor_pos = soa_anchor.positions[anchor_primary_idx];
+    let anchor_ref_id = soa_anchor.ref_ids[anchor_primary_idx];
+    let anchor_ref_len =
+        reference_length_from_cigar_soa_rescue(soa_anchor, anchor_primary_idx) as i64;
+
+    // Get mate sequence (ASCII from FASTQ)
+    let (seq_start, seq_len) = reads_rescued.read_boundaries[read_idx];
+    let mate_seq_ascii = &reads_rescued.seqs[seq_start..seq_start + seq_len];
+    let mate_name = &reads_rescued.names[read_idx];
+
+    // Encode to 2-bit representation for Smith-Waterman (A=0, C=1, G=2, T=3, N=4)
+    let mate_seq = crate::core::alignment::utils::encode_sequence(mate_seq_ascii);
+
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
+    let min_seed_len = bwa_idx.min_seed_len;
+    let match_score = 1i32;
+
+    // Convert anchor position to bidirectional coordinates
+    let anchor_is_rev = (anchor_flag & sam_flags::REVERSE) != 0;
+    let chr_offset = bwa_idx.bns.annotations[anchor_ref_id].offset as i64;
+    let genome_pos = chr_offset + anchor_pos as i64;
+
+    let anchor_rb = if anchor_is_rev {
+        let rightmost = genome_pos + anchor_ref_len - 1;
+        (l_pac << 1) - 1 - rightmost
+    } else {
+        genome_pos
+    };
+
+    // Initialize skip array from failed orientations
+    let mut skip = [false; 4];
+    for r in 0..4 {
+        skip[r] = stats[r].failed;
+    }
+
+    // Check which orientations already have consistent pairs
+    let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
+    for offset in 0..rescued_count {
+        let idx = rescued_start + offset;
+        if soa_rescued.ref_ids[idx] == anchor_ref_id {
+            let mate_is_rev = (soa_rescued.flags[idx] & sam_flags::REVERSE) != 0;
+            let mate_ref_len = reference_length_from_cigar_soa_rescue(soa_rescued, idx) as i64;
+            let mate_genome_pos = chr_offset + soa_rescued.positions[idx] as i64;
+
+            let mate_rb = if mate_is_rev {
+                let rightmost = mate_genome_pos + mate_ref_len - 1;
+                (l_pac << 1) - 1 - rightmost
+            } else {
+                mate_genome_pos
+            };
+
+            let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+            if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
+                log::debug!(
+                    "read_idx={} orientation={} already has consistent pair (dist={})",
+                    read_idx,
+                    dir,
+                    dist
+                );
+                skip[dir] = true;
+            }
+        }
+    }
+
+    // Early exit if all orientations already have pairs
+    if skip.iter().all(|&x| x) {
+        log::debug!(
+            "read_idx={} all orientations have pairs, skipping rescue (skip={:?})",
+            read_idx,
+            skip
+        );
+        return;
+    }
+
+    log::debug!(
+        "read_idx={} creating rescue jobs for orientations (skip={:?})",
+        read_idx,
+        skip
+    );
+
+    let l_ms = mate_seq.len() as i32;
+
+    // Try each non-skipped orientation
+    for r in 0..4 {
+        if skip[r] {
+            continue;
+        }
+
+        // Decode orientation bits
+        let is_rev = (r >> 1) != (r & 1);
+        let is_larger = (r >> 1) == 0;
+
+        // Prepare mate sequence (reverse complement if needed)
+        let query_seq: Vec<u8> = if is_rev {
+            mate_seq
+                .iter()
+                .rev()
+                .map(|&b| if b < 4 { 3 - b } else { 4 })
+                .collect()
+        } else {
+            mate_seq.to_vec()
+        };
+
+        // Calculate search region using FULL insert size range [low, high]
+        let (rb, re) = if !is_rev {
+            let rb = if is_larger {
+                anchor_rb + stats[r].low as i64
+            } else {
+                anchor_rb - stats[r].high as i64
+            };
+            let re = if is_larger {
+                anchor_rb + stats[r].high as i64
+            } else {
+                anchor_rb - stats[r].low as i64
+            } + l_ms as i64;
+            (rb, re)
+        } else {
+            let rb = if is_larger {
+                anchor_rb + stats[r].low as i64
+            } else {
+                anchor_rb - stats[r].high as i64
+            } - l_ms as i64;
+            let re = if is_larger {
+                anchor_rb + stats[r].high as i64
+            } else {
+                anchor_rb - stats[r].low as i64
+            };
+            (rb, re)
+        };
+
+        // Clamp to valid range
+        let rb = rb.max(0);
+        let re = re.min(l_pac << 1);
+
+        if rb >= re {
+            continue;
+        }
+
+        // Fetch reference sequence
+        let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
+
+        // Check if on same reference and region is large enough
+        if rid as usize != anchor_ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
+            continue;
+        }
+
+        // Create rescue job
+        jobs.push(MateRescueJob {
+            pair_index: read_idx,
+            rescuing_read1,
+            query_seq,
+            ref_seq,
+            adj_rb,
+            is_rev,
+            orientation: r,
+            anchor_ref_id,
+            anchor_ref_name: soa_anchor.ref_names[anchor_primary_idx].clone(),
+            mate_name: mate_name.clone(),
+            mate_len: l_ms,
+            min_seed_len,
+            match_score,
+        });
+    }
+}
+
+/// Append a rescued alignment result to SoA buffers
+fn append_rescue_result_to_soa(
+    job: &MateRescueJob,
+    aln: &Kswr,
+    soa: &mut crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    read_idx: usize,
+    bwa_idx: &BwaIndex,
+) -> bool {
+    let l_pac = bwa_idx.bns.packed_sequence_length as i64;
+    let l_ms = job.mate_len;
+
+    // Convert coordinates
+    let (rescued_rb, _rescued_re, query_start, query_end) = if job.is_rev {
+        let rb_result = (l_pac << 1) - (job.adj_rb + aln.te as i64 + 1);
+        let re_result = (l_pac << 1) - (job.adj_rb + aln.tb as i64);
+        let qb_result = l_ms - (aln.qe + 1);
+        let qe_result = l_ms - aln.qb;
+        (rb_result, re_result, qb_result, qe_result)
+    } else {
+        let rb_result = job.adj_rb + aln.tb as i64;
+        let re_result = job.adj_rb + aln.te as i64 + 1;
+        (rb_result, re_result, aln.qb, aln.qe + 1)
+    };
+
+    // Convert bidirectional position to chromosome-relative
+    let (pos_f, _is_rev_depos) = bwa_idx.bns.bns_depos(rescued_rb);
+    let rescued_rid = bwa_idx.bns.bns_pos2rid(pos_f);
+
+    if rescued_rid < 0 || rescued_rid as usize != job.anchor_ref_id {
+        return false;
+    }
+
+    let chr_pos = (pos_f - bwa_idx.bns.annotations[rescued_rid as usize].offset as i64) as u64;
+
+    // Build CIGAR
+    let ref_aligned_len = (aln.te - aln.tb + 1).max(0);
+    let query_aligned = (query_end - query_start).max(0);
+
+    let mut cigar_ops = Vec::new();
+    let mut cigar_lens = Vec::new();
+
+    if query_start > 0 {
+        cigar_ops.push(b'S');
+        cigar_lens.push(query_start);
+    }
+    if ref_aligned_len > 0 && query_aligned > 0 {
+        cigar_ops.push(b'M');
+        cigar_lens.push(ref_aligned_len.min(query_aligned));
+    }
+    if query_end < l_ms {
+        cigar_ops.push(b'S');
+        cigar_lens.push(l_ms - query_end);
+    }
+
+    // Set flags
+    let mut flag: u16 = 0;
+    if job.is_rev {
+        flag |= sam_flags::REVERSE;
+    }
+
+    // Append to SoA buffers
+    let _aln_idx = soa.positions.len();
+
+    soa.query_names.push(job.mate_name.clone());
+    soa.flags.push(flag);
+    soa.ref_names.push(job.anchor_ref_name.clone());
+    soa.ref_ids.push(job.anchor_ref_id);
+    soa.positions.push(chr_pos);
+    soa.mapqs.push(0); // Rescued alignments get MAPQ 0 initially
+    soa.scores.push(aln.score);
+
+    // Append CIGAR
+    let cigar_start = soa.cigar_ops.len();
+    soa.cigar_ops.extend_from_slice(&cigar_ops);
+    soa.cigar_lens.extend_from_slice(&cigar_lens);
+    soa.cigar_boundaries.push((cigar_start, cigar_ops.len()));
+
+    // Mate info (will be filled in finalization phase)
+    soa.rnexts.push("*".to_string());
+    soa.pnexts.push(0);
+    soa.tlens.push(0);
+
+    // Sequence and quality (get from original read)
+    // Note: For rescued alignments, we don't have the original sequence easily accessible
+    // We'll use empty for now and fill in during finalization if needed
+    let seq_start = soa.seqs.len();
+    soa.seq_boundaries.push((seq_start, 0));
+
+    // Tags (minimal set for rescued alignments)
+    let tag_start = soa.tag_names.len();
+    soa.tag_names.push("AS".to_string());
+    soa.tag_values.push(format!("i:{}", aln.score));
+    soa.tag_boundaries.push((tag_start, 1));
+
+    // Internal fields
+    soa.query_starts.push(query_start);
+    soa.query_ends.push(query_end);
+    soa.seed_coverages
+        .push(ref_aligned_len.min(query_aligned) >> 1);
+    soa.hashes.push(0);
+    soa.frac_reps.push(0.0);
+
+    // Update read_alignment_boundaries
+    let (old_start, old_count) = soa.read_alignment_boundaries[read_idx];
+    soa.read_alignment_boundaries[read_idx] = (old_start, old_count + 1);
+
+    true
+}
+
+/// Calculate reference length from CIGAR string in SoA format (for mate rescue module)
+///
+/// Duplicate to avoid circular dependencies between modules.
+fn reference_length_from_cigar_soa_rescue(
+    soa: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
+    aln_idx: usize,
+) -> i32 {
+    let (cigar_start, cigar_count) = soa.cigar_boundaries[aln_idx];
+    let mut ref_len = 0i32;
+
+    for offset in 0..cigar_count {
+        let idx = cigar_start + offset;
+        let op = soa.cigar_ops[idx];
+        let len = soa.cigar_lens[idx];
+
+        // M, D, N, =, X consume reference
+        if op == b'M' || op == b'D' || op == b'N' || op == b'=' || op == b'X' {
+            ref_len += len;
+        }
+    }
+
+    ref_len
 }
 
 // ============================================================================
@@ -1922,7 +2357,7 @@ mod tests {
         let anchor_rb = 1800i64; // In reverse region
         let mate_rb = 200i64; // Forward strand, p2 = 1799 < 1800
 
-        let (dir, _dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
+        let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
         assert_eq!(dir, 2); // RF orientation (different strands, mate projected behind anchor)
     }
 

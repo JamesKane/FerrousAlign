@@ -427,6 +427,19 @@ pub unsafe fn _mm_max_epi8(a: __m128i, b: __m128i) -> __m128i {
 
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn _mm_min_epi8(a: __m128i, b: __m128i) -> __m128i {
+    #[cfg(target_arch = "x86_64")]
+    {
+        simd_arch::_mm_min_epi8(a, b)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe { __m128i::from_s8(simd_arch::vminq_s8(a.as_s8(), b.as_s8())) }
+    }
+}
+
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn _mm_blendv_epi8(a: __m128i, b: __m128i, mask: __m128i) -> __m128i {
     #[cfg(target_arch = "x86_64")]
     {
@@ -668,11 +681,13 @@ macro_rules! mm_slli_epi16 {
     ($a:expr, $imm8:expr) => {{
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            simd_arch::_mm_slli_epi16($a, $imm8)
+            std::arch::x86_64::_mm_slli_epi16($a, $imm8)
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
-            __m128i::from_s16(simd_arch::vshlq_n_s16($a.as_s16(), $imm8))
+            $crate::compute::simd_abstraction::types::__m128i::from_s16(
+                std::arch::aarch64::vshlq_n_s16($a.as_s16(), $imm8),
+            )
         }
     }};
 }
@@ -682,14 +697,18 @@ macro_rules! mm_srli_si128 {
     ($a:expr, $imm8:expr) => {{
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            simd_arch::_mm_srli_si128($a, $imm8)
+            std::arch::x86_64::_mm_srli_si128($a, $imm8)
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
             if $imm8 >= 16 {
-                _mm_setzero_si128()
+                $crate::compute::simd_abstraction::portable_intrinsics::_mm_setzero_si128()
             } else {
-                __m128i(simd_arch::vextq_u8(simd_arch::vdupq_n_u8(0), $a.0, $imm8))
+                $crate::compute::simd_abstraction::types::__m128i(std::arch::aarch64::vextq_u8(
+                    std::arch::aarch64::vdupq_n_u8(0),
+                    $a.0,
+                    $imm8,
+                ))
             }
         }
     }};
@@ -700,14 +719,19 @@ macro_rules! mm_alignr_epi8 {
     ($a:expr, $b:expr, $imm8:expr) => {{
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            simd_arch::_mm_alignr_epi8($a, $b, $imm8)
+            std::arch::x86_64::_mm_alignr_epi8($a, $b, $imm8)
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
             if $imm8 >= 16 {
-                _mm_srli_si128_var($a, $imm8 - 16)
+                $crate::compute::simd_abstraction::portable_intrinsics::_mm_srli_si128_var(
+                    $a,
+                    $imm8 - 16,
+                )
             } else {
-                __m128i(simd_arch::vextq_u8($b.0, $a.0, $imm8))
+                $crate::compute::simd_abstraction::types::__m128i(std::arch::aarch64::vextq_u8(
+                    $b.0, $a.0, $imm8,
+                ))
             }
         }
     }};
@@ -757,4 +781,126 @@ pub unsafe fn _mm_storeu_si128(p: *mut __m128i, a: __m128i) {
             simd_arch::vst1q_u8(p as *mut u8, a.0);
         }
     }
+}
+
+//
+// Generic match table macros for immediate-requiring intrinsics
+//
+// These macros consolidate the duplicated match statements in engine256 and
+// engine512 that handle runtime immediate values for shift and alignr
+// operations. The intrinsics themselves require compile-time constant
+// immediates, but we need runtime flexibility, so we expand to 16-case match
+// statements that the compiler can optimize (constant propagation + dead code
+// elimination).
+//
+
+/// Generate match table for single-operand shifts with zero fallback
+///
+/// # Examples
+/// ```ignore
+/// let result = match_shift_immediate!(
+///     vector,
+///     shift_count,
+///     simd_arch::_mm256_bslli_epi128,
+///     simd_arch::_mm256_setzero_si256()
+/// );
+/// ```
+#[macro_export]
+macro_rules! match_shift_immediate {
+    ($a:expr, $n:expr, $shift_op:path, $zero:expr) => {{
+        match $n {
+            0 => $a,
+            1 => $shift_op($a, 1),
+            2 => $shift_op($a, 2),
+            3 => $shift_op($a, 3),
+            4 => $shift_op($a, 4),
+            5 => $shift_op($a, 5),
+            6 => $shift_op($a, 6),
+            7 => $shift_op($a, 7),
+            8 => $shift_op($a, 8),
+            9 => $shift_op($a, 9),
+            10 => $shift_op($a, 10),
+            11 => $shift_op($a, 11),
+            12 => $shift_op($a, 12),
+            13 => $shift_op($a, 13),
+            14 => $shift_op($a, 14),
+            15 => $shift_op($a, 15),
+            _ => $zero,
+        }
+    }};
+}
+
+/// Generate match table for alignr with two operands
+///
+/// # Examples
+/// ```ignore
+/// let result = match_alignr_immediate!(
+///     hi,
+///     lo,
+///     byte_count,
+///     simd_arch::_mm256_alignr_epi8
+/// );
+/// ```
+#[macro_export]
+macro_rules! match_alignr_immediate {
+    ($a:expr, $b:expr, $n:expr, $alignr_op:path) => {{
+        match $n {
+            0 => $alignr_op($a, $b, 0),
+            1 => $alignr_op($a, $b, 1),
+            2 => $alignr_op($a, $b, 2),
+            3 => $alignr_op($a, $b, 3),
+            4 => $alignr_op($a, $b, 4),
+            5 => $alignr_op($a, $b, 5),
+            6 => $alignr_op($a, $b, 6),
+            7 => $alignr_op($a, $b, 7),
+            8 => $alignr_op($a, $b, 8),
+            9 => $alignr_op($a, $b, 9),
+            10 => $alignr_op($a, $b, 10),
+            11 => $alignr_op($a, $b, 11),
+            12 => $alignr_op($a, $b, 12),
+            13 => $alignr_op($a, $b, 13),
+            14 => $alignr_op($a, $b, 14),
+            15 => $alignr_op($a, $b, 15),
+            _ => $alignr_op($a, $b, 0), // Out of range: return default
+        }
+    }};
+}
+
+/// Generate match table for alignr with custom out-of-range behavior
+///
+/// Used by AVX-512 which returns $a for byte counts >= 16.
+///
+/// # Examples
+/// ```ignore
+/// let result = match_alignr_immediate_or!(
+///     hi,
+///     lo,
+///     byte_count,
+///     simd_arch::_mm512_alignr_epi8,
+///     hi  // Return hi for out-of-range
+/// );
+/// ```
+#[macro_export]
+macro_rules! match_alignr_immediate_or {
+    ($a:expr, $b:expr, $n:expr, $alignr_op:path, $default:expr) => {{
+        match $n {
+            0 => $b, // Special case: 0 bytes from $a means all of $b
+            1 => $alignr_op($a, $b, 1),
+            2 => $alignr_op($a, $b, 2),
+            3 => $alignr_op($a, $b, 3),
+            4 => $alignr_op($a, $b, 4),
+            5 => $alignr_op($a, $b, 5),
+            6 => $alignr_op($a, $b, 6),
+            7 => $alignr_op($a, $b, 7),
+            8 => $alignr_op($a, $b, 8),
+            9 => $alignr_op($a, $b, 9),
+            10 => $alignr_op($a, $b, 10),
+            11 => $alignr_op($a, $b, 11),
+            12 => $alignr_op($a, $b, 12),
+            13 => $alignr_op($a, $b, 13),
+            14 => $alignr_op($a, $b, 14),
+            15 => $alignr_op($a, $b, 15),
+            _ => $default, // Out of range: custom behavior
+        }
+    }};
 }

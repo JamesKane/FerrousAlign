@@ -286,7 +286,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
         let mut e11 = zero256;
         let mut imax256 = zero256;
         let mut iqe256 = SimdEngine128::set1_epi8(-1);
-        let mut i256_vec = SimdEngine128::set1_epi16(i as i16);
+        let i256_vec = SimdEngine128::set1_epi16(i as i16);
         let mut l256 = zero256;
 
         // Load reference base for this row (use unaligned load for safety)
@@ -334,15 +334,15 @@ pub unsafe fn batch_ksw_align_sse_neon(
             imax256 = SimdEngine128::max_epu8(imax256, h11);
             iqe256 = SimdEngine128::blendv_epi8(iqe256, l256, cmp0);
 
-            // Update E (gap in query)
+            // Update E (gap in query) - subs_epu8 is saturating, already clamps to 0
             let gap_e256 = SimdEngine128::subs_epu8(h11, oe_ins256);
-            e11 = SimdEngine128::subs_epu8(e11, e_ins256);
-            e11 = SimdEngine128::max_epu8(gap_e256, e11);
+            let e_extend = SimdEngine128::subs_epu8(e11, e_ins256);
+            e11 = SimdEngine128::max_epu8(gap_e256, e_extend);
 
-            // Update F (gap in reference)
+            // Update F (gap in reference) - subs_epu8 is saturating, already clamps to 0
             let gap_d256 = SimdEngine128::subs_epu8(h11, oe_del256);
-            let mut f21 = SimdEngine128::subs_epu8(f11, e_del256);
-            f21 = SimdEngine128::max_epu8(gap_d256, f21);
+            let f_extend = SimdEngine128::subs_epu8(f11, e_del256);
+            let f21 = SimdEngine128::max_epu8(gap_d256, f_extend);
 
             // Store updated DP values (unaligned for Vec buffers)
             SimdEngine128::storeu_si128(
@@ -362,11 +362,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
 
             let mut pimax256_tmp = SimdEngine128::blendv_epi8(pimax256, zero256, msk);
 
-            // Apply minsc threshold mask
-            let minsc_mask_vec = SimdEngine128::set1_epi8(-1);
-            pimax256_tmp = SimdEngine128::blendv_epi8(pimax256_tmp, zero256, minsc_mask_vec);
-
-            // Apply exit mask
+            // Apply exit mask (minsc_mask line removed - was always zero due to all-ones mask)
             pimax256_tmp = SimdEngine128::blendv_epi8(pimax256_tmp, zero256, exit0_vec);
 
             SimdEngine128::storeu_si128(
@@ -420,18 +416,11 @@ pub unsafe fn batch_ksw_align_sse_neon(
 
         // Swap buffers (h0_buf and h1_buf are already &mut [u8])
         std::ptr::swap(&mut h0_buf, &mut h1_buf);
-
-        // Increment row index (final value unused after last iteration)
-        let one256_16 = SimdEngine128::set1_epi16(1);
-        #[allow(unused_assignments)]
-        {
-            i256_vec = SimdEngine128::add_epi16(i256_vec, one256_16);
-        }
     }
 
     // Final row max update (unaligned for Vec buffers)
-    let msk = SimdEngine128::or_si128(mask256, SimdEngine128::set1_epi8(0));
-    let pimax256_final = SimdEngine128::blendv_epi8(pimax256, zero256, msk);
+    // Note: OR with zero is identity operation, simplified
+    let pimax256_final = SimdEngine128::blendv_epi8(pimax256, zero256, mask256);
     SimdEngine128::storeu_si128(
         row_max_buf[((limit - 1) as usize) * SIMD_WIDTH8..].as_mut_ptr() as *mut _,
         pimax256_final,
@@ -491,7 +480,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
     }
 
     if live == 0 {
-        return 1;
+        return pairs.len().min(SIMD_WIDTH8);
     }
 
     // ========================================================================
@@ -609,7 +598,7 @@ pub unsafe fn batch_ksw_align_sse_neon(
         }
     }
 
-    1
+    pairs.len().min(SIMD_WIDTH8)
 }
 
 #[cfg(test)]
@@ -659,3 +648,24 @@ mod tests {
         }
     }
 }
+
+// === SoA entry points (adapter-first) ===
+use crate::generate_ksw_entry_soa;
+
+#[cfg(target_arch = "x86_64")]
+generate_ksw_entry_soa!(
+    name = kswv_batch16_soa,
+    callee = batch_ksw_align_sse_neon,
+    width = 16,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "sse2",
+);
+
+#[cfg(target_arch = "aarch64")]
+generate_ksw_entry_soa!(
+    name = kswv_batch16_soa,
+    callee = batch_ksw_align_sse_neon,
+    width = 16,
+    cfg = cfg(target_arch = "aarch64"),
+    target_feature = "neon",
+);

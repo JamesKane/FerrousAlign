@@ -139,6 +139,8 @@ pub trait SimdEngine: Sized + Copy {
     unsafe fn max_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
     /// Per‑lane min of unsigned i8 lanes.
     unsafe fn min_epu8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
+    /// Per‑lane min of signed i8 lanes.
+    unsafe fn min_epi8(a: Self::Vec8, b: Self::Vec8) -> Self::Vec8;
 
     // ===== 16-bit Integer Arithmetic =====
     /// Per‑lane add of i16 lanes (wrapping semantics).

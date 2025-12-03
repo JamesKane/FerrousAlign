@@ -32,6 +32,15 @@ pub type __m128i = simd_arch::__m128i;
 #[repr(transparent)]
 pub struct __m128i(pub simd_arch::uint8x16_t);
 
+#[cfg(target_arch = "aarch64")]
+impl std::fmt::Debug for __m128i {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Extract bytes for debug display
+        let bytes: [u8; 16] = unsafe { std::mem::transmute(self.0) };
+        write!(f, "__m128i({:?})", bytes)
+    }
+}
+
 /// Helper methods for common reinterpret casts on aarch64.
 #[cfg(target_arch = "aarch64")]
 impl __m128i {

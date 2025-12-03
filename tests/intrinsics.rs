@@ -8,7 +8,7 @@ mod aarch64_tests {
         _mm_add_epi16, _mm_blendv_epi8, _mm_cmpgt_epi16, _mm_max_epi16, _mm_set1_epi16,
         _mm_setzero_si128, _mm_slli_si128_var, _mm_srli_si128_var, _mm_sub_epi16,
     };
-    use ferrous_align::compute::simd_abstraction::types::{__m128i, simd_arch};
+    use ferrous_align::compute::simd_abstraction::types::__m128i;
     use ferrous_align::{mm_alignr_epi8, mm_srli_si128};
     use std::arch::aarch64;
 
@@ -344,6 +344,27 @@ mod aarch64_tests {
             // Result: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
             let expected: [u8; 16] = [0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23];
             assert_eq!(actual, expected, "test_unpacklo_epi8");
+        }
+    }
+
+    #[test]
+    fn test_min_epi8() {
+        use ferrous_align::compute::simd_abstraction::portable_intrinsics::_mm_min_epi8;
+        unsafe {
+            let a_data: [i8; 16] = [10, -5, 3, 100, -100, 0, 50, -50, 1, 2, 3, 4, 5, 6, 7, 8];
+            let b_data: [i8; 16] = [5, -10, 10, 50, -50, 10, 25, -25, 8, 7, 6, 5, 4, 3, 2, 1];
+
+            let a = __m128i(aarch64::vld1q_u8(a_data.as_ptr() as *const u8));
+            let b = __m128i(aarch64::vld1q_u8(b_data.as_ptr() as *const u8));
+
+            let result = _mm_min_epi8(a, b);
+
+            let mut actual: [i8; 16] = [0; 16];
+            aarch64::vst1q_s8(actual.as_mut_ptr(), result.as_s8());
+
+            // Expected: element-wise signed minimum
+            let expected: [i8; 16] = [5, -10, 3, 50, -100, 0, 25, -50, 1, 2, 3, 4, 4, 3, 2, 1];
+            assert_eq!(actual, expected, "test_min_epi8");
         }
     }
 

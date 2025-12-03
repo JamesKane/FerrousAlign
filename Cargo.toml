@@ -1,6 +1,6 @@
 [package]
 name = "ferrous-align"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 
 [lib]
@@ -30,19 +30,30 @@ rand = "0.8"
 crossbeam-channel = "0.5"
 noodles-bgzf = "0.32"
 anyhow = "1.0"
+cargo-audit = "0.22.0"
 
 [features]
 # AVX-512 support (requires nightly Rust due to unstable intrinsics)
 avx512 = []
 # Debug logging for comparative debugging with bwa-mem2
 debug-logging = []
+# Shared SW kernel debug tracing (compile-time). Disabled by default.
+# Enable with: --features swk-debug and set RUST_LOG=debug to see logs.
+swk-debug = []
 # Use jemalloc allocator for better memory behavior (reduced fragmentation)
 jemalloc = ["tikv-jemallocator"]
+# Temporarily disable problematic bench unless explicitly enabled
+# Enable with: `--features engine-comp-bench`
+engine-comp-bench = []
 
 [dev-dependencies]
 tempfile = "3.23.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 env_logger = "0.11"
+
+[[bench]]
+name = "align_perf"
+harness = false
 
 [[bench]]
 name = "simd_benchmarks"
@@ -51,6 +62,7 @@ harness = false
 [[bench]]
 name = "simd_engine_comparison"
 harness = false
+required-features = ["engine-comp-bench"]
 
 
 

@@ -14,9 +14,9 @@
 // ============================================================================
 
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
-#![feature(stdarch_x86_avx512)]
 
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
+use std::alloc::{Layout, alloc};
 
 // Raw AVX-512 intrinsics - faithful to C++
 use std::arch::x86_64::{
@@ -63,6 +63,39 @@ const DUMMY5: i8 = 5;
 const KSW_XSUBO: i32 = 0x40000;
 const KSW_XSTOP: i32 = 0x20000;
 
+/// Allocate a 64-byte aligned buffer for AVX-512 operations
+///
+/// # Safety
+/// Returns a Vec<u8> backed by 64-byte aligned memory, suitable for
+/// use with aligned SIMD store instructions like _mm512_store_si512.
+///
+/// This is necessary because Vec<u8>::with_capacity() only provides
+/// alignment based on element size (1 byte for u8), which results in
+/// ~48-byte alignment on x86_64. AVX-512 aligned stores require 64-byte alignment.
+fn allocate_aligned_buffer(size: usize) -> Vec<u8> {
+    if size == 0 {
+        return Vec::new();
+    }
+
+    unsafe {
+        // Allocate 64-byte aligned memory
+        let layout =
+            Layout::from_size_align(size, 64).expect("Invalid layout for aligned allocation");
+        let ptr = alloc(layout);
+
+        if ptr.is_null() {
+            panic!(
+                "Failed to allocate {}-byte aligned buffer of size {}",
+                64, size
+            );
+        }
+
+        // Create Vec from raw aligned pointer
+        // SAFETY: ptr is valid, 64-byte aligned, and has capacity for 'size' bytes
+        Vec::from_raw_parts(ptr, size, size)
+    }
+}
+
 /// Batched Smith-Waterman alignment using AVX-512 horizontal SIMD
 ///
 /// Direct port from BWA-MEM2 kswv512_u8() using raw intrinsics.
@@ -91,6 +124,37 @@ pub unsafe fn batch_ksw_align_avx512(
     _debug: bool,              // Debug flag (unused, for API consistency)
     workspace_buffers: Option<(&mut [u8], &mut [u8], &mut [u8], &mut [u8])>,
 ) -> usize {
+    // ========================================================================
+    // VALIDATION: Ensure buffers are properly sized for 64-way SIMD
+    // ========================================================================
+
+    // Validate alignment (AVX-512 requires 64-byte alignment)
+    debug_assert_eq!(
+        seq1_soa as usize % 64,
+        0,
+        "seq1_soa not 64-byte aligned (ptr={:p})",
+        seq1_soa
+    );
+    debug_assert_eq!(
+        seq2_soa as usize % 64,
+        0,
+        "seq2_soa not 64-byte aligned (ptr={:p})",
+        seq2_soa
+    );
+
+    // Validate buffer capacity (kernel will access up to nrow*64 and ncol*64 bytes)
+    // Note: In production this should be guaranteed by the workspace allocation,
+    // but we add debug assertions to catch issues early.
+    let ref_bytes_needed = nrow as usize * SIMD_WIDTH8;
+    let query_bytes_needed = ncol as usize * SIMD_WIDTH8;
+
+    if _debug {
+        eprintln!(
+            "[AVX-512] nrow={}, ncol={}, ref_bytes_needed={}, query_bytes_needed={}",
+            nrow, ncol, ref_bytes_needed, query_bytes_needed
+        );
+    }
+
     // ========================================================================
     // SECTION 1: Initialization (C++ lines 387-478)
     // ========================================================================
@@ -197,62 +261,60 @@ pub unsafe fn batch_ksw_align_avx512(
 
     // Check if workspace buffers are provided and large enough
     let (mut h0_buf_owned, mut h1_buf_owned, mut f_buf_owned, mut row_max_buf_owned);
-    let (mut h0_buf, mut h1_buf, mut f_buf, mut row_max_buf): (
-        &mut [u8],
-        &mut [u8],
-        &mut [u8],
-        &mut [u8],
-    ) = if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
-        // Use workspace buffers if they're large enough
-        if ws_h0.len() >= required_h_size
-            && ws_h1.len() >= required_h_size
-            && ws_f.len() >= required_h_size
-            && ws_row_max.len() >= required_row_max_size
-        {
-            // Zero out the portion we'll use (workspace already allocated)
-            ws_h0[..required_h_size].fill(0);
-            ws_h1[..required_h_size].fill(0);
-            ws_f[..required_h_size].fill(0);
-            ws_row_max[..required_row_max_size].fill(0);
-            (
-                &mut ws_h0[..required_h_size],
-                &mut ws_h1[..required_h_size],
-                &mut ws_f[..required_h_size],
-                &mut ws_row_max[..required_row_max_size],
-            )
+    let (mut h0_buf, mut h1_buf, f_buf, row_max_buf): (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) =
+        if let Some((ws_h0, ws_h1, ws_f, ws_row_max)) = workspace_buffers {
+            // Use workspace buffers if they're large enough
+            if ws_h0.len() >= required_h_size
+                && ws_h1.len() >= required_h_size
+                && ws_f.len() >= required_h_size
+                && ws_row_max.len() >= required_row_max_size
+            {
+                // Zero out the portion we'll use (workspace already allocated)
+                ws_h0[..required_h_size].fill(0);
+                ws_h1[..required_h_size].fill(0);
+                ws_f[..required_h_size].fill(0);
+                ws_row_max[..required_row_max_size].fill(0);
+                (
+                    &mut ws_h0[..required_h_size],
+                    &mut ws_h1[..required_h_size],
+                    &mut ws_f[..required_h_size],
+                    &mut ws_row_max[..required_row_max_size],
+                )
+            } else {
+                // Workspace too small, fall back to aligned allocation
+                // CRITICAL: Use 64-byte aligned allocation for AVX-512 aligned stores
+                log::trace!(
+                    "AVX512 kswv: workspace too small (need {}+{}, have {}+{}), allocating",
+                    required_h_size,
+                    required_row_max_size,
+                    ws_h0.len(),
+                    ws_row_max.len()
+                );
+                h0_buf_owned = allocate_aligned_buffer(required_h_size);
+                h1_buf_owned = allocate_aligned_buffer(required_h_size);
+                f_buf_owned = allocate_aligned_buffer(required_h_size);
+                row_max_buf_owned = allocate_aligned_buffer(required_row_max_size);
+                (
+                    &mut h0_buf_owned,
+                    &mut h1_buf_owned,
+                    &mut f_buf_owned,
+                    &mut row_max_buf_owned,
+                )
+            }
         } else {
-            // Workspace too small, fall back to allocation
-            log::trace!(
-                "AVX512 kswv: workspace too small (need {}+{}, have {}+{}), allocating",
-                required_h_size,
-                required_row_max_size,
-                ws_h0.len(),
-                ws_row_max.len()
-            );
-            h0_buf_owned = vec![0u8; required_h_size];
-            h1_buf_owned = vec![0u8; required_h_size];
-            f_buf_owned = vec![0u8; required_h_size];
-            row_max_buf_owned = vec![0u8; required_row_max_size];
+            // No workspace provided, use aligned allocation for AVX-512
+            // CRITICAL: Must be 64-byte aligned for _mm512_store_si512
+            h0_buf_owned = allocate_aligned_buffer(required_h_size);
+            h1_buf_owned = allocate_aligned_buffer(required_h_size);
+            f_buf_owned = allocate_aligned_buffer(required_h_size);
+            row_max_buf_owned = allocate_aligned_buffer(required_row_max_size);
             (
                 &mut h0_buf_owned,
                 &mut h1_buf_owned,
                 &mut f_buf_owned,
                 &mut row_max_buf_owned,
             )
-        }
-    } else {
-        // No workspace provided, allocate locally
-        h0_buf_owned = vec![0u8; required_h_size];
-        h1_buf_owned = vec![0u8; required_h_size];
-        f_buf_owned = vec![0u8; required_h_size];
-        row_max_buf_owned = vec![0u8; required_row_max_size];
-        (
-            &mut h0_buf_owned,
-            &mut h1_buf_owned,
-            &mut f_buf_owned,
-            &mut row_max_buf_owned,
-        )
-    };
+        };
 
     // Initialize H0, F to zero
     // Use pointer arithmetic to preserve 64-byte alignment (allows LLVM to optimize to aligned ops)
@@ -325,14 +387,16 @@ pub unsafe fn batch_ksw_align_avx512(
             iqe512 = _mm512_mask_blend_epi8(cmp0, iqe512, l512);
 
             // Update E (gap in query)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
             let gap_e512: __m512i = _mm512_subs_epu8(h11, oe_ins512);
-            e11 = _mm512_subs_epu8(e11, e_ins512);
-            e11 = _mm512_max_epu8(gap_e512, e11);
+            let e_extend: __m512i = _mm512_subs_epu8(e11, e_ins512);
+            e11 = _mm512_max_epu8(gap_e512, e_extend);
 
             // Update F (gap in reference)
+            // Note: subs_epu8 is saturating - clamps to 0, so max_epu8 chooses between opening new gap or extending
             let gap_d512: __m512i = _mm512_subs_epu8(h11, oe_del512);
-            let mut f21: __m512i = _mm512_subs_epu8(f11, e_del512);
-            f21 = _mm512_max_epu8(gap_d512, f21);
+            let f_extend: __m512i = _mm512_subs_epu8(f11, e_del512);
+            let f21: __m512i = _mm512_max_epu8(gap_d512, f_extend);
 
             // Store updated DP values using pointer arithmetic (allows LLVM to optimize to aligned ops)
             let h1_ptr = h1_buf.as_mut_ptr();
@@ -351,12 +415,10 @@ pub unsafe fn batch_ksw_align_avx512(
             let msk64: __mmask64 = _mm512_cmpgt_epu8_mask(imax512, pimax512);
             let combined: __mmask64 = msk64 | mask512;
 
-            // pimax512 = where(combined, zero512, pimax512)
-            let mut pimax512_tmp: __m512i = _mm512_mask_blend_epi8(combined, pimax512, zero512);
-            // pimax512 = where(!minsc_msk, zero512, pimax512)
-            pimax512_tmp = _mm512_mask_blend_epi8(minsc_msk, zero512, pimax512_tmp);
-            // pimax512 = where(!exit0, zero512, pimax512)
-            pimax512_tmp = _mm512_mask_blend_epi8(exit0, zero512, pimax512_tmp);
+            // AVX-512 aggressive optimization: chain mask operations with AND
+            // Only keep pimax512 where: !combined AND minsc_msk AND exit0
+            let keep_mask: __mmask64 = (!combined) & minsc_msk & exit0;
+            let pimax512_tmp: __m512i = _mm512_mask_blend_epi8(keep_mask, zero512, pimax512);
 
             // Store row max using pointer arithmetic (allows LLVM to optimize to aligned ops)
             let row_max_ptr = row_max_buf.as_mut_ptr();
@@ -408,11 +470,9 @@ pub unsafe fn batch_ksw_align_avx512(
     }
 
     // Final row max update (C++ lines 549-552)
-    let pimax512_final: __m512i = {
-        let tmp = _mm512_mask_blend_epi8(mask512, pimax512, zero512);
-        let tmp = _mm512_mask_blend_epi8(minsc_msk, zero512, tmp);
-        _mm512_mask_blend_epi8(exit0, zero512, tmp)
-    };
+    // AVX-512 aggressive optimization: combine all masks with AND
+    let keep_mask_final: __mmask64 = (!mask512) & minsc_msk & exit0;
+    let pimax512_final: __m512i = _mm512_mask_blend_epi8(keep_mask_final, zero512, pimax512);
 
     if limit > 0 {
         // Store final row max using pointer arithmetic (allows LLVM to optimize to aligned ops)
@@ -479,7 +539,7 @@ pub unsafe fn batch_ksw_align_avx512(
     }
 
     if live == 0 {
-        return 1;
+        return pairs.len().min(SIMD_WIDTH8);
     }
 
     // ========================================================================
@@ -603,7 +663,7 @@ pub unsafe fn batch_ksw_align_avx512(
         }
     }
 
-    1
+    pairs.len().min(SIMD_WIDTH8)
 }
 
 #[cfg(test)]
@@ -1214,3 +1274,15 @@ mod tests {
         );
     }
 }
+
+// === SoA entry point (adapter-first) ===
+use crate::generate_ksw_entry_soa;
+
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+generate_ksw_entry_soa!(
+    name = kswv_batch64_soa,
+    callee = batch_ksw_align_avx512,
+    width = 64,
+    cfg = cfg(all(target_arch = "x86_64", feature = "avx512")),
+    target_feature = "avx512bw",
+);

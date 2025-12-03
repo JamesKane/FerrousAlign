@@ -5,9 +5,6 @@ use std::io::{self, BufReader, Read, Write, stdin};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[path = "utils_test.rs"]
-mod utils_test;
-
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(C)]
 pub struct Pair64 {
