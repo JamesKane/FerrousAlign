@@ -20,8 +20,9 @@ use super::mate_rescue::mate_rescue_soa;
 use super::pairing::{finalize_pairs_soa, pair_alignments_soa};
 use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::io::sam_output::write_sam_records_soa;
+use crate::io::sam_output::write_sam_records_paired_soa;
 use crate::io::soa_readers::SoaFastqReader;
+use crate::pipelines::linear::finalization::sam_flags;
 use crate::utils::cputime;
 use rayon::prelude::*;
 use std::io::Write;
@@ -396,18 +397,28 @@ pub fn process_paired_end(
         l_pac,
     );
 
-    // Stage 5: Output first batch
-    let records_r1 = write_sam_records_soa(writer, &soa_result1, &first_batch1, &opt, None)
+    // Stage 5: Output first batch using paired-end output
+    // Extract is_properly_paired from primary alignment flags
+    let is_properly_paired: Vec<bool> = primary_r1
+        .iter()
+        .map(|&idx| soa_result1.flags[idx] & sam_flags::PROPER_PAIR != 0)
+        .collect();
+
+    let first_batch_records =
+        write_sam_records_paired_soa(
+            writer,
+            &soa_result1,
+            &soa_result2,
+            &first_batch1,
+            &first_batch2,
+            &is_properly_paired,
+            &opt,
+            None,
+        )
         .unwrap_or_else(|e| {
-            log::error!("Error writing first batch R1: {e}");
+            log::error!("Error writing first batch: {e}");
             0
         });
-    let records_r2 = write_sam_records_soa(writer, &soa_result2, &first_batch2, &opt, None)
-        .unwrap_or_else(|e| {
-            log::error!("Error writing first batch R2: {e}");
-            0
-        });
-    let first_batch_records = records_r1 + records_r2;
     // Log per-batch timing (matches BWA-MEM2 format)
     let batch_cpu_elapsed = cputime() - batch_start_cpu;
     let batch_wall_elapsed = batch_start_wall.elapsed();
@@ -622,20 +633,30 @@ pub fn process_paired_end(
         let pairing_cpu = cputime() - pairing_start_cpu;
         let pairing_wall = pairing_start.elapsed();
 
-        // PHASE 3: Output (pure SoA)
+        // PHASE 3: Output (pure SoA with paired-end logic)
         let output_start = Instant::now();
         let output_start_cpu = cputime();
-        let records_r1 = write_sam_records_soa(writer, &soa_result1, &batch1, &opt, None)
-            .unwrap_or_else(|e| {
-                log::error!("Error writing batch R1: {e}");
-                0
-            });
-        let records_r2 = write_sam_records_soa(writer, &soa_result2, &batch2, &opt, None)
-            .unwrap_or_else(|e| {
-                log::error!("Error writing batch R2: {e}");
-                0
-            });
-        let records = records_r1 + records_r2;
+
+        // Extract is_properly_paired from primary alignment flags
+        let is_properly_paired: Vec<bool> = primary_r1
+            .iter()
+            .map(|&idx| soa_result1.flags[idx] & sam_flags::PROPER_PAIR != 0)
+            .collect();
+
+        let records = write_sam_records_paired_soa(
+            writer,
+            &soa_result1,
+            &soa_result2,
+            &batch1,
+            &batch2,
+            &is_properly_paired,
+            &opt,
+            None,
+        )
+        .unwrap_or_else(|e| {
+            log::error!("Error writing batch: {e}");
+            0
+        });
         let output_cpu = cputime() - output_start_cpu;
         let output_wall = output_start.elapsed();
         total_records += records;
