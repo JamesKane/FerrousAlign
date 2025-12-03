@@ -1044,8 +1044,6 @@ pub fn find_seeds_batch(
             log::debug!("[DEBUG_READ] Query length: {}", query_len);
         }
 
-        // Pre-allocate for typical SMEM counts to avoid reallocations
-        let mut all_smems: Vec<SMEM> = Vec::with_capacity(512);
         let min_seed_len = opt.min_seed_len;
         let min_intv = 1u64;
 
@@ -1078,7 +1076,11 @@ pub fn find_seeds_batch(
         // The strand is determined later based on whether the FM-index position >= l_pac.
         //
         // Use thread-local workspace buffers to avoid per-read allocations
-        with_workspace(|ws| {
+        // CRITICAL: Use ws.all_smems instead of allocating new Vec per read
+        let mut all_smems = with_workspace(|ws| {
+            // Clear workspace buffer for reuse (retains capacity)
+            ws.all_smems.clear();
+
             generate_smems_for_strand(
                 bwa_idx,
                 query_name,
@@ -1087,11 +1089,14 @@ pub fn find_seeds_batch(
                 false, // is_reverse_complement = false for all SMEMs (strand determined by position)
                 min_seed_len,
                 min_intv,
-                &mut all_smems,
+                &mut ws.all_smems,
                 &mut max_smem_count,
                 &mut ws.smem_prev_buf,
                 &mut ws.smem_curr_buf,
             );
+
+            // Move data out of workspace (retains capacity in ws.all_smems for next use)
+            std::mem::take(&mut ws.all_smems)
         });
 
         // PHASE 1 VALIDATION: Log initial SMEMs
