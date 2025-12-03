@@ -439,20 +439,20 @@ impl SimdEngine for SimdEngine128 {
 
             // The lower 4 bits of the control byte are the shuffle index
             let shuffle_indices = vandq_u8(b_u8, vdupq_n_u8(0x0F));
-            
+
             // Perform the table lookup
             let shuffled = vqtbl1q_u8(a_u8, shuffle_indices);
-        
+
             // Create a mask from the high bit of the control byte.
             // If the high bit is set, the lane should be zero.
             // vcgtq_s8(zero, b_s8) creates a mask of 0xFF where b is negative (high bit set)
             let zero = vdupq_n_s8(0);
             let mask = vcgtq_s8(zero, b.as_s8());
-        
+
             // Use bitwise AND with the inverted mask to clear the lanes.
             // (equivalent to blend with zero)
             let result = vbicq_u8(shuffled, mask);
-        
+
             __m128i::from_u8(result)
         }
     }

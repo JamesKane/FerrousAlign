@@ -1,17 +1,14 @@
-
 #![cfg(all(test, target_arch = "aarch64"))]
 
+use super::SimdEngine;
 use super::engine128::SimdEngine128;
 use super::types::__m128i;
-use super::SimdEngine;
 
 #[test]
 fn test_neon_movemask_epi8() {
     unsafe {
         // Test case 1: Alternating sign bits
-        let values = [
-            -1i8, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0,
-        ];
+        let values = [-1i8, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0];
         let vec = __m128i::from_slice(&values);
         let mask = SimdEngine128::movemask_epi8(vec);
         // High bit is set for negative numbers.
@@ -71,7 +68,7 @@ fn test_neon_shuffle_epi8() {
         result_vec.copy_to_slice(&mut result_values);
         let expected_values = [0i8, 1, 2, 0, 4, 5, 6, 0, 8, 9, 10, 11, 12, 13, 14, 15];
         assert_eq!(result_values, expected_values);
-        
+
         // Test case 4: Broadcast first element
         let control_values = [0i8; 16];
         let control_vec = __m128i::from_slice(&control_values);

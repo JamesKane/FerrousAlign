@@ -237,9 +237,9 @@ pub trait SimdEngine: Sized + Copy {
 pub mod engine128;
 pub mod engine256;
 pub mod engine512;
+pub mod neon_tests;
 pub mod portable_intrinsics;
 pub mod simd;
-pub mod neon_tests;
 pub mod tests;
 pub mod types;
 
