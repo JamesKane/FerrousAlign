@@ -28,6 +28,8 @@ use super::types::simd_arch;
 // duplication per engine while maintaining zero runtime overhead.
 // Note: AVX-512 uses _mm512_bslli_epi128 / _mm512_bsrli_epi128 for byte shifts
 // within each 128-bit lane (not across the whole register).
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+use crate::{match_alignr_immediate_or, match_shift_immediate};
 
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 /// AVX‑512BW SIMD backend implementing `SimdEngine` for 512‑bit vectors.
