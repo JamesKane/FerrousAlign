@@ -16,6 +16,7 @@
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
 
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
+use std::alloc::{alloc, Layout};
 
 // Raw AVX-512 intrinsics - faithful to C++
 use std::arch::x86_64::{
@@ -61,6 +62,36 @@ const DUMMY5: i8 = 5;
 /// KSW flags (from kswv.h)
 const KSW_XSUBO: i32 = 0x40000;
 const KSW_XSTOP: i32 = 0x20000;
+
+/// Allocate a 64-byte aligned buffer for AVX-512 operations
+///
+/// # Safety
+/// Returns a Vec<u8> backed by 64-byte aligned memory, suitable for
+/// use with aligned SIMD store instructions like _mm512_store_si512.
+///
+/// This is necessary because Vec<u8>::with_capacity() only provides
+/// alignment based on element size (1 byte for u8), which results in
+/// ~48-byte alignment on x86_64. AVX-512 aligned stores require 64-byte alignment.
+fn allocate_aligned_buffer(size: usize) -> Vec<u8> {
+    if size == 0 {
+        return Vec::new();
+    }
+
+    unsafe {
+        // Allocate 64-byte aligned memory
+        let layout = Layout::from_size_align(size, 64)
+            .expect("Invalid layout for aligned allocation");
+        let ptr = alloc(layout);
+
+        if ptr.is_null() {
+            panic!("Failed to allocate {}-byte aligned buffer of size {}", 64, size);
+        }
+
+        // Create Vec from raw aligned pointer
+        // SAFETY: ptr is valid, 64-byte aligned, and has capacity for 'size' bytes
+        Vec::from_raw_parts(ptr, size, size)
+    }
+}
 
 /// Batched Smith-Waterman alignment using AVX-512 horizontal SIMD
 ///
@@ -247,7 +278,8 @@ pub unsafe fn batch_ksw_align_avx512(
                     &mut ws_row_max[..required_row_max_size],
                 )
             } else {
-                // Workspace too small, fall back to allocation
+                // Workspace too small, fall back to aligned allocation
+                // CRITICAL: Use 64-byte aligned allocation for AVX-512 aligned stores
                 log::trace!(
                     "AVX512 kswv: workspace too small (need {}+{}, have {}+{}), allocating",
                     required_h_size,
@@ -255,10 +287,10 @@ pub unsafe fn batch_ksw_align_avx512(
                     ws_h0.len(),
                     ws_row_max.len()
                 );
-                h0_buf_owned = vec![0u8; required_h_size];
-                h1_buf_owned = vec![0u8; required_h_size];
-                f_buf_owned = vec![0u8; required_h_size];
-                row_max_buf_owned = vec![0u8; required_row_max_size];
+                h0_buf_owned = allocate_aligned_buffer(required_h_size);
+                h1_buf_owned = allocate_aligned_buffer(required_h_size);
+                f_buf_owned = allocate_aligned_buffer(required_h_size);
+                row_max_buf_owned = allocate_aligned_buffer(required_row_max_size);
                 (
                     &mut h0_buf_owned,
                     &mut h1_buf_owned,
@@ -267,11 +299,12 @@ pub unsafe fn batch_ksw_align_avx512(
                 )
             }
         } else {
-            // No workspace provided, allocate locally
-            h0_buf_owned = vec![0u8; required_h_size];
-            h1_buf_owned = vec![0u8; required_h_size];
-            f_buf_owned = vec![0u8; required_h_size];
-            row_max_buf_owned = vec![0u8; required_row_max_size];
+            // No workspace provided, use aligned allocation for AVX-512
+            // CRITICAL: Must be 64-byte aligned for _mm512_store_si512
+            h0_buf_owned = allocate_aligned_buffer(required_h_size);
+            h1_buf_owned = allocate_aligned_buffer(required_h_size);
+            f_buf_owned = allocate_aligned_buffer(required_h_size);
+            row_max_buf_owned = allocate_aligned_buffer(required_row_max_size);
             (
                 &mut h0_buf_owned,
                 &mut h1_buf_owned,

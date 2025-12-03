@@ -22,6 +22,7 @@ pub enum SimdEngineType {
 /// Environment variable overrides for testing/debugging (x86_64 only):
 /// - `FERROUS_ALIGN_FORCE_SSE=1`: Force SSE/128-bit engine (skip AVX2/AVX-512)
 /// - `FERROUS_ALIGN_FORCE_AVX2=1`: Force AVX2/256-bit engine (skip AVX-512)
+/// - `FERROUS_ALIGN_FORCE_AVX512=1`: Force AVX-512 (if feature enabled and CPU supports it)
 pub fn detect_optimal_simd_engine() -> SimdEngineType {
     #[cfg(target_arch = "x86_64")]
     {
@@ -35,6 +36,11 @@ pub fn detect_optimal_simd_engine() -> SimdEngineType {
         }
 
         #[cfg(feature = "avx512")]
+        let force_avx512 = std::env::var("FERROUS_ALIGN_FORCE_AVX512")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        #[cfg(feature = "avx512")]
         let force_avx2 = std::env::var("FERROUS_ALIGN_FORCE_AVX2")
             .map(|v| v == "1")
             .unwrap_or(false);
@@ -43,6 +49,15 @@ pub fn detect_optimal_simd_engine() -> SimdEngineType {
         // AVX-512BW (Byte/Word) is required for 8-bit/16-bit operations
         #[cfg(feature = "avx512")]
         {
+            if force_avx512 {
+                if is_x86_feature_detected!("avx512bw") {
+                    log::info!("FERROUS_ALIGN_FORCE_AVX512=1: Forcing AVX-512 (512-bit) engine");
+                    return SimdEngineType::Engine512;
+                } else {
+                    log::warn!("FERROUS_ALIGN_FORCE_AVX512=1 but CPU doesn't support AVX-512BW, falling back");
+                }
+            }
+
             if !force_avx2 && is_x86_feature_detected!("avx512bw") {
                 return SimdEngineType::Engine512;
             }

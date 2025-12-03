@@ -140,9 +140,16 @@ const KSW_SIMD_WIDTH_AVX2: usize = 32;
 /// SIMD width for 8-bit AVX-512 KSW kernel (512-bit / 8-bit = 64 lanes)
 const KSW_SIMD_WIDTH_AVX512: usize = 64;
 
-/// Maximum sequence length for KSW kernel (matches C++ bwa-mem2 MAX_SEQ_LEN_QER)
-/// Sequences exceeding this length will trigger scalar fallback (ksw_extend2)
-const KSW_MAX_SEQ_LEN: usize = 128;
+/// Maximum sequence length for KSW kernel workspace pre-allocation
+///
+/// Set to 512 to handle:
+/// - Modern 150bp PE reads (common today)
+/// - Mate rescue sequences (can be 200-400bp)
+/// - Long reads from newer sequencers
+///
+/// Note: Sequences exceeding this will fall back to aligned allocation
+/// (not scalar fallback - that only happens for extremely long reads)
+const KSW_MAX_SEQ_LEN: usize = 512;
 
 // Thread-local workspace for alignment buffers
 thread_local! {
