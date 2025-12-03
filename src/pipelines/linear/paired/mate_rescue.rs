@@ -1785,7 +1785,11 @@ pub fn mate_rescue_soa(
         log::debug!(
             "[PE] Rescue filtering: {} failed score check (min_seed_len={}), {} failed qb check, {} succeeded (max_score_seen={})",
             failed_score,
-            if !jobs.is_empty() { jobs[0].min_seed_len } else { 0 },
+            if !jobs.is_empty() {
+                jobs[0].min_seed_len
+            } else {
+                0
+            },
             failed_qb,
             rescued_count,
             max_score_seen

@@ -462,18 +462,30 @@ impl SoAAlignmentResult {
                 // Extract CIGAR
                 let (cigar_start, cigar_len) = self.cigar_boundaries[aln_idx];
                 let cigar: Vec<(u8, i32)> = (0..cigar_len)
-                    .map(|j| (self.cigar_ops[cigar_start + j], self.cigar_lens[cigar_start + j]))
+                    .map(|j| {
+                        (
+                            self.cigar_ops[cigar_start + j],
+                            self.cigar_lens[cigar_start + j],
+                        )
+                    })
                     .collect();
 
                 // Extract sequence and quality
                 let (seq_start, seq_len) = self.seq_boundaries[aln_idx];
-                let seq = String::from_utf8_lossy(&self.seqs[seq_start..seq_start + seq_len]).to_string();
-                let qual = String::from_utf8_lossy(&self.quals[seq_start..seq_start + seq_len]).to_string();
+                let seq =
+                    String::from_utf8_lossy(&self.seqs[seq_start..seq_start + seq_len]).to_string();
+                let qual = String::from_utf8_lossy(&self.quals[seq_start..seq_start + seq_len])
+                    .to_string();
 
                 // Extract tags
                 let (tag_start, tag_len) = self.tag_boundaries[aln_idx];
                 let tags: Vec<(String, String)> = (0..tag_len)
-                    .map(|j| (self.tag_names[tag_start + j].clone(), self.tag_values[tag_start + j].clone()))
+                    .map(|j| {
+                        (
+                            self.tag_names[tag_start + j].clone(),
+                            self.tag_values[tag_start + j].clone(),
+                        )
+                    })
                     .collect();
 
                 alignments.push(Alignment {
@@ -576,7 +588,9 @@ impl SoAAlignmentResult {
             }
 
             // Record read alignment boundaries
-            result.read_alignment_boundaries.push((alignment_start_idx, read_alignments.len()));
+            result
+                .read_alignment_boundaries
+                .push((alignment_start_idx, read_alignments.len()));
         }
 
         result

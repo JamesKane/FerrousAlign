@@ -54,7 +54,9 @@ pub fn detect_optimal_simd_engine() -> SimdEngineType {
                     log::info!("FERROUS_ALIGN_FORCE_AVX512=1: Forcing AVX-512 (512-bit) engine");
                     return SimdEngineType::Engine512;
                 } else {
-                    log::warn!("FERROUS_ALIGN_FORCE_AVX512=1 but CPU doesn't support AVX-512BW, falling back");
+                    log::warn!(
+                        "FERROUS_ALIGN_FORCE_AVX512=1 but CPU doesn't support AVX-512BW, falling back"
+                    );
                 }
             }
 

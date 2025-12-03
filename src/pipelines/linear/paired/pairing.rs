@@ -451,8 +451,11 @@ pub fn pair_alignments_soa(
             find_best_pair_soa(soa_r1, soa_r2, read_idx, stats, match_score, pair_id, l_pac)
         {
             if read_idx == 10 {
-                log::debug!("RETURNED from find_best_pair_soa: best_r1_offset={} best_r2_offset={}",
-                    best_r1_offset, best_r2_offset);
+                log::debug!(
+                    "RETURNED from find_best_pair_soa: best_r1_offset={} best_r2_offset={}",
+                    best_r1_offset,
+                    best_r2_offset
+                );
             }
             let best_r1_idx = r1_start + best_r1_offset;
             let best_r2_idx = r2_start + best_r2_offset;
@@ -548,9 +551,17 @@ fn find_best_pair_soa(
             | ((is_in_reverse_half as u64) << 1); // 0 = read1
 
         if read_idx == 10 {
-            eprintln!("R1[{}] sam_pos={} ref_id={} is_rev={} aln_len={} bidir_pos={} fwd_norm_pos={} score={}",
-                offset, soa_r1.positions[idx], soa_r1.ref_ids[idx], is_reverse, alignment_length,
-                bidir_pos, fwd_normalized_pos, soa_r1.scores[idx]);
+            eprintln!(
+                "R1[{}] sam_pos={} ref_id={} is_rev={} aln_len={} bidir_pos={} fwd_norm_pos={} score={}",
+                offset,
+                soa_r1.positions[idx],
+                soa_r1.ref_ids[idx],
+                is_reverse,
+                alignment_length,
+                bidir_pos,
+                fwd_normalized_pos,
+                soa_r1.scores[idx]
+            );
         }
 
         alignments_sorted.push(AlignmentForPairing {
@@ -577,9 +588,17 @@ fn find_best_pair_soa(
             | 1; // 1 = read2
 
         if read_idx == 10 {
-            eprintln!("R2[{}] sam_pos={} ref_id={} is_rev={} aln_len={} bidir_pos={} fwd_norm_pos={} score={}",
-                offset, soa_r2.positions[idx], soa_r2.ref_ids[idx], is_reverse, alignment_length,
-                bidir_pos, fwd_normalized_pos, soa_r2.scores[idx]);
+            eprintln!(
+                "R2[{}] sam_pos={} ref_id={} is_rev={} aln_len={} bidir_pos={} fwd_norm_pos={} score={}",
+                offset,
+                soa_r2.positions[idx],
+                soa_r2.ref_ids[idx],
+                is_reverse,
+                alignment_length,
+                bidir_pos,
+                fwd_normalized_pos,
+                soa_r2.scores[idx]
+            );
         }
 
         alignments_sorted.push(AlignmentForPairing {
@@ -599,20 +618,26 @@ fn find_best_pair_soa(
         eprintln!("=== READ_IDX=10 PAIRING DEBUG ===");
         eprintln!("Insert size stats:");
         for (i, stat) in stats.iter().enumerate() {
-            eprintln!("  [{}] avg={:.1} std={:.1} low={} high={} failed={}",
-                i, stat.avg, stat.std, stat.low, stat.high, stat.failed);
+            eprintln!(
+                "  [{}] avg={:.1} std={:.1} low={} high={} failed={}",
+                i, stat.avg, stat.std, stat.low, stat.high, stat.failed
+            );
         }
         eprintln!("R1 alignments (count={}):", r1_count);
         for offset in 0..r1_count {
             let idx = r1_start + offset;
-            eprintln!("  R1[{}] pos={} score={} ref_id={}",
-                offset, soa_r1.positions[idx], soa_r1.scores[idx], soa_r1.ref_ids[idx]);
+            eprintln!(
+                "  R1[{}] pos={} score={} ref_id={}",
+                offset, soa_r1.positions[idx], soa_r1.scores[idx], soa_r1.ref_ids[idx]
+            );
         }
         eprintln!("R2 alignments (count={}):", r2_count);
         for offset in 0..r2_count {
             let idx = r2_start + offset;
-            eprintln!("  R2[{}] pos={} score={} ref_id={}",
-                offset, soa_r2.positions[idx], soa_r2.scores[idx], soa_r2.ref_ids[idx]);
+            eprintln!(
+                "  R2[{}] pos={} score={} ref_id={}",
+                offset, soa_r2.positions[idx], soa_r2.scores[idx], soa_r2.ref_ids[idx]
+            );
         }
     }
 
@@ -624,8 +649,12 @@ fn find_best_pair_soa(
         let current = &alignments_sorted[current_idx];
 
         if read_idx == 10 && current_idx < 5 {
-            eprintln!("Checking current_idx={} read_num={} strand_half={}",
-                current_idx, current.packed_info & 1, (current.packed_info >> 1) & 1);
+            eprintln!(
+                "Checking current_idx={} read_num={} strand_half={}",
+                current_idx,
+                current.packed_info & 1,
+                (current.packed_info >> 1) & 1
+            );
         }
 
         // Try both possible mate strand configurations
@@ -634,8 +663,10 @@ fn find_best_pair_soa(
             let orientation_idx = ((mate_strand_config << 1) | current_strand_half) as usize;
 
             if read_idx == 10 && current_idx < 5 {
-                eprintln!("  mate_config={} orientation_idx={} failed={}",
-                    mate_strand_config, orientation_idx, stats[orientation_idx].failed);
+                eprintln!(
+                    "  mate_config={} orientation_idx={} failed={}",
+                    mate_strand_config, orientation_idx, stats[orientation_idx].failed
+                );
             }
 
             if stats[orientation_idx].failed {
@@ -647,7 +678,10 @@ fn find_best_pair_soa(
             let mate_lookup_key = ((mate_strand_config << 1) | mate_read_num) as usize;
 
             if read_idx == 10 && current_idx < 5 {
-                eprintln!("    mate_lookup_key={} last_seen={}", mate_lookup_key, last_seen_idx[mate_lookup_key]);
+                eprintln!(
+                    "    mate_lookup_key={} last_seen={}",
+                    mate_lookup_key, last_seen_idx[mate_lookup_key]
+                );
             }
 
             if last_seen_idx[mate_lookup_key] < 0 {
@@ -693,8 +727,10 @@ fn find_best_pair_soa(
                 // Skip if alignments are on different chromosomes
                 if current_ref != mate_ref {
                     if read_idx == 10 && current_idx < 5 {
-                        eprintln!("      search_idx={}: SKIP different chromosomes (ref {} vs {})",
-                            search_idx, current_ref, mate_ref);
+                        eprintln!(
+                            "      search_idx={}: SKIP different chromosomes (ref {} vs {})",
+                            search_idx, current_ref, mate_ref
+                        );
                     }
                     if search_idx == 0 {
                         break;
@@ -727,11 +763,20 @@ fn find_best_pair_soa(
                 };
 
                 // Use infer_orientation to compute distance (same as bootstrap)
-                let (_orientation, distance) = super::insert_size::infer_orientation(l_pac, current_bidir, mate_bidir);
+                let (_orientation, distance) =
+                    super::insert_size::infer_orientation(l_pac, current_bidir, mate_bidir);
 
                 if read_idx == 10 && current_idx < 5 {
-                    eprintln!("      search_idx={}: ref={} current_bidir={} mate_bidir={} distance={} (low={} high={})",
-                        search_idx, current_ref, current_bidir, mate_bidir, distance, stats[orientation_idx].low, stats[orientation_idx].high);
+                    eprintln!(
+                        "      search_idx={}: ref={} current_bidir={} mate_bidir={} distance={} (low={} high={})",
+                        search_idx,
+                        current_ref,
+                        current_bidir,
+                        mate_bidir,
+                        distance,
+                        stats[orientation_idx].low,
+                        stats[orientation_idx].high
+                    );
                 }
 
                 if distance > stats[orientation_idx].high as i64 {
@@ -790,9 +835,17 @@ fn find_best_pair_soa(
 
                 // Debug logging for problem read
                 if read_idx == 10 {
-                    eprintln!("  PAIR r1_idx={} r2_idx={} dist={} norm={:.2} pen={:.1} scores={}+{} combined={}",
-                        read1_idx, read2_idx, distance, normalized_insert_size,
-                        insert_size_log_penalty, current_score, mate_score, combined_score);
+                    eprintln!(
+                        "  PAIR r1_idx={} r2_idx={} dist={} norm={:.2} pen={:.1} scores={}+{} combined={}",
+                        read1_idx,
+                        read2_idx,
+                        distance,
+                        normalized_insert_size,
+                        insert_size_log_penalty,
+                        current_score,
+                        mate_score,
+                        combined_score
+                    );
                 }
 
                 if search_idx == 0 {
@@ -833,16 +886,22 @@ fn find_best_pair_soa(
     // Debug logging for problem read
     if read_idx == 10 {
         eprintln!("=== SELECTED BEST PAIR ===");
-        eprintln!("  n_pairs={} best: r1_idx={} r2_idx={} score={} second_best={}",
+        eprintln!(
+            "  n_pairs={} best: r1_idx={} r2_idx={} score={} second_best={}",
             candidate_pairs.len(),
-            best_pair.read1_alignment_idx, best_pair.read2_alignment_idx,
-            best_pair.combined_score, second_best_score);
+            best_pair.read1_alignment_idx,
+            best_pair.read2_alignment_idx,
+            best_pair.combined_score,
+            second_best_score
+        );
 
         // Show top 5 pairs
         eprintln!("  Top 5 pairs:");
         for (i, pair) in candidate_pairs.iter().take(5).enumerate() {
-            eprintln!("    {}. r1={} r2={} score={}", i, pair.read1_alignment_idx,
-                pair.read2_alignment_idx, pair.combined_score);
+            eprintln!(
+                "    {}. r1={} r2={} score={}",
+                i, pair.read1_alignment_idx, pair.read2_alignment_idx, pair.combined_score
+            );
         }
     }
 
@@ -992,12 +1051,18 @@ pub fn finalize_pairs_soa(
     // and 0x80 (SECOND_IN_PAIR) flags, causing them to appear as unpaired single-end reads.
     for idx in 0..soa_r1.flags.len() {
         // Only set flags if not already set (avoid overwriting for primary alignments)
-        if (soa_r1.flags[idx] & (sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR | sam_flags::SECOND_IN_PAIR)) == 0 {
+        if (soa_r1.flags[idx]
+            & (sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR | sam_flags::SECOND_IN_PAIR))
+            == 0
+        {
             soa_r1.flags[idx] |= sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR;
         }
     }
     for idx in 0..soa_r2.flags.len() {
-        if (soa_r2.flags[idx] & (sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR | sam_flags::SECOND_IN_PAIR)) == 0 {
+        if (soa_r2.flags[idx]
+            & (sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR | sam_flags::SECOND_IN_PAIR))
+            == 0
+        {
             soa_r2.flags[idx] |= sam_flags::PAIRED | sam_flags::SECOND_IN_PAIR;
         }
     }

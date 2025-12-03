@@ -497,28 +497,34 @@ pub fn process_paired_end(
         let (seq_start1, seq_len1) = first_batch1.read_boundaries[read_idx];
         let seq1 = std::str::from_utf8(&first_batch1.seqs[seq_start1..seq_start1 + seq_len1])
             .unwrap_or("");
-        let qual1 =
-            std::str::from_utf8(&first_batch1.quals[seq_start1..seq_start1 + seq_len1])
-                .unwrap_or("");
+        let qual1 = std::str::from_utf8(&first_batch1.quals[seq_start1..seq_start1 + seq_len1])
+            .unwrap_or("");
 
         let (seq_start2, seq_len2) = first_batch2.read_boundaries[read_idx];
         let seq2 = std::str::from_utf8(&first_batch2.seqs[seq_start2..seq_start2 + seq_len2])
             .unwrap_or("");
-        let qual2 =
-            std::str::from_utf8(&first_batch2.quals[seq_start2..seq_start2 + seq_len2])
-                .unwrap_or("");
+        let qual2 = std::str::from_utf8(&first_batch2.quals[seq_start2..seq_start2 + seq_len2])
+            .unwrap_or("");
 
         // Write R1 primary alignment (or unmapped if none)
         if let Some(primary_aln) = alns1.first() {
-            writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq1, qual1))
-                .unwrap_or_else(|e| log::error!("Write error: {e}"));
+            writeln!(
+                writer,
+                "{}",
+                primary_aln.to_sam_string_with_seq(seq1, qual1)
+            )
+            .unwrap_or_else(|e| log::error!("Write error: {e}"));
             first_batch_records += 1;
         }
 
         // Write R2 primary alignment (or unmapped if none)
         if let Some(primary_aln) = alns2.first() {
-            writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq2, qual2))
-                .unwrap_or_else(|e| log::error!("Write error: {e}"));
+            writeln!(
+                writer,
+                "{}",
+                primary_aln.to_sam_string_with_seq(seq2, qual2)
+            )
+            .unwrap_or_else(|e| log::error!("Write error: {e}"));
             first_batch_records += 1;
         }
     }
@@ -793,31 +799,35 @@ pub fn process_paired_end(
             // Get sequences and qualities from original batch
             let (seq_start1, seq_len1) = batch1.read_boundaries[read_idx];
             let seq1 =
-                std::str::from_utf8(&batch1.seqs[seq_start1..seq_start1 + seq_len1])
-                    .unwrap_or("");
+                std::str::from_utf8(&batch1.seqs[seq_start1..seq_start1 + seq_len1]).unwrap_or("");
             let qual1 =
-                std::str::from_utf8(&batch1.quals[seq_start1..seq_start1 + seq_len1])
-                    .unwrap_or("");
+                std::str::from_utf8(&batch1.quals[seq_start1..seq_start1 + seq_len1]).unwrap_or("");
 
             let (seq_start2, seq_len2) = batch2.read_boundaries[read_idx];
             let seq2 =
-                std::str::from_utf8(&batch2.seqs[seq_start2..seq_start2 + seq_len2])
-                    .unwrap_or("");
+                std::str::from_utf8(&batch2.seqs[seq_start2..seq_start2 + seq_len2]).unwrap_or("");
             let qual2 =
-                std::str::from_utf8(&batch2.quals[seq_start2..seq_start2 + seq_len2])
-                    .unwrap_or("");
+                std::str::from_utf8(&batch2.quals[seq_start2..seq_start2 + seq_len2]).unwrap_or("");
 
             // Write R1 primary alignment (or unmapped if none)
             if let Some(primary_aln) = alns1.first() {
-                writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq1, qual1))
-                    .unwrap_or_else(|e| log::error!("Write error: {e}"));
+                writeln!(
+                    writer,
+                    "{}",
+                    primary_aln.to_sam_string_with_seq(seq1, qual1)
+                )
+                .unwrap_or_else(|e| log::error!("Write error: {e}"));
                 records += 1;
             }
 
             // Write R2 primary alignment (or unmapped if none)
             if let Some(primary_aln) = alns2.first() {
-                writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq2, qual2))
-                    .unwrap_or_else(|e| log::error!("Write error: {e}"));
+                writeln!(
+                    writer,
+                    "{}",
+                    primary_aln.to_sam_string_with_seq(seq2, qual2)
+                )
+                .unwrap_or_else(|e| log::error!("Write error: {e}"));
                 records += 1;
             }
         }

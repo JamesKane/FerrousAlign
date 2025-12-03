@@ -39,8 +39,11 @@ fn test_avx512_aligned_store_on_vec() {
             let mut buffer = vec![0u8; 128];
             let ptr = buffer.as_mut_ptr();
 
-            println!("Attempting aligned store to Vec<u8> at {:p} (alignment: {})",
-                ptr, ptr as usize % 64);
+            println!(
+                "Attempting aligned store to Vec<u8> at {:p} (alignment: {})",
+                ptr,
+                ptr as usize % 64
+            );
 
             let zero = _mm512_setzero_si512();
 
@@ -61,8 +64,11 @@ fn test_avx512_unaligned_store_works() {
         let mut buffer = vec![0u8; 128];
         let ptr = buffer.as_mut_ptr();
 
-        println!("Testing unaligned store to Vec<u8> at {:p} (alignment: {})",
-            ptr, ptr as usize % 64);
+        println!(
+            "Testing unaligned store to Vec<u8> at {:p} (alignment: {})",
+            ptr,
+            ptr as usize % 64
+        );
 
         let test_value = _mm512_set1_epi8(0x42);
 
@@ -80,7 +86,7 @@ fn test_avx512_unaligned_store_works() {
 #[test]
 fn test_aligned_allocation() {
     // Demonstrate how to properly allocate aligned memory
-    use std::alloc::{alloc, dealloc, Layout};
+    use std::alloc::{Layout, alloc, dealloc};
 
     unsafe {
         // Allocate 64-byte aligned memory
@@ -109,7 +115,7 @@ fn test_workspace_buffer_alignment() {
     // Test if workspace buffers are properly aligned
     // This demonstrates what the fix should look like
 
-    use std::alloc::{alloc, dealloc, Layout};
+    use std::alloc::{Layout, alloc, dealloc};
 
     unsafe {
         let size = 9536;
@@ -119,8 +125,11 @@ fn test_workspace_buffer_alignment() {
         // Create a slice from the aligned allocation
         let buffer = std::slice::from_raw_parts_mut(ptr, size);
 
-        println!("Workspace buffer at {:p} (alignment: {})",
-            buffer.as_ptr(), buffer.as_ptr() as usize % 64);
+        println!(
+            "Workspace buffer at {:p} (alignment: {})",
+            buffer.as_ptr(),
+            buffer.as_ptr() as usize % 64
+        );
 
         assert_eq!(buffer.as_ptr() as usize % 64, 0);
 
@@ -153,19 +162,33 @@ fn test_crash_scenario_reproduction() {
 
         println!("=== Crash Scenario Reproduction ===");
         println!("ncol=148, required_h_size=9536");
-        println!("Misaligned Vec<u8> at {:p} (alignment: {} bytes)",
-            ptr_misaligned, ptr_misaligned as usize % 64);
+        println!(
+            "Misaligned Vec<u8> at {:p} (alignment: {} bytes)",
+            ptr_misaligned,
+            ptr_misaligned as usize % 64
+        );
 
         // This is the correct way (aligned)
-        use std::alloc::{alloc, dealloc, Layout};
+        use std::alloc::{Layout, alloc, dealloc};
         let layout = Layout::from_size_align(9536, 64).unwrap();
         let ptr_aligned = alloc(layout);
 
-        println!("Aligned buffer at {:p} (alignment: {} bytes)",
-            ptr_aligned, ptr_aligned as usize % 64);
+        println!(
+            "Aligned buffer at {:p} (alignment: {} bytes)",
+            ptr_aligned,
+            ptr_aligned as usize % 64
+        );
 
-        assert_ne!(ptr_misaligned as usize % 64, 0, "Vec<u8> shouldn't be 64-byte aligned");
-        assert_eq!(ptr_aligned as usize % 64, 0, "Aligned alloc should be 64-byte aligned");
+        assert_ne!(
+            ptr_misaligned as usize % 64,
+            0,
+            "Vec<u8> shouldn't be 64-byte aligned"
+        );
+        assert_eq!(
+            ptr_aligned as usize % 64,
+            0,
+            "Aligned alloc should be 64-byte aligned"
+        );
 
         // Demonstrate the fix: use unaligned store for Vec<u8>
         let zero = _mm512_setzero_si512();

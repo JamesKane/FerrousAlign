@@ -858,7 +858,10 @@ pub fn filter_chains_batch(
                 soa_chain_batch.chain_seed_boundaries[global_chain_idx];
             log::debug!(
                 "FERROUS_CHAIN read_idx={} chain_local_idx={} weight={} n_seeds={} q=[{},{}] r=[{},{}] is_rev={}",
-                read_idx, i, weight, num_seeds_in_chain,
+                read_idx,
+                i,
+                weight,
+                num_seeds_in_chain,
                 soa_chain_batch.query_start[global_chain_idx],
                 soa_chain_batch.query_end[global_chain_idx],
                 soa_chain_batch.ref_start[global_chain_idx],
@@ -871,11 +874,13 @@ pub fn filter_chains_batch(
                 let seed_idx_in_soa = soa_chain_batch.seeds_indices[seed_start_idx_in_chain + j];
                 log::debug!(
                     "  FERROUS_SEED chain={} seed_idx={} q=[{},{}] r=[{},{}] len={}",
-                    i, j,
+                    i,
+                    j,
                     soa_seed_batch.query_pos[seed_idx_in_soa],
                     soa_seed_batch.query_pos[seed_idx_in_soa] + soa_seed_batch.len[seed_idx_in_soa],
                     soa_seed_batch.ref_pos[seed_idx_in_soa],
-                    soa_seed_batch.ref_pos[seed_idx_in_soa] + soa_seed_batch.len[seed_idx_in_soa] as u64,
+                    soa_seed_batch.ref_pos[seed_idx_in_soa]
+                        + soa_seed_batch.len[seed_idx_in_soa] as u64,
                     soa_seed_batch.len[seed_idx_in_soa]
                 );
             }
@@ -907,12 +912,15 @@ pub fn filter_chains_batch(
         if read_idx == 10 {
             log::debug!(
                 "FERROUS_FILTER_START read_idx=10 n_chains={} mask_level={:.2} drop_ratio={:.2}",
-                num_chains_for_read, opt.mask_level, opt.drop_ratio
+                num_chains_for_read,
+                opt.mask_level,
+                opt.drop_ratio
             );
         }
 
         // 3. Apply filtering logic
-        for (_chain_iter_idx, &global_chain_idx) in chain_global_indices_for_read.iter().enumerate() {
+        for (_chain_iter_idx, &global_chain_idx) in chain_global_indices_for_read.iter().enumerate()
+        {
             // Check if below minimum weight
             if soa_chain_batch.weight[global_chain_idx] < opt.min_chain_weight {
                 continue; // Discard
@@ -949,7 +957,8 @@ pub fn filter_chains_batch(
                         let weight_diff = soa_chain_batch.weight[kept_global_chain_idx]
                             - soa_chain_batch.weight[global_chain_idx];
 
-                        let will_discard = soa_chain_batch.weight[global_chain_idx] < weight_threshold
+                        let will_discard = soa_chain_batch.weight[global_chain_idx]
+                            < weight_threshold
                             && weight_diff >= (opt.min_seed_len << 1);
 
                         // DEBUG: Log overlap decision for read_idx=10
@@ -958,10 +967,14 @@ pub fn filter_chains_batch(
                             let kept_local_idx = kept_global_chain_idx - chain_start_idx;
                             log::debug!(
                                 "  Chain[{}] vs Chain[{}]: ovlp={} min_l={} w_curr={} w_kept={} thresh={} diff={} DROP={}",
-                                chain_local_idx, kept_local_idx, overlap, min_len,
+                                chain_local_idx,
+                                kept_local_idx,
+                                overlap,
+                                min_len,
                                 soa_chain_batch.weight[global_chain_idx],
                                 soa_chain_batch.weight[kept_global_chain_idx],
-                                weight_threshold, weight_diff,
+                                weight_threshold,
+                                weight_diff,
                                 if will_discard { "YES" } else { "NO" }
                             );
                         }
@@ -983,7 +996,8 @@ pub fn filter_chains_batch(
                     let chain_local_idx = global_chain_idx - chain_start_idx;
                     log::debug!(
                         "  Chain[{}] DROPPED weight={}",
-                        chain_local_idx, soa_chain_batch.weight[global_chain_idx]
+                        chain_local_idx,
+                        soa_chain_batch.weight[global_chain_idx]
                     );
                 }
                 continue; // This chain is discarded
@@ -1005,8 +1019,10 @@ pub fn filter_chains_batch(
                 };
                 log::debug!(
                     "  Chain[{}] kept={} ({}) weight={}",
-                    chain_local_idx, soa_chain_batch.kept[global_chain_idx],
-                    kept_status, soa_chain_batch.weight[global_chain_idx]
+                    chain_local_idx,
+                    soa_chain_batch.kept[global_chain_idx],
+                    kept_status,
+                    soa_chain_batch.weight[global_chain_idx]
                 );
             }
 
