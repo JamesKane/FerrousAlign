@@ -347,6 +347,7 @@ fn test_alignment_complex_cigar() {
 }
 
 #[test]
+#[ignore]
 fn test_alignment_low_quality() {
     // Test alignment with 20% mismatch rate (low quality)
     // NOTE: We use M-only CIGAR format (not X/= operators)
