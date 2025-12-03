@@ -1,8 +1,10 @@
 # SoA Pipeline Concordance Analysis
 
-**Date**: 2025-12-01
+**Date**: 2025-12-01 (Updated: 2025-12-02)
 **Branch**: feature/core-rearch
 **Status**: Research needed - 81% concordance vs BWA-MEM2 baseline
+
+**Latest**: AVX-512 crash FIXED (2025-12-02) - misaligned buffer allocation issue resolved
 
 ## Summary
 

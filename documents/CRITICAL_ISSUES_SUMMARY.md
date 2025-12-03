@@ -1,5 +1,24 @@
 # Critical Issues Summary - MUST READ
 
+## ✅ RESOLVED: AVX-512 Crash (2025-12-02)
+
+### The Problem
+**AVX-512 kernel crashed with SIGSEGV** during mate rescue alignment when processing sequences exceeding workspace capacity.
+
+**Root Cause**: Misaligned buffer allocation
+- Workspace pre-allocated for 128bp sequences (insufficient for modern 150bp PE reads)
+- Fallback used `vec![0u8]` which provides only ~48-byte alignment
+- AVX-512 `_mm512_store_si512` requires 64-byte alignment → **CRASH**
+
+### The Fix (commit e763e4a)
+1. Added `allocate_aligned_buffer()` helper using `std::alloc::alloc` with 64-byte Layout
+2. Increased `KSW_MAX_SEQ_LEN` from 128 to 512 bytes
+3. Added unit tests validating alignment requirements
+
+**Status**: ✅ **FIXED** - validated on 10K and 100K read datasets
+
+---
+
 ## 🔴 CRITICAL: Missing Mate Validation
 
 ### The Problem

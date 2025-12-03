@@ -2,16 +2,22 @@
 Summary Tables
 ========================================
 
+**NOTE**: AVX-512 crash was **FIXED** on 2025-12-02 (commit e763e4a)
+- Root cause: Misaligned buffer allocation (Vec<u8> provides ~48-byte alignment, AVX-512 requires 64-byte)
+- Solution: Added aligned allocation helper using std::alloc::alloc with 64-byte Layout
+- Status: AVX-512 now runs successfully on 10K and 100K read datasets
+- Benchmarks below show **pre-fix** crash results; need to re-run for updated metrics
+
 ### ⏱️ Alignment Performance
 
-| Tool         | Reference |  SIMD   | Wall Time | Max Memory (GB) | Throughput (reads/s) |
-|:-------------|:----------|:-------:|:---------:|:---------------:|:--------------------:|
-| **AVX2**     | GRCh38    | 256-bit |  2:10.91  |      38.00      |        61,897        |
-| **AVX2**     | CHM13v2.0 | 256-bit |  2:27.10  |      41.16      |        54,713        |
-| **AVX512**   | GRCh38    | 512-bit |  1:21.82  |      19.52      |     ** CRASH **      |
-| **AVX512**   | CHM13v2.0 | 512-bit |  1:27.68  |      19.64      |     ** CRASH **      |
-| **BWA-MEM2** | GRCh38    |   N/A   |  1:46.27  |      20.31      |        75,770        |
-| **BWA-MEM2** | CHM13v2.0 |   N/A   |  2:24.42  |      21.94      |        55,554        |
+| Tool         | Reference |  SIMD   | Wall Time | Max Memory (GB) | Throughput (reads/s) | Status |
+|:-------------|:----------|:-------:|:---------:|:---------------:|:--------------------:|:------:|
+| **AVX2**     | GRCh38    | 256-bit |  2:10.91  |      38.00      |        61,897        | ✅ |
+| **AVX2**     | CHM13v2.0 | 256-bit |  2:27.10  |      41.16      |        54,713        | ✅ |
+| **AVX512**   | GRCh38    | 512-bit |  1:21.82  |      19.52      |     ** CRASH **      | ✅ FIXED |
+| **AVX512**   | CHM13v2.0 | 512-bit |  1:27.68  |      19.64      |     ** CRASH **      | ✅ FIXED |
+| **BWA-MEM2** | GRCh38    |   N/A   |  1:46.27  |      20.31      |        75,770        | ✅ |
+| **BWA-MEM2** | CHM13v2.0 |   N/A   |  2:24.42  |      21.94      |        55,554        | ✅ |
 
 ### 1. 1. AVX2 on GRCh38 - Detailed Metrics
 
