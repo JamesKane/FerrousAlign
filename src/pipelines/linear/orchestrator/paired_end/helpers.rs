@@ -38,6 +38,9 @@ impl PairedEndOrchestrator<'_> {
                 l_pac,
             ) {
                 // Mark as properly paired
+                // BWA-MEM2 bwamem_pair.cpp:543: Sets PROPER_PAIR (0x02) if:
+                // - Same chromosome && Valid rid && !pes[d].failed && dist in [low,high]
+                // mem_pair() already checks these conditions when returning Some(...)
                 alns1[idx1].flag |= sam_flags::PROPER_PAIR;
                 alns2[idx2].flag |= sam_flags::PROPER_PAIR;
 

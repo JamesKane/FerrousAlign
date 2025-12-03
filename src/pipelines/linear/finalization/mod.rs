@@ -25,3 +25,8 @@ pub use alignment::Alignment;
 pub use redundancy::{remove_redundant_alignments, alignment_ref_length};
 pub use secondary::mark_secondary_alignments;
 pub use tags::{generate_xa_tags, generate_sa_tags};
+
+// Re-export is_alternate_contig as a free function for use in mate rescue
+pub fn is_alternate_contig(ref_name: &str) -> bool {
+    Alignment::is_alternate_contig(ref_name)
+}

@@ -2152,6 +2152,12 @@ fn append_rescue_result_to_soa(
     soa.hashes.push(0);
     soa.frac_reps.push(0.0);
 
+    // Check if this is an alternate contig
+    let is_alt = crate::pipelines::linear::finalization::is_alternate_contig(
+        &job.anchor_ref_name
+    );
+    soa.is_alts.push(is_alt);
+
     // Update read_alignment_boundaries
     let (old_start, old_count) = soa.read_alignment_boundaries[read_idx];
     soa.read_alignment_boundaries[read_idx] = (old_start, old_count + 1);
