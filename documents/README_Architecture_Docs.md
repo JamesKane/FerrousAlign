@@ -167,8 +167,15 @@ src/pipelines/linear/
 
 ### Existing Architecture Docs
 - `RedesignStrategy.md` - SIMD kernel unification plan
-- `SOA_End_to_End.md` - SoA pipeline design (completed in v0.7.0)
+- `SOA_End_to_End.md` - SoA pipeline design (completed in v0.7.0, **updated for hybrid architecture**)
 - `SOA_Transition.md` - SoA migration checklist
+
+### Critical Architectural Discovery (v0.7.0)
+**Hybrid AoS/SoA Architecture**: During paired-end integration, we discovered that **pure SoA pairing has a fundamental indexing bug** that causes 96% duplicate reads. The solution is a **hybrid architecture**:
+- **SoA for alignment & mate rescue** (SIMD batching benefits)
+- **AoS for pairing & output** (correct per-read indexing)
+
+See `dev_notes/HYBRID_AOS_SOA_STATUS.md` for details. This impacts future pipeline designs.
 
 ### Future Roadmaps
 - `ARM_SVE_SME_Roadmap.md` - ARM SIMD support

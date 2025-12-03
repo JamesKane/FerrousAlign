@@ -871,6 +871,29 @@ pub fn write_sam_records_paired_soa<W: Write>(
 
     let mut records_written = 0;
 
+    eprintln!("[SAM_OUTPUT] write_sam_records_paired_soa: {} reads, batch1_len={}, batch2_len={}, result1_reads={}, result2_reads={}",
+        num_reads, soa_batch1.len(), soa_batch2.len(), soa_result1.num_reads(), soa_result2.num_reads());
+
+    // DEBUG: Check for duplicate alignment boundaries
+    let mut aln_idx_seen = std::collections::HashSet::new();
+    for read_idx in 0..num_reads {
+        let (aln_start1, num_alns1) = soa_result1.read_alignment_boundaries[read_idx];
+        let (aln_start2, num_alns2) = soa_result2.read_alignment_boundaries[read_idx];
+
+        for i in 0..num_alns1 {
+            let aln_idx = aln_start1 + i;
+            if !aln_idx_seen.insert(aln_idx) {
+                eprintln!("[SAM_OUTPUT] DUPLICATE alignment index {} for read_idx={} R1", aln_idx, read_idx);
+            }
+        }
+        for i in 0..num_alns2 {
+            let aln_idx = aln_start2 + i;
+            if !aln_idx_seen.insert(aln_idx + 100000) { // Offset to separate R1/R2
+                eprintln!("[SAM_OUTPUT] DUPLICATE alignment index {} for read_idx={} R2", aln_idx, read_idx);
+            }
+        }
+    }
+
     // Process each read pair
     for read_idx in 0..num_reads {
         let (aln_start1, num_alns1) = soa_result1.read_alignment_boundaries[read_idx];
@@ -945,6 +968,14 @@ pub fn write_sam_records_paired_soa<W: Write>(
             select_output_indices_soa(soa_result1, aln_start1, num_alns1, primary_idx1, opt);
         let output_indices2 =
             select_output_indices_soa(soa_result2, aln_start2, num_alns2, primary_idx2, opt);
+
+        // DEBUG: Check for duplicate indices in output
+        if output_indices1.len() != output_indices1.iter().collect::<std::collections::HashSet<_>>().len() {
+            eprintln!("[SAM_OUTPUT] DUPLICATE indices in output_indices1 for read_idx={}: {:?}", read_idx, output_indices1);
+        }
+        if output_indices2.len() != output_indices2.iter().collect::<std::collections::HashSet<_>>().len() {
+            eprintln!("[SAM_OUTPUT] DUPLICATE indices in output_indices2 for read_idx={}: {:?}", read_idx, output_indices2);
+        }
 
         // Write R1 alignments
         for &aln_idx in &output_indices1 {

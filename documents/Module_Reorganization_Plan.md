@@ -4,9 +4,14 @@
 
 This document provides a concrete plan for reorganizing FerrousAlign's codebase to implement the main loop abstraction proposed in `Main_Loop_Abstraction_Proposal.md`. It includes file-by-file refactoring steps, dependency analysis, and a phased migration strategy.
 
-**Target Version**: v0.8.0 (post-SoA integration)
+**Target Version**: v0.8.0 (post-hybrid architecture integration)
 
-**Status**: Planning (pending v0.7.0 completion)
+**Status**: Planning (v0.7.0 complete - hybrid AoS/SoA architecture implemented)
+
+**⚠️ Architectural Note**: v0.7.0 established that paired-end processing requires a **hybrid AoS/SoA architecture**. The reorganization must preserve:
+- AoS paths for pairing logic (correctness)
+- SoA paths for compute-heavy stages (performance)
+- Efficient conversions between representations
 
 ---
 

@@ -151,16 +151,23 @@ This document provides a comprehensive flow diagram from disk read through singl
                                                      │
                                                      ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                       STAGE 2: PAIRING LOGIC                          │
-│                      (paired/pairing.rs)                              │
+│              STAGE 2: PAIRING LOGIC (HYBRID AoS/SoA)                  │
+│                      (paired/paired_end.rs)                           │
+│                                                                        │
+│  ⚠️ CRITICAL: Pure SoA pairing causes indexing bugs (96% duplicates)  │
+│     Solution: Hybrid architecture with AoS for pairing correctness    │
 │                                                                        │
 │  1. De-interleave: split alignments into R1/R2                        │
-│  2. pair_alignments_soa(): Score all R1×R2 combinations               │
+│  2. **SoA→AoS**: Convert to per-read Vec<Alignment> format            │
+│  3. **pairing_aos::mem_pair()**: Score R1×R2 combinations (AoS)       │
 │     • Proper pairs: score = AS_R1 + AS_R2 - pen_unpaired             │
 │     • Discordant: score = AS_R1 + AS_R2                              │
-│  3. mate_rescue_soa(): Smith-Waterman rescue for unmapped mates       │
-│  4. finalize_pairs_soa(): Select best pair, mark flags                │
-│     • Set PAIRED, PROPER_PAIR, MREVERSE, RNEXT, PNEXT, TLEN          │
+│     • Mark PROPER_PAIR flags, set mate info (RNEXT, PNEXT)           │
+│  4. **AoS→SoA**: Convert back for SIMD mate rescue                    │
+│  5. **mate_rescue_soa()**: Smith-Waterman rescue (SoA batching)       │
+│  6. **SoA→AoS**: Convert back for output (correct per-read indexing)  │
+│                                                                        │
+│  Performance: ~2% conversion overhead, but ensures correctness        │
 └───────────────────────────────┬──────────────────────────────────────┘
                                 │
                                 ▼
@@ -412,9 +419,14 @@ SAM text output (via AsyncChannelWriter)
 - **Single-End**: `(10MB × n_threads) / avg_read_len` (src/pipelines/linear/single_end.rs:169-170)
 - **Paired-End**: 512 pairs for bootstrap, 500K pairs for main (src/pipelines/linear/paired/paired_end.rs:43, opt.batch_size)
 
-### 3. SoA vs AoS Processing
-- **Current**: 100% SoA pipeline (AoS paths removed)
+### 3. SoA vs AoS Processing ⚠️ **HYBRID ARCHITECTURE (v0.7.0)**
+- **Single-End**: 100% SoA pipeline (optimal)
+- **Paired-End**: **Hybrid AoS/SoA** (required for correctness)
+  - SoA: Alignment, mate rescue (SIMD batching)
+  - AoS: Pairing, output (correct per-read indexing)
+  - **Why**: Pure SoA pairing has indexing bug (96% duplicates)
 - **SoA advantages**: SIMD efficiency, cache locality, reduced allocations
+- **AoS advantages**: Correct per-read boundaries for pairing logic
 
 ### 4. Parallel Chunking
 - **Location**: `process_batch_parallel()` in both `single_end.rs` and `paired_end.rs`

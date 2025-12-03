@@ -4,7 +4,9 @@
 
 This document proposes a refactoring of FerrousAlign's pipeline into a clean, modular architecture with clear separation of concerns. The goal is to replace the current sprawling `process_single_end()` and `process_paired_end()` functions with a unified orchestrator that coordinates well-defined stages.
 
-**Status**: Proposal (v0.7.0-alpha refactoring target)
+**Status**: Proposal (v0.8.0 refactoring target)
+
+**⚠️ Important**: The hybrid AoS/SoA architecture discovery (v0.7.0) impacts this proposal. Paired-end pairing **requires** AoS for correctness, while compute-heavy stages benefit from SoA. The orchestrator must support seamless AoS↔SoA conversions. See `SOA_End_to_End.md` for details.
 
 ---
 

@@ -1,10 +1,10 @@
 # End-to-End Structure-of-Arrays (SoA) Pipeline
 
-## Status: ✅ **COMPLETE FOR SINGLE-END READS** (as of 2025-12-01)
+## Status: ⚠️ **HYBRID ARCHITECTURE REQUIRED** (updated 2025-12-03)
 
-All PRs (PR1-PR4) have been successfully implemented and tested. The end-to-end SoA pipeline is now operational for single-end read processing with zero AoS conversions from FASTQ input through SAM output.
+All PRs (PR1-PR4) have been successfully implemented and tested. The end-to-end SoA pipeline is operational for single-end read processing with zero AoS conversions from FASTQ input through SAM output.
 
-**Completed Work:**
+**✅ Completed Work:**
 - ✅ PR1: SoA-aware I/O Layer (`SoaFastqReader` in `src/core/io/soa_readers.rs`)
 - ✅ PR2: SoA Seeding and Chaining (`find_seeds_batch`, `chain_seeds_batch` in `src/pipelines/linear/`)
 - ✅ PR3: End-to-End Integration (`process_sub_batch_internal_soa` in `orchestration_soa.rs`)
@@ -12,15 +12,27 @@ All PRs (PR1-PR4) have been successfully implemented and tested. The end-to-end 
 - ✅ Cleanup: Removed temporary AoS bridge functions
 - ✅ Testing: Verified identical SAM output between AoS and SoA pipelines
 
-**Usage:**
-```bash
-FERROUS_SOA_PIPELINE=1 ./target/release/ferrous-align mem ref.idx reads.fq > output.sam
+**🔴 CRITICAL ARCHITECTURAL DISCOVERY (Dec 2025):**
+
+During paired-end integration, we discovered that **pure SoA pairing has a fundamental indexing bug** that causes 96% duplicate reads in output. The root cause is that SoA flatten all alignments into a single array, losing per-read boundaries during pairing.
+
+**Solution: Hybrid AoS/SoA Architecture**
+- ✅ **SoA for alignment & mate rescue** (preserves SIMD batching benefits ~11% of pairs)
+- ✅ **AoS for pairing & output** (correct per-read indexing)
+- ✅ Conversion overhead: ~2% (acceptable trade-off for correctness)
+
+**Paired-End Pipeline Flow:**
+```
+FASTQ → SoA Alignment → AoS Pairing → SoA Mate Rescue → AoS Output → SAM
+        [SIMD batching]  [correct]   [SIMD batching]   [correct]
 ```
 
-**Remaining Work:**
-- Extend SoA pipeline to paired-end mode
-- Performance benchmarking and optimization
-- Remove legacy AoS code paths (PR5)
+See `dev_notes/HYBRID_AOS_SOA_STATUS.md` for detailed analysis.
+
+**Updated Remaining Work:**
+- ✅ Paired-end mode with hybrid architecture (v0.7.0)
+- 🔄 Performance benchmarking (in progress)
+- ⏸️ Remove legacy AoS code paths (deferred - AoS needed for correctness)
 
 ## Objective
 This document outlines the architectural changes required to make the FerrousAlign pipeline a zero-overhead, end-to-end Structure-of-Arrays (SoA) data processing system. The goal is to stream data from disk directly into SoA buffers, process it through all pipeline stages in SoA format, and write the final output from SoA data, eliminating all AoS-to-SoA conversion overhead.
@@ -111,4 +123,4 @@ The final stage of the pipeline is to write the alignments to a SAM/BAM file. Th
   - **Mitigation**: We will benchmark each PR to closely monitor performance and identify any regressions early. The existing benchmark suite will be adapted to test the new SoA paths.
 
 - **Data Locality**: While SoA is generally better for SIMD, some pipeline stages might benefit from the data locality of AoS.
-  - **Mitigation**: We will analyze the performance of each stage and, if necessary, consider hybrid AoS/SoA approaches for specific parts of the pipeline where it makes sense. However, the default will be a pure SoA approach.
+  - **Mitigation**: ✅ **VALIDATED (Dec 2025)**: Paired-end pairing **requires** AoS for correctness. Pure SoA pairing causes indexing bugs. The hybrid architecture (SoA for compute-heavy stages, AoS for pairing/output) provides the best balance of performance and correctness.

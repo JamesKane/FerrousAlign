@@ -17,10 +17,9 @@ use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::insert_size::{InsertSizeStats, bootstrap_insert_size_stats_soa};
 use super::mate_rescue::mate_rescue_soa;
-use super::pairing::{finalize_pairs_soa, pair_alignments_soa};
+use super::pairing_aos; // AoS pairing for hybrid architecture
 use crate::compute::ComputeContext;
 use crate::compute::simd_abstraction::simd::SimdEngineType;
-use crate::io::sam_output::write_sam_records_paired_soa;
 use crate::io::soa_readers::SoaFastqReader;
 use crate::pipelines::linear::finalization::sam_flags;
 use crate::utils::cputime;
@@ -46,6 +45,51 @@ const BOOTSTRAP_BATCH_SIZE: usize = 512;
 // Paired-end alignment constants
 #[allow(dead_code)] // Reserved for future use in alignment scoring
 const MIN_RATIO: f64 = 0.8; // Minimum ratio for unique alignment
+
+/// Set mate information for a pair of alignments (AoS version)
+///
+/// Mirrors the logic in finalize_pairs_soa but operates on individual Alignment structs.
+/// Sets RNEXT, PNEXT, and mate-related flags (PAIRED, FIRST/SECOND_IN_PAIR, MATE_REVERSE, MATE_UNMAPPED).
+///
+/// # Arguments
+/// * `aln` - The alignment to update with mate information
+/// * `mate` - The mate's alignment
+/// * `is_first` - True if `aln` is from read 1 (R1), false if from read 2 (R2)
+/// * `l_pac` - Length of packed reference (unused but kept for consistency with SoA version)
+fn set_mate_info_aos(
+    aln: &mut crate::pipelines::linear::finalization::Alignment,
+    mate: &crate::pipelines::linear::finalization::Alignment,
+    is_first: bool,
+    _l_pac: i64,
+) {
+    // Set mate reference name (use "=" if same chromosome)
+    aln.rnext = if mate.ref_name == aln.ref_name {
+        "=".to_string()
+    } else {
+        mate.ref_name.clone()
+    };
+
+    // Set mate position
+    aln.pnext = mate.pos;
+
+    // Set paired-end flags
+    aln.flag |= sam_flags::PAIRED;
+    if is_first {
+        aln.flag |= sam_flags::FIRST_IN_PAIR;
+    } else {
+        aln.flag |= sam_flags::SECOND_IN_PAIR;
+    }
+
+    // Set mate reverse flag
+    if (mate.flag & sam_flags::REVERSE) != 0 {
+        aln.flag |= sam_flags::MATE_REVERSE;
+    }
+
+    // Set mate unmapped flag
+    if mate.mapq == 0 && mate.score == 0 {
+        aln.flag |= sam_flags::MATE_UNMAPPED;
+    }
+}
 
 /// Process a batch in parallel chunks
 ///
@@ -359,21 +403,68 @@ pub fn process_paired_end(
         bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac)
     };
 
-    // Stage 3: Pairing and mate rescue (pure SoA)
-    let mut soa_result1 = soa_result1;
-    let mut soa_result2 = soa_result2;
+    // Stage 3: HYBRID AoS/SoA pipeline
+    // Convert SoA results to AoS for pairing (avoids index collision bug)
+    let mut alignments1 = soa_result1.to_aos();
+    let mut alignments2 = soa_result2.to_aos();
 
-    let (primary_r1, primary_r2) = pair_alignments_soa(
-        &mut soa_result1,
-        &mut soa_result2,
-        &current_stats,
-        opt.a, // Match score
-        l_pac,
-    );
+    // Stage 3.1: AoS pairing (correct per-read indexing)
+    for read_idx in 0..alignments1.len() {
+        let alns1 = &mut alignments1[read_idx];
+        let alns2 = &mut alignments2[read_idx];
+
+        if let Some((idx1, idx2, _pair_score, _sub_score)) = pairing_aos::mem_pair(
+            &current_stats,
+            alns1,
+            alns2,
+            opt.a, // Match score
+            batch_start_id + read_idx as u64,
+            l_pac,
+        ) {
+            // Mark as properly paired
+            alns1[idx1].flag |= sam_flags::PROPER_PAIR;
+            alns2[idx2].flag |= sam_flags::PROPER_PAIR;
+
+            // Set mate information for both reads
+            let (aln1, aln2) = (&alns1[idx1].clone(), &alns2[idx2].clone());
+            set_mate_info_aos(&mut alns1[idx1], &aln2, true, l_pac);
+            set_mate_info_aos(&mut alns2[idx2], &aln1, false, l_pac);
+        } else if !alns1.is_empty() && !alns2.is_empty() {
+            // Singleton: both mapped but not properly paired
+            // Still need to set mate info for SAM spec compliance (GATK validation)
+            let (aln1, aln2) = (&alns1[0].clone(), &alns2[0].clone());
+            set_mate_info_aos(&mut alns1[0], &aln2, true, l_pac);
+            set_mate_info_aos(&mut alns2[0], &aln1, false, l_pac);
+        }
+    }
+
+    // Stage 3.2: Mate rescue (convert back to SoA temporarily for SIMD batching)
+    // Round-trip: AoS → SoA (for rescue) → AoS (for output)
+    let mut soa_for_rescue1 = SoAAlignmentResult::from_aos(&alignments1);
+    let mut soa_for_rescue2 = SoAAlignmentResult::from_aos(&alignments2);
+
+    // Track primary alignments for rescue (find index of properly paired alignment per read)
+    let primary_r1: Vec<usize> = (0..soa_for_rescue1.num_reads())
+        .map(|read_idx| {
+            let (start, count) = soa_for_rescue1.read_alignment_boundaries[read_idx];
+            (start..start + count)
+                .find(|&idx| soa_for_rescue1.flags[idx] & sam_flags::PROPER_PAIR != 0)
+                .unwrap_or(start) // Default to first alignment if none properly paired
+        })
+        .collect();
+
+    let primary_r2: Vec<usize> = (0..soa_for_rescue2.num_reads())
+        .map(|read_idx| {
+            let (start, count) = soa_for_rescue2.read_alignment_boundaries[read_idx];
+            (start..start + count)
+                .find(|&idx| soa_for_rescue2.flags[idx] & sam_flags::PROPER_PAIR != 0)
+                .unwrap_or(start)
+        })
+        .collect();
 
     let rescued_first = mate_rescue_soa(
-        &mut soa_result1,
-        &mut soa_result2,
+        &mut soa_for_rescue1,
+        &mut soa_for_rescue2,
         &first_batch1,
         &first_batch2,
         &primary_r1,
@@ -387,38 +478,50 @@ pub fn process_paired_end(
     );
     log::info!("First batch: {rescued_first} pairs rescued");
 
-    // Stage 4: Finalize pairs
-    finalize_pairs_soa(
-        &mut soa_result1,
-        &mut soa_result2,
-        &primary_r1,
-        &primary_r2,
-        &current_stats,
-        l_pac,
-    );
+    // Convert back to AoS after rescue
+    alignments1 = soa_for_rescue1.to_aos();
+    alignments2 = soa_for_rescue2.to_aos();
 
-    // Stage 5: Output first batch using paired-end output
-    // Extract is_properly_paired from primary alignment flags
-    let is_properly_paired: Vec<bool> = primary_r1
-        .iter()
-        .map(|&idx| soa_result1.flags[idx] & sam_flags::PROPER_PAIR != 0)
-        .collect();
+    // Stage 4: Output first batch using AoS (avoids SoA index bugs)
+    // No need to call finalize_pairs_soa since AoS pairing already set correct flags
+    let final_alignments1 = alignments1;
+    let final_alignments2 = alignments2;
 
-    let first_batch_records =
-        write_sam_records_paired_soa(
-            writer,
-            &soa_result1,
-            &soa_result2,
-            &first_batch1,
-            &first_batch2,
-            &is_properly_paired,
-            &opt,
-            None,
-        )
-        .unwrap_or_else(|e| {
-            log::error!("Error writing first batch: {e}");
-            0
-        });
+    // Write alignments using direct SAM output (per-read iteration)
+    let mut first_batch_records = 0;
+    for read_idx in 0..final_alignments1.len() {
+        let alns1 = &final_alignments1[read_idx];
+        let alns2 = &final_alignments2[read_idx];
+
+        // Get sequences and qualities from original batch
+        let (seq_start1, seq_len1) = first_batch1.read_boundaries[read_idx];
+        let seq1 = std::str::from_utf8(&first_batch1.seqs[seq_start1..seq_start1 + seq_len1])
+            .unwrap_or("");
+        let qual1 =
+            std::str::from_utf8(&first_batch1.quals[seq_start1..seq_start1 + seq_len1])
+                .unwrap_or("");
+
+        let (seq_start2, seq_len2) = first_batch2.read_boundaries[read_idx];
+        let seq2 = std::str::from_utf8(&first_batch2.seqs[seq_start2..seq_start2 + seq_len2])
+            .unwrap_or("");
+        let qual2 =
+            std::str::from_utf8(&first_batch2.quals[seq_start2..seq_start2 + seq_len2])
+                .unwrap_or("");
+
+        // Write R1 primary alignment (or unmapped if none)
+        if let Some(primary_aln) = alns1.first() {
+            writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq1, qual1))
+                .unwrap_or_else(|e| log::error!("Write error: {e}"));
+            first_batch_records += 1;
+        }
+
+        // Write R2 primary alignment (or unmapped if none)
+        if let Some(primary_aln) = alns2.first() {
+            writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq2, qual2))
+                .unwrap_or_else(|e| log::error!("Write error: {e}"));
+            first_batch_records += 1;
+        }
+    }
     // Log per-batch timing (matches BWA-MEM2 format)
     let batch_cpu_elapsed = cputime() - batch_start_cpu;
     let batch_wall_elapsed = batch_start_wall.elapsed();
@@ -589,25 +692,70 @@ pub fn process_paired_end(
         // SoA functions handle partial batches internally
         current_stats = bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac);
 
-        // PHASE 2: Pairing (pure SoA)
+        // PHASE 2: HYBRID AoS/SoA Pairing
         let pairing_start = Instant::now();
         let pairing_start_cpu = cputime();
 
-        let mut soa_result1 = soa_result1;
-        let mut soa_result2 = soa_result2;
+        // Convert SoA results to AoS for pairing (avoids index collision bug)
+        let mut alignments1 = soa_result1.to_aos();
+        let mut alignments2 = soa_result2.to_aos();
 
-        let (primary_r1, primary_r2) = pair_alignments_soa(
-            &mut soa_result1,
-            &mut soa_result2,
-            &current_stats,
-            opt.a, // Match score
-            l_pac,
-        );
+        // PHASE 2.1: AoS pairing (correct per-read indexing)
+        for read_idx in 0..alignments1.len() {
+            let alns1 = &mut alignments1[read_idx];
+            let alns2 = &mut alignments2[read_idx];
 
-        // PHASE 2.5: Mate rescue (pure SoA)
+            if let Some((idx1, idx2, _pair_score, _sub_score)) = pairing_aos::mem_pair(
+                &current_stats,
+                alns1,
+                alns2,
+                opt.a, // Match score
+                batch_start_id + read_idx as u64,
+                l_pac,
+            ) {
+                // Mark as properly paired
+                alns1[idx1].flag |= sam_flags::PROPER_PAIR;
+                alns2[idx2].flag |= sam_flags::PROPER_PAIR;
+
+                // Set mate information for both reads
+                let (aln1, aln2) = (&alns1[idx1].clone(), &alns2[idx2].clone());
+                set_mate_info_aos(&mut alns1[idx1], &aln2, true, l_pac);
+                set_mate_info_aos(&mut alns2[idx2], &aln1, false, l_pac);
+            } else if !alns1.is_empty() && !alns2.is_empty() {
+                // Singleton: both mapped but not properly paired
+                // Still need to set mate info for SAM spec compliance (GATK validation)
+                let (aln1, aln2) = (&alns1[0].clone(), &alns2[0].clone());
+                set_mate_info_aos(&mut alns1[0], &aln2, true, l_pac);
+                set_mate_info_aos(&mut alns2[0], &aln1, false, l_pac);
+            }
+        }
+
+        // PHASE 2.5: Mate rescue (convert to SoA temporarily for SIMD batching)
+        let mut soa_for_rescue1 = SoAAlignmentResult::from_aos(&alignments1);
+        let mut soa_for_rescue2 = SoAAlignmentResult::from_aos(&alignments2);
+
+        // Track primary alignments for rescue
+        let primary_r1: Vec<usize> = (0..soa_for_rescue1.num_reads())
+            .map(|read_idx| {
+                let (start, count) = soa_for_rescue1.read_alignment_boundaries[read_idx];
+                (start..start + count)
+                    .find(|&idx| soa_for_rescue1.flags[idx] & sam_flags::PROPER_PAIR != 0)
+                    .unwrap_or(start)
+            })
+            .collect();
+
+        let primary_r2: Vec<usize> = (0..soa_for_rescue2.num_reads())
+            .map(|read_idx| {
+                let (start, count) = soa_for_rescue2.read_alignment_boundaries[read_idx];
+                (start..start + count)
+                    .find(|&idx| soa_for_rescue2.flags[idx] & sam_flags::PROPER_PAIR != 0)
+                    .unwrap_or(start)
+            })
+            .collect();
+
         let rescued = mate_rescue_soa(
-            &mut soa_result1,
-            &mut soa_result2,
+            &mut soa_for_rescue1,
+            &mut soa_for_rescue2,
             &batch1,
             &batch2,
             &primary_r1,
@@ -621,42 +769,58 @@ pub fn process_paired_end(
         );
         total_rescued += rescued;
 
-        // PHASE 2.75: Finalize pairs (pure SoA)
-        finalize_pairs_soa(
-            &mut soa_result1,
-            &mut soa_result2,
-            &primary_r1,
-            &primary_r2,
-            &current_stats,
-            l_pac,
-        );
+        // Convert back to AoS after rescue
+        alignments1 = soa_for_rescue1.to_aos();
+        alignments2 = soa_for_rescue2.to_aos();
+
         let pairing_cpu = cputime() - pairing_start_cpu;
         let pairing_wall = pairing_start.elapsed();
 
-        // PHASE 3: Output (pure SoA with paired-end logic)
+        // PHASE 3: Output using AoS (avoids SoA index bugs)
+        // No need to call finalize_pairs_soa since AoS pairing already set correct flags
         let output_start = Instant::now();
         let output_start_cpu = cputime();
 
-        // Extract is_properly_paired from primary alignment flags
-        let is_properly_paired: Vec<bool> = primary_r1
-            .iter()
-            .map(|&idx| soa_result1.flags[idx] & sam_flags::PROPER_PAIR != 0)
-            .collect();
+        let final_alignments1 = alignments1;
+        let final_alignments2 = alignments2;
 
-        let records = write_sam_records_paired_soa(
-            writer,
-            &soa_result1,
-            &soa_result2,
-            &batch1,
-            &batch2,
-            &is_properly_paired,
-            &opt,
-            None,
-        )
-        .unwrap_or_else(|e| {
-            log::error!("Error writing batch: {e}");
-            0
-        });
+        // Write alignments using direct SAM output (per-read iteration)
+        let mut records = 0;
+        for read_idx in 0..final_alignments1.len() {
+            let alns1 = &final_alignments1[read_idx];
+            let alns2 = &final_alignments2[read_idx];
+
+            // Get sequences and qualities from original batch
+            let (seq_start1, seq_len1) = batch1.read_boundaries[read_idx];
+            let seq1 =
+                std::str::from_utf8(&batch1.seqs[seq_start1..seq_start1 + seq_len1])
+                    .unwrap_or("");
+            let qual1 =
+                std::str::from_utf8(&batch1.quals[seq_start1..seq_start1 + seq_len1])
+                    .unwrap_or("");
+
+            let (seq_start2, seq_len2) = batch2.read_boundaries[read_idx];
+            let seq2 =
+                std::str::from_utf8(&batch2.seqs[seq_start2..seq_start2 + seq_len2])
+                    .unwrap_or("");
+            let qual2 =
+                std::str::from_utf8(&batch2.quals[seq_start2..seq_start2 + seq_len2])
+                    .unwrap_or("");
+
+            // Write R1 primary alignment (or unmapped if none)
+            if let Some(primary_aln) = alns1.first() {
+                writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq1, qual1))
+                    .unwrap_or_else(|e| log::error!("Write error: {e}"));
+                records += 1;
+            }
+
+            // Write R2 primary alignment (or unmapped if none)
+            if let Some(primary_aln) = alns2.first() {
+                writeln!(writer, "{}", primary_aln.to_sam_string_with_seq(seq2, qual2))
+                    .unwrap_or_else(|e| log::error!("Write error: {e}"));
+                records += 1;
+            }
+        }
         let output_cpu = cputime() - output_start_cpu;
         let output_wall = output_start.elapsed();
         total_records += records;

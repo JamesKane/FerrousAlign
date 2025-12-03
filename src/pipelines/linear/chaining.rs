@@ -912,7 +912,7 @@ pub fn filter_chains_batch(
         }
 
         // 3. Apply filtering logic
-        for (chain_iter_idx, &global_chain_idx) in chain_global_indices_for_read.iter().enumerate() {
+        for (_chain_iter_idx, &global_chain_idx) in chain_global_indices_for_read.iter().enumerate() {
             // Check if below minimum weight
             if soa_chain_batch.weight[global_chain_idx] < opt.min_chain_weight {
                 continue; // Discard

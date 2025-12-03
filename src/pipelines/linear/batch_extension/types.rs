@@ -441,6 +441,147 @@ impl SoAAlignmentResult {
     ///
     /// # Returns
     /// A single merged SoAAlignmentResult containing all alignments from all inputs
+    /// Convert SoA representation to Array-of-Structs (per-read alignment vectors)
+    ///
+    /// This is the reverse of convert_alignments_to_soa() and is used to transition
+    /// from SoA (optimal for SIMD computation) to AoS (optimal for per-read operations
+    /// like pairing, rescue, and output).
+    pub fn to_aos(&self) -> Vec<Vec<super::super::finalization::Alignment>> {
+        use super::super::finalization::Alignment;
+
+        let num_reads = self.num_reads();
+        let mut result: Vec<Vec<Alignment>> = Vec::with_capacity(num_reads);
+
+        for read_idx in 0..num_reads {
+            let (aln_start, num_alns) = self.read_alignment_boundaries[read_idx];
+            let mut alignments = Vec::with_capacity(num_alns);
+
+            for i in 0..num_alns {
+                let aln_idx = aln_start + i;
+
+                // Extract CIGAR
+                let (cigar_start, cigar_len) = self.cigar_boundaries[aln_idx];
+                let cigar: Vec<(u8, i32)> = (0..cigar_len)
+                    .map(|j| (self.cigar_ops[cigar_start + j], self.cigar_lens[cigar_start + j]))
+                    .collect();
+
+                // Extract sequence and quality
+                let (seq_start, seq_len) = self.seq_boundaries[aln_idx];
+                let seq = String::from_utf8_lossy(&self.seqs[seq_start..seq_start + seq_len]).to_string();
+                let qual = String::from_utf8_lossy(&self.quals[seq_start..seq_start + seq_len]).to_string();
+
+                // Extract tags
+                let (tag_start, tag_len) = self.tag_boundaries[aln_idx];
+                let tags: Vec<(String, String)> = (0..tag_len)
+                    .map(|j| (self.tag_names[tag_start + j].clone(), self.tag_values[tag_start + j].clone()))
+                    .collect();
+
+                alignments.push(Alignment {
+                    query_name: self.query_names[aln_idx].clone(),
+                    flag: self.flags[aln_idx],
+                    ref_name: self.ref_names[aln_idx].clone(),
+                    ref_id: self.ref_ids[aln_idx],
+                    pos: self.positions[aln_idx],
+                    mapq: self.mapqs[aln_idx],
+                    score: self.scores[aln_idx],
+                    cigar,
+                    rnext: self.rnexts[aln_idx].clone(),
+                    pnext: self.pnexts[aln_idx],
+                    tlen: self.tlens[aln_idx],
+                    seq,
+                    qual,
+                    tags,
+                    query_start: self.query_starts[aln_idx],
+                    query_end: self.query_ends[aln_idx],
+                    seed_coverage: self.seed_coverages[aln_idx],
+                    hash: self.hashes[aln_idx],
+                    frac_rep: self.frac_reps[aln_idx],
+                });
+            }
+
+            result.push(alignments);
+        }
+
+        result
+    }
+
+    /// Convert Array-of-Structs to SoA representation (inverse of to_aos)
+    ///
+    /// This is used to convert AoS alignments back to SoA for operations that benefit
+    /// from SIMD batching, like mate rescue. The conversion temporarily switches to
+    /// SoA layout for computation-intensive operations, then converts back to AoS.
+    ///
+    /// # Arguments
+    /// * `alignments` - Per-read alignment vectors (AoS format)
+    ///
+    /// # Returns
+    /// SoAAlignmentResult with all alignments in SoA layout
+    pub fn from_aos(alignments: &[Vec<super::super::finalization::Alignment>]) -> Self {
+        let num_reads = alignments.len();
+        let total_alignments: usize = alignments.iter().map(|v| v.len()).sum();
+
+        if total_alignments == 0 {
+            let mut result = Self::with_capacity(0, num_reads);
+            // Still need to add empty boundaries for each read
+            for _ in 0..num_reads {
+                result.read_alignment_boundaries.push((0, 0));
+            }
+            return result;
+        }
+
+        let mut result = Self::with_capacity(total_alignments, num_reads);
+
+        for read_alignments in alignments {
+            let alignment_start_idx = result.len();
+
+            for aln in read_alignments {
+                // Scalar fields (one per alignment)
+                result.query_names.push(aln.query_name.clone());
+                result.flags.push(aln.flag);
+                result.ref_names.push(aln.ref_name.clone());
+                result.ref_ids.push(aln.ref_id);
+                result.positions.push(aln.pos);
+                result.mapqs.push(aln.mapq);
+                result.scores.push(aln.score);
+                result.rnexts.push(aln.rnext.clone());
+                result.pnexts.push(aln.pnext);
+                result.tlens.push(aln.tlen);
+                result.query_starts.push(aln.query_start);
+                result.query_ends.push(aln.query_end);
+                result.seed_coverages.push(aln.seed_coverage);
+                result.hashes.push(aln.hash);
+                result.frac_reps.push(aln.frac_rep);
+
+                // CIGAR data
+                let cigar_start = result.cigar_ops.len();
+                for (op, len) in &aln.cigar {
+                    result.cigar_ops.push(*op);
+                    result.cigar_lens.push(*len);
+                }
+                result.cigar_boundaries.push((cigar_start, aln.cigar.len()));
+
+                // Sequence and quality data
+                let seq_start = result.seqs.len();
+                result.seqs.extend(aln.seq.as_bytes());
+                result.quals.extend(aln.qual.as_bytes());
+                result.seq_boundaries.push((seq_start, aln.seq.len()));
+
+                // Tags
+                let tag_start = result.tag_names.len();
+                for (tag_name, tag_value) in &aln.tags {
+                    result.tag_names.push(tag_name.clone());
+                    result.tag_values.push(tag_value.clone());
+                }
+                result.tag_boundaries.push((tag_start, aln.tags.len()));
+            }
+
+            // Record read alignment boundaries
+            result.read_alignment_boundaries.push((alignment_start_idx, read_alignments.len()));
+        }
+
+        result
+    }
+
     pub fn merge_all(results: Vec<Self>) -> Self {
         if results.is_empty() {
             return Self::new();
