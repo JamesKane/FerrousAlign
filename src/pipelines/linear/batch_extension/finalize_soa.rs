@@ -354,7 +354,7 @@ pub fn finalize_alignments_soa(
                 let cigar_result =
                     generate_cigar_from_region(bwa_idx, pac_data, encoded_query, region, opt);
 
-                let (cigar, nm, md_tag) = match cigar_result {
+                let (cigar, nm, md_tag, sw_score) = match cigar_result {
                     Some(result) => result,
                     None => continue,
                 };
@@ -375,7 +375,7 @@ pub fn finalize_alignments_soa(
                     ref_id: region.rid as usize,
                     pos: region.chr_pos,
                     mapq: 60,
-                    score: region.score,
+                    score: sw_score,
                     cigar,
                     rnext: "*".to_string(),
                     pnext: 0,
@@ -383,7 +383,7 @@ pub fn finalize_alignments_soa(
                     seq: String::new(),
                     qual: String::new(),
                     tags: vec![
-                        ("AS".to_string(), format!("i:{}", region.score)),
+                        ("AS".to_string(), format!("i:{}", sw_score)),
                         ("NM".to_string(), format!("i:{nm}")),
                         ("MD".to_string(), format!("Z:{md_tag}")),
                     ],

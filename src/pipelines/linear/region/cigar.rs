@@ -22,13 +22,21 @@ use crate::core::alignment::banded_swa::BandedPairWiseSW;
 /// 3. Run global Smith-Waterman to generate CIGAR
 /// 4. Add soft clips for unaligned query ends
 /// 5. Compute NM (edit distance) and MD tag
+///
+/// ## Returns
+///
+/// Returns `Some((cigar, nm, md_tag, sw_score))` on success, where:
+/// - `cigar`: CIGAR operations as (op, length) pairs
+/// - `nm`: Edit distance (NM tag value)
+/// - `md_tag`: MD tag string
+/// - `sw_score`: Smith-Waterman alignment score (for AS tag)
 pub fn generate_cigar_from_region(
     bwa_idx: &BwaIndex,
     _pac_data: &[u8],
     query: &[u8],
     region: &AlignmentRegion,
     opt: &MemOpt,
-) -> Option<(Vec<(u8, i32)>, i32, String)> {
+) -> Option<(Vec<(u8, i32)>, i32, String, i32)> {
     // Validate region boundaries
     if region.rb >= region.re || region.qb >= region.qe {
         return None;
@@ -99,6 +107,8 @@ pub fn generate_cigar_from_region(
         0,
     );
 
+    // Extract score from SW result for AS tag
+    let sw_score = result.0.score;
     let mut cigar = result.1;
 
     // If reverse strand, reverse the CIGAR
@@ -220,7 +230,7 @@ pub fn generate_cigar_from_region(
         compute_nm_and_md_local(&final_cigar, &forward_ref, aligned_query)
     };
 
-    Some((final_cigar, nm, md))
+    Some((final_cigar, nm, md, sw_score))
 }
 
 /// Infer band width for global alignment
