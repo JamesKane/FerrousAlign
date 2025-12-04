@@ -85,18 +85,20 @@ pub fn merge_scores_to_regions(
             region.frac_rep = chain.frac_rep;
             region.w = opt.w;
 
-            let mut total_score = seed.len * opt.a;
+            let seed_score = seed.len * opt.a;
+            let mut total_score = seed_score;
 
             // Debug logging - log everything, filter later
             log::info!(
-                "EXTENSION_DEBUG: chain_idx={} seed_idx={} seed: qpos={} len={} rpos={} initial_qb={} initial_qe={}",
-                chain_idx, seed_mapping.seed_idx, seed.query_pos, seed.len, seed.ref_pos, region.qb, region.qe
+                "EXTENSION_DEBUG: chain_idx={} seed_idx={} seed: qpos={} len={} rpos={} initial_qb={} initial_qe={} seed_score={}",
+                chain_idx, seed_mapping.seed_idx, seed.query_pos, seed.len, seed.ref_pos, region.qb, region.qe, seed_score
             );
 
             // Process left extension
             if let Some(left_idx) = seed_mapping.left_job_idx {
                 if left_idx < left_scores.len() {
                     let left_score = &left_scores[left_idx];
+                    // h0 baseline: save the score after left extension (includes seed)
                     total_score = left_score.score;
 
                     log::info!(
@@ -127,11 +129,14 @@ pub fn merge_scores_to_regions(
             if let Some(right_idx) = seed_mapping.right_job_idx {
                 if right_idx < right_scores.len() {
                     let right_score = &right_scores[right_idx];
-                    total_score += right_score.score;
+                    // h0 baseline is total_score (includes left + seed)
+                    // Matches BWA-MEM2: a->score = sp->score (bwamem.cpp:2763)
+                    let h0 = total_score;
+                    total_score = right_score.score;  // REPLACE, not add
 
                     log::info!(
-                        "  RIGHT_EXT: score={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip3={}",
-                        right_score.score, right_score.global_score, right_score.query_end_pos,
+                        "  RIGHT_EXT: score={} h0={} delta={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip3={}",
+                        right_score.score, h0, right_score.score - h0, right_score.global_score, right_score.query_end_pos,
                         right_score.target_end_pos, right_score.gtarget_end_pos, opt.pen_clip3
                     );
 
@@ -141,12 +146,16 @@ pub fn merge_scores_to_regions(
                         region.qe = seed.query_pos + seed.len + right_score.query_end_pos;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
-                        log::info!("    Using local: qe={} re={}", region.qe, region.re);
+                        // Matches BWA-MEM2: a->truesc += a->score - sp->h0 (bwamem.cpp:2771)
+                        region.truesc += right_score.score - h0;
+                        log::info!("    Using local: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.score - h0);
                     } else {
                         region.qe = query_len;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
-                        log::info!("    Using global: qe={} re={}", region.qe, region.re);
+                        // Matches BWA-MEM2: a->truesc += sp->gscore - sp->h0 (bwamem.cpp:2775)
+                        region.truesc += right_score.global_score - h0;
+                        log::info!("    Using global: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.global_score - h0);
                     }
                 }
             }
