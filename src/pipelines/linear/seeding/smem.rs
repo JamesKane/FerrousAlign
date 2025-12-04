@@ -25,7 +25,7 @@ unsafe fn prefetch_bwt(bwa_idx: &BwaIndex, smem: &SMEM) {
 /// that should be pre-allocated and reused across calls to avoid allocation overhead.
 pub fn generate_smems_for_strand<'a>(
     bwa_idx: &BwaIndex,
-    _query_name: &str,
+    query_name: &str,
     query_len: usize,
     encoded_query: &[u8],
     is_reverse_complement: bool,
@@ -38,6 +38,9 @@ pub fn generate_smems_for_strand<'a>(
 ) {
     prev_array_buf.clear();
     curr_array_buf.clear();
+
+    // Debug specific read for SMEM comparison
+    let is_debug_read = query_name.contains("10000:26291");
 
     let mut x = 0;
     while x < query_len {
@@ -165,6 +168,19 @@ pub fn generate_smems_for_strand<'a>(
             let smem = prev_array_buf[0];
             let len = smem.query_end - smem.query_start + 1;
             if len >= min_seed_len {
+                if is_debug_read {
+                    log::info!(
+                        "SMEM: {} strand={} pos=[{},{}] len={} interval=[{},{}] size={}",
+                        query_name,
+                        if is_reverse_complement { "RC" } else { "FW" },
+                        smem.query_start,
+                        smem.query_end,
+                        len,
+                        smem.bwt_interval_start,
+                        smem.bwt_interval_end,
+                        smem.interval_size
+                    );
+                }
                 all_smems.push(smem);
             }
         }
