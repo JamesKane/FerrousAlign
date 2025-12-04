@@ -89,7 +89,7 @@ pub fn merge_scores_to_regions(
             let mut total_score = seed_score;
 
             // Debug logging - log everything, filter later
-            log::info!(
+            log::trace!(
                 "EXTENSION_DEBUG: chain_idx={} seed_idx={} seed: qpos={} len={} rpos={} initial_qb={} initial_qe={} seed_score={}",
                 chain_idx, seed_mapping.seed_idx, seed.query_pos, seed.len, seed.ref_pos, region.qb, region.qe, seed_score
             );
@@ -101,7 +101,7 @@ pub fn merge_scores_to_regions(
                     // h0 baseline: save the score after left extension (includes seed)
                     total_score = left_score.score;
 
-                    log::info!(
+                    log::trace!(
                         "  LEFT_EXT: score={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip5={}",
                         left_score.score, left_score.global_score, left_score.query_end_pos,
                         left_score.target_end_pos, left_score.gtarget_end_pos, opt.pen_clip5
@@ -113,12 +113,12 @@ pub fn merge_scores_to_regions(
                         region.qb = seed.query_pos - left_score.query_end_pos;
                         region.rb = seed.ref_pos - left_score.target_end_pos as u64;
                         region.truesc = left_score.score;
-                        log::info!("    Using local: qb={} rb={}", region.qb, region.rb);
+                        log::trace!("    Using local: qb={} rb={}", region.qb, region.rb);
                     } else {
                         region.qb = 0;
                         region.rb = seed.ref_pos - left_score.gtarget_end_pos as u64;
                         region.truesc = left_score.global_score;
-                        log::info!("    Using global: qb={} rb={}", region.qb, region.rb);
+                        log::trace!("    Using global: qb={} rb={}", region.qb, region.rb);
                     }
                 }
             } else if seed.query_pos == 0 {
@@ -134,7 +134,7 @@ pub fn merge_scores_to_regions(
                     let h0 = total_score;
                     total_score = right_score.score;  // REPLACE, not add
 
-                    log::info!(
+                    log::trace!(
                         "  RIGHT_EXT: score={} h0={} delta={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip3={}",
                         right_score.score, h0, right_score.score - h0, right_score.global_score, right_score.query_end_pos,
                         right_score.target_end_pos, right_score.gtarget_end_pos, opt.pen_clip3
@@ -148,14 +148,14 @@ pub fn merge_scores_to_regions(
                             seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
                         // Matches BWA-MEM2: a->truesc += a->score - sp->h0 (bwamem.cpp:2771)
                         region.truesc += right_score.score - h0;
-                        log::info!("    Using local: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.score - h0);
+                        log::trace!("    Using local: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.score - h0);
                     } else {
                         region.qe = query_len;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
                         // Matches BWA-MEM2: a->truesc += sp->gscore - sp->h0 (bwamem.cpp:2775)
                         region.truesc += right_score.global_score - h0;
-                        log::info!("    Using global: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.global_score - h0);
+                        log::trace!("    Using global: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.global_score - h0);
                     }
                 }
             }
@@ -186,7 +186,7 @@ pub fn merge_scores_to_regions(
             region.chr_pos = coords.chr_pos;
             region.is_rev = coords.is_rev;
 
-            log::info!(
+            log::trace!(
                 "  FINAL_REGION: qb={} qe={} rb={} re={} score={} truesc={} seedcov={}",
                 region.qb, region.qe, region.rb, region.re, region.score, region.truesc, region.seedcov
             );
@@ -198,7 +198,7 @@ pub fn merge_scores_to_regions(
         }
 
         if let Some(ref region) = best_region {
-            log::info!(
+            log::trace!(
                 "DEFERRED_REGION: chain_idx={} seed_idx={} qb={} qe={} rb={} re={} score={} chr_pos={} ref={}",
                 region.chain_idx,
                 region.seed_idx,

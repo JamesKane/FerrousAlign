@@ -35,6 +35,7 @@ where
     <E as SwSimd>::V8: std::fmt::Debug,
 {
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
+    debug_assert!(num_jobs <= W, "num_jobs ({}) exceeds SIMD width ({})", num_jobs, W);
 
     // SIMD register width (stride) vs. number of active jobs in this batch
     let stride = W;

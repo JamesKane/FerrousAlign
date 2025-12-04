@@ -1,4 +1,6 @@
 use crate::alignment::banded_swa::OutScore;
+use crate::core::alignment::shared_types::WorkspaceArena;
+use crate::core::alignment::workspace::with_workspace;
 
 // kernel_i16.rs
 pub trait SwSimd16: Copy {
@@ -24,8 +26,8 @@ pub struct KernelParams16<'a> {
     pub batch: &'a [(i32, &'a [u8], i32, &'a [u8], i32, i32)],
     pub query_soa: &'a [i16],
     pub target_soa: &'a [i16],
-    pub qlen: &'a [i16], // Changed to i16
-    pub tlen: &'a [i16], // Changed to i16
+    pub qlen: &'a [i16],  // i16 for seqs > 127bp
+    pub tlen: &'a [i16],  // i16 for seqs > 127bp
     pub h0: &'a [i16],
     pub w: &'a [i8],
     pub max_qlen: i32,
@@ -39,6 +41,7 @@ pub struct KernelParams16<'a> {
     pub m: i32,
 }
 
+/// Entry point for i16 SW kernel using thread-local workspace.
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn sw_kernel_i16<const W: usize, E: SwSimd16>(
@@ -48,7 +51,23 @@ pub unsafe fn sw_kernel_i16<const W: usize, E: SwSimd16>(
 where
     <E as SwSimd16>::V16: std::fmt::Debug,
 {
+    // Use thread-local workspace to obtain reusable aligned rows
+    with_workspace(|ws| sw_kernel_i16_with_ws::<W, E>(params, num_jobs, ws))
+}
+
+/// Shared banded SW kernel (i16) using a reusable `WorkspaceArena` for DP rows.
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn sw_kernel_i16_with_ws<const W: usize, E: SwSimd16>(
+    params: &KernelParams16<'_>,
+    num_jobs: usize,
+    ws: &mut dyn WorkspaceArena,
+) -> Vec<OutScore>
+where
+    <E as SwSimd16>::V16: std::fmt::Debug,
+{
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
+    debug_assert!(num_jobs <= W, "num_jobs ({}) exceeds SIMD width ({})", num_jobs, W);
 
     // SoA stride is always W (SIMD width), even if fewer lanes are active
     let stride = W;
@@ -60,6 +79,17 @@ where
     if qmax == 0 || tmax == 0 || lanes == 0 {
         return Vec::new();
     }
+
+    // Ensure reusable rows from workspace (i16 path)
+    ws.ensure_rows(stride, qmax, tmax, std::mem::size_of::<i16>());
+    let (h_rows, e_rows, _f_rows) = ws
+        .rows_u16()
+        .expect("WorkspaceArena did not provide i16 rows after ensure_rows");
+    debug_assert!(h_rows.len() >= qmax * stride, "H row too small");
+    debug_assert!(e_rows.len() >= qmax * stride, "E row too small");
+
+    let h_ptr = h_rows.as_mut_ptr();
+    let e_ptr = e_rows.as_mut_ptr();
 
     // Score constants (match/mismatch) from matrix similar to MAIN_CODE16 pattern
     let match_score = params.mat[0] as i16;
@@ -82,23 +112,19 @@ where
     let e_del_vec = E::set1_epi16(e_del);
     let e_ins_vec = E::set1_epi16(e_ins);
 
-    // DP buffers (sized to full SIMD width for SoA addressing)
-    let mut h_matrix = vec![0i16; qmax * stride];
-    let mut e_matrix = vec![0i16; qmax * stride];
-
-    // Initialize first row
+    // Initialize first row using workspace buffers
     let h0_vec = E::loadu_epi16(params.h0.as_ptr());
-    E::storeu_epi16(h_matrix.as_mut_ptr(), h0_vec);
+    E::storeu_epi16(h_ptr, h0_vec);
 
     let h1_vec = E::subs_epi16(h0_vec, oe_ins_vec);
     let h1_vec = E::max_epi16(h1_vec, zero);
-    E::storeu_epi16(h_matrix.as_mut_ptr().add(stride), h1_vec);
+    E::storeu_epi16(h_ptr.add(stride), h1_vec);
 
     let mut h_prev = h1_vec;
     for j in 2..qmax {
         let h_curr = E::subs_epi16(h_prev, e_ins_vec);
         let h_curr = E::max_epi16(h_curr, zero);
-        E::storeu_epi16(h_matrix.as_mut_ptr().add(j * stride), h_curr);
+        E::storeu_epi16(h_ptr.add(j * stride), h_curr);
         h_prev = h_curr;
     }
 
@@ -112,13 +138,13 @@ where
     let mut terminated = [false; W];
     let mut terminated_count = 0;
     for lane in 0..lanes {
-        end[lane] = params.qlen[lane];
+        end[lane] = params.qlen[lane] as i16;
     }
 
     let qlen_i16_vec = {
         let mut qlen_i16 = [0i16; W];
         for lane in 0..lanes {
-            qlen_i16[lane] = params.qlen[lane];
+            qlen_i16[lane] = params.qlen[lane] as i16;
         }
         E::loadu_epi16(qlen_i16.as_ptr())
     };
@@ -130,7 +156,7 @@ where
         }
 
         let mut f_vec = zero;
-        let mut h_diag = E::loadu_epi16(h_matrix.as_ptr());
+        let mut h_diag = E::loadu_epi16(h_ptr);
 
         let s1 = E::loadu_epi16(params.target_soa.as_ptr().add(i * stride));
 
@@ -143,7 +169,7 @@ where
             E::loadu_epi16(w_i16.as_ptr())
         };
         let beg_vec = E::loadu_epi16(beg.as_ptr());
-        // let end_vec = E::loadu_epi16(end.as_ptr()); // Unused
+        let end_vec = E::loadu_epi16(end.as_ptr());
 
         let one_vec = E::set1_epi16(1);
 
@@ -153,8 +179,7 @@ where
 
         let i_plus_w = E::adds_epi16(i_vec, w_vec);
         let i_plus_w_plus_1 = E::adds_epi16(i_plus_w, one_vec);
-        // FIXED: Do not constrain by previous end_vec, allow band to move right
-        let mut current_end_vec = i_plus_w_plus_1;
+        let mut current_end_vec = E::min_epi16(end_vec, i_plus_w_plus_1);
         current_end_vec = E::min_epi16(current_end_vec, qlen_i16_vec);
 
         E::storeu_epi16(beg.as_mut_ptr(), current_beg_vec);
@@ -172,8 +197,8 @@ where
         let mut row_max_vec = zero;
 
         for j in 0..qmax {
-            let h_top = E::loadu_epi16(h_matrix.as_ptr().add(j * stride));
-            let e_prev = E::loadu_epi16(e_matrix.as_ptr().add(j * stride));
+            let h_top = E::loadu_epi16(h_ptr.add(j * stride));
+            let e_prev = E::loadu_epi16(e_ptr.add(j * stride));
 
             let h_diag_curr = h_diag;
             h_diag = h_top;
@@ -216,8 +241,8 @@ where
             h_val = E::and_si128(h_val, combined_mask);
             let e_val_masked = E::and_si128(e_val, combined_mask);
 
-            E::storeu_epi16(h_matrix.as_mut_ptr().add(j * stride), h_val);
-            E::storeu_epi16(e_matrix.as_mut_ptr().add(j * stride), e_val_masked);
+            E::storeu_epi16(h_ptr.add(j * stride), h_val);
+            E::storeu_epi16(e_ptr.add(j * stride), e_val_masked);
 
             let is_greater = E::cmpgt_epi16(h_val, max_scores_vec);
             max_scores_vec = E::max_epi16(h_val, max_scores_vec);
@@ -238,7 +263,7 @@ where
             for lane in 0..lanes {
                 if !terminated[lane]
                     && (i as i16) > 0
-                    && (i as i16) < params.tlen[lane]
+                    && (i as i16) < params.tlen[lane] as i16
                     && max_score_vals[lane] - row_max_vals[lane] > params.zdrop as i16
                 {
                     terminated[lane] = true;

@@ -26,7 +26,7 @@ pub fn make_batch_soa<const W: usize>(
         let chunk_base_offset_q = query_soa.len();
         let chunk_base_offset_t = target_soa.len();
 
-        // Determine max lengths for this chunk
+        // Determine max lengths for this chunk (no cap - i16 path handles longer seqs)
         let max_qlen = jobs_chunk
             .iter()
             .map(|j| j.query_len)

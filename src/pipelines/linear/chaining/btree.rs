@@ -217,15 +217,6 @@ pub fn chain_seeds_batch(soa_seed_batch: &SoASeedBatch, opt: &MemOpt, l_pac: u64
                 current_read_chains.push(new_chain);
                 tree.insert(seed_rpos, new_chain_local_idx);
             } else {
-                // Debug: log when a seed is merged
-                let chain_idx_for_logging = tree.interval(&seed_rpos).0.map(|&(_, idx)| idx);
-                if let Some(chain_local_idx) = chain_idx_for_logging {
-                    let chain = &current_read_chains[chain_local_idx];
-                    log::info!(
-                        "CHAIN_MERGE: read_idx={} seed_idx={} merged into chain {} (new_score={})",
-                        read_idx, global_seed_idx, chain_local_idx, chain.score
-                    );
-                }
             }
         }
 
