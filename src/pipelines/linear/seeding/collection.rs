@@ -282,7 +282,10 @@ pub fn find_seeds_batch(
         log_smems_debug(query_name, "SMEM_OVERLAP", &unique_filtered_smems, 0);
 
         let mut sorted_smems = unique_filtered_smems;
-        sorted_smems.sort_by_key(|smem| -(smem.query_end - smem.query_start + 1));
+        // Sort SMEMs by (start_pos, end_pos) to match BWA-MEM2's intv_lt1 comparator
+        // BWA-MEM2: #define intv_lt1(a, b) ((((uint64_t)(a).m) <<32 | ((uint64_t)(b).n)) < ...)
+        // This ensures seeds are processed in the same order, critical for deterministic chaining
+        sorted_smems.sort_by_key(|smem| ((smem.query_start as u64) << 32) | (smem.query_end as u64));
 
         let is_highly_repetitive = sorted_smems.len() <= 4
             && sorted_smems

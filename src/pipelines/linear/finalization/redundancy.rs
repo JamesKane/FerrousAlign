@@ -92,14 +92,16 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
     alignments.truncate(write_idx);
 
     // Sort by score for subsequent processing
-    // Match BWA-MEM2's tie-breaking logic:
+    // Match BWA-MEM2's alnreg_slt comparator (bwamem.cpp:290):
+    // #define alnreg_slt(a, b) ((a).score > (b).score ||
+    //     ((a).score == (b).score && ((a).rb < (b).rb || ((a).rb == (b).rb && (a).qb < (b).qb))))
     // 1. Primary: Score (descending - higher is better)
-    // 2. Tie-break 1: is_alt (ascending - prefer primary assembly over alternates)
-    // 3. Tie-break 2: Hash (ascending - deterministic ordering)
+    // 2. Tie-break 1: Reference position (ascending - lower position wins)
+    // 3. Tie-break 2: Query start position (ascending - lower position wins)
     alignments.sort_by(|a, b| {
         b.score.cmp(&a.score)
-            .then_with(|| a.is_alt.cmp(&b.is_alt))  // NEW: prefer primary assembly (false < true)
-            .then_with(|| a.hash.cmp(&b.hash))
+            .then_with(|| a.pos.cmp(&b.pos))          // rb - reference start position
+            .then_with(|| a.query_start.cmp(&b.query_start))  // qb - query start position
     });
 
     // Remove exact duplicates
