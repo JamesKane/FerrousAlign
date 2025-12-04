@@ -26,19 +26,17 @@ pub fn make_batch_soa<const W: usize>(
         let chunk_base_offset_q = query_soa.len();
         let chunk_base_offset_t = target_soa.len();
 
-        // Determine max lengths for this chunk, capped for i8 kernels
+        // Determine max lengths for this chunk
         let max_qlen = jobs_chunk
             .iter()
             .map(|j| j.query_len)
             .max()
-            .unwrap_or(0)
-            .min(128) as usize;
+            .unwrap_or(0) as usize;
         let max_tlen = jobs_chunk
             .iter()
             .map(|j| j.ref_len)
             .max()
-            .unwrap_or(0)
-            .min(128) as usize;
+            .unwrap_or(0) as usize;
 
         // Store metadata for this chunk
         pos_offsets.push(chunk_base_offset_q);

@@ -37,38 +37,86 @@ pub fn execute_batch_simd_scoring(
         return Vec::new();
     }
 
+    // Determine max length to decide between i8 and i16 paths.
+    // i8 path is faster but supports only seqs <= 128bp.
+    let max_len = batch
+        .jobs
+        .iter()
+        .map(|j| j.query_len.max(j.ref_len))
+        .max()
+        .unwrap_or(0);
+
+    let use_i16 = max_len > 128;
+
     // Convert batch to SoA layout. The number of lanes depends on the SIMD engine.
+    // If using i16 path, we halve the lane count to fit 16-bit scores in the vector registers.
     match engine {
         #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
         SimdEngineType::Engine512 => {
-            let (q, t, p) = make_batch_soa::<64>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
-            batch.query_soa = q;
-            batch.target_soa = t;
-            batch.pos_offsets = p;
-            batch.lanes = 64;
+            if use_i16 {
+                // AVX512 i16: 32 lanes
+                let (q, t, p) = make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 32;
+            } else {
+                // AVX512 i8: 64 lanes
+                let (q, t, p) = make_batch_soa::<64>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 64;
+            }
         }
         #[cfg(target_arch = "x86_64")]
         SimdEngineType::Engine256 => {
-            let (q, t, p) = make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
-            batch.query_soa = q;
-            batch.target_soa = t;
-            batch.pos_offsets = p;
-            batch.lanes = 32;
+             if use_i16 {
+                // AVX2 i16: 16 lanes
+                let (q, t, p) = make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 16;
+             } else {
+                // AVX2 i8: 32 lanes
+                let (q, t, p) = make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 32;
+             }
         }
         SimdEngineType::Engine128 => {
-            let (q, t, p) = make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
-            batch.query_soa = q;
-            batch.target_soa = t;
-            batch.pos_offsets = p;
-            batch.lanes = 16;
+            if use_i16 {
+                // SSE/Neon i16: 8 lanes
+                let (q, t, p) = make_batch_soa::<8>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 8;
+            } else {
+                // SSE/Neon i8: 16 lanes
+                let (q, t, p) = make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                batch.query_soa = q;
+                batch.target_soa = t;
+                batch.pos_offsets = p;
+                batch.lanes = 16;
+            }
         }
     }
 
     let scores = dispatch_banded_swa_soa(sw_params, batch, engine);
 
     // Map scores back to results
+    // If scores vector is shorter than jobs (should not happen after fix), safely handle it.
     let mut results = Vec::with_capacity(batch.len());
-    for (job, score) in batch.jobs.iter().zip(scores.iter()) {
+    for (i, job) in batch.jobs.iter().enumerate() {
+        if i >= scores.len() {
+            log::error!("Missing score for job {} (total jobs={}, scores={})", i, batch.len(), scores.len());
+            break;
+        }
+        let score = &scores[i];
         results.push(BatchExtensionResult {
             read_idx: job.read_idx,
             chain_idx: job.chain_idx,
@@ -86,185 +134,207 @@ pub fn execute_batch_simd_scoring(
 }
 
 /// Centralized dispatch for banded Smith-Waterman alignment using SoA layout.
-///
-/// This function serves as the single point of truth for dispatch policy. It:
-/// 1. Computes the maximum sequence length in the batch.
-/// 2. Selects an i8 kernel for lengths <= 128, or an i16 kernel for longer sequences.
-/// 3. Selects the SIMD width based on the `SimdEngineType`.
-/// 4. Calls the appropriate SoA-based SIMD kernel.
 fn dispatch_banded_swa_soa(
     sw_params: &BandedPairWiseSW,
     batch: &ExtensionJobBatch,
     engine: SimdEngineType,
 ) -> Vec<OutScore> {
-    let max_len = batch
-        .jobs
-        .iter()
-        .map(|j| j.query_len.max(j.ref_len))
-        .max()
-        .unwrap_or(0);
+    let mut all_scores = Vec::with_capacity(batch.len());
+    
+    let simd_width = batch.lanes;
+    if simd_width == 0 {
+        return all_scores;
+    }
 
-    let use_i8_path = max_len <= 128;
+    let num_chunks = (batch.jobs.len() + simd_width - 1) / simd_width;
+    
+    for chunk_idx in 0..num_chunks {
+        // Metadata from pos_offsets: [q_off, t_off, max_q, max_t] per chunk
+        let meta_idx = chunk_idx * 4;
+        if meta_idx + 3 >= batch.pos_offsets.len() {
+            log::error!("Missing metadata for chunk {}", chunk_idx);
+            break;
+        }
+        
+        let q_offset = batch.pos_offsets[meta_idx];
+        let t_offset = batch.pos_offsets[meta_idx + 1];
+        let chunk_max_q = batch.pos_offsets[meta_idx + 2];
+        let chunk_max_t = batch.pos_offsets[meta_idx + 3];
+        
+        let job_start = chunk_idx * simd_width;
+        let job_end = (job_start + simd_width).min(batch.jobs.len());
+        let chunk_jobs = &batch.jobs[job_start..job_end];
+        let actual_lanes = chunk_jobs.len();
+        
+        // Extract SoA slices
+        // Note: SoA buffers are padded to stride * max_len
+        let q_soa_len = chunk_max_q * simd_width;
+        let t_soa_len = chunk_max_t * simd_width;
+        
+        let chunk_query_soa = &batch.query_soa[q_offset..q_offset + q_soa_len];
+        let chunk_target_soa = &batch.target_soa[t_offset..t_offset + t_soa_len];
 
-    let num_jobs = batch.len();
-    let o_del = sw_params.o_del();
-    let e_del = sw_params.e_del();
-    let o_ins = sw_params.o_ins();
-    let e_ins = sw_params.e_ins();
-    let zdrop = sw_params.zdrop();
-    let mat = sw_params.scoring_matrix();
-    let m = sw_params.alphabet_size();
-
-    if use_i8_path {
-        // i8 path for shorter sequences
-        let simd_width = batch.lanes;
-        let mut qlen_vec = vec![0i8; simd_width];
-        let mut tlen_vec = vec![0i8; simd_width];
-        let mut h0_vec = vec![0i8; simd_width];
+        // Prepare auxiliary arrays (h0, w, qlen, tlen)
+        // Use SIMD width size to satisfy kernel requirements
+        let mut qlen_vec_i8 = vec![0i8; simd_width];
+        let mut tlen_vec_i8 = vec![0i8; simd_width];
+        let mut qlen_vec_i16 = vec![0i16; simd_width];
+        let mut tlen_vec_i16 = vec![0i16; simd_width];
+        let mut h0_vec_i8 = vec![0i8; simd_width];
+        let mut h0_vec_i16 = vec![0i16; simd_width];
         let mut w_vec = vec![0i8; simd_width];
 
-        for (idx, job) in batch.jobs.iter().enumerate() {
-            if idx < simd_width {
-                qlen_vec[idx] = job.query_len.min(127) as i8;
-                tlen_vec[idx] = job.ref_len.min(127) as i8;
-                h0_vec[idx] = job.h0 as i8;
-                w_vec[idx] = job.band_width as i8;
-            }
+        for (i, job) in chunk_jobs.iter().enumerate() {
+            qlen_vec_i8[i] = job.query_len.min(127) as i8;
+            tlen_vec_i8[i] = job.ref_len.min(127) as i8;
+            qlen_vec_i16[i] = job.query_len.min(32767) as i16;
+            tlen_vec_i16[i] = job.ref_len.min(32767) as i16;
+            h0_vec_i8[i] = job.h0 as i8;
+            h0_vec_i16[i] = job.h0 as i16;
+            w_vec[i] = job.band_width as i8;
         }
 
-        let actual_lanes = num_jobs.min(simd_width);
-        let inputs = SoAInputs {
-            query_soa: &batch.query_soa,
-            target_soa: &batch.target_soa,
-            qlen: &qlen_vec[..actual_lanes],
-            tlen: &tlen_vec[..actual_lanes],
-            h0: &h0_vec[..actual_lanes],
-            w: &w_vec[..actual_lanes],
-            lanes: actual_lanes,
-            max_qlen: batch.jobs.iter().map(|j| j.query_len).max().unwrap_or(0),
-            max_tlen: batch.jobs.iter().map(|j| j.ref_len).max().unwrap_or(0),
-        };
+        let o_del = sw_params.o_del();
+        let e_del = sw_params.e_del();
+        let o_ins = sw_params.o_ins();
+        let e_ins = sw_params.e_ins();
+        let zdrop = sw_params.zdrop();
+        let mat = sw_params.scoring_matrix();
+        let m = sw_params.alphabet_size();
 
+        // Dispatch based on engine AND lanes
         unsafe {
             match engine {
                 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-                SimdEngineType::Engine512 => simd_banded_swa_batch64_soa(
-                    &inputs,
-                    actual_lanes,
-                    o_del,
-                    e_del,
-                    o_ins,
-                    e_ins,
-                    zdrop,
-                    mat,
-                    m,
-                ),
+                SimdEngineType::Engine512 => {
+                    if simd_width == 64 {
+                         // i8 path
+                         let inputs = SoAInputs {
+                            query_soa: chunk_query_soa,
+                            target_soa: chunk_target_soa,
+                            qlen: &qlen_vec_i8[..actual_lanes],
+                            tlen: &tlen_vec_i8[..actual_lanes],
+                            h0: &h0_vec_i8[..actual_lanes],
+                            w: &w_vec[..actual_lanes],
+                            lanes: actual_lanes,
+                            max_qlen: chunk_max_q as i32,
+                            max_tlen: chunk_max_t as i32,
+                        };
+                        let res = simd_banded_swa_batch64_soa(
+                            &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m
+                        );
+                        all_scores.extend(res);
+                    } else if simd_width == 32 {
+                         // i16 path
+                         let q_i16: Vec<i16> = chunk_query_soa.iter().map(|&x| x as i16).collect();
+                         let t_i16: Vec<i16> = chunk_target_soa.iter().map(|&x| x as i16).collect();
+                         
+                         let inputs = SoAInputs16 {
+                            query_soa: &q_i16,
+                            target_soa: &t_i16,
+                            qlen: &qlen_vec_i16[..actual_lanes],
+                            tlen: &tlen_vec_i16[..actual_lanes],
+                            h0: &h0_vec_i16[..actual_lanes],
+                            w: &w_vec[..actual_lanes],
+                            max_qlen: chunk_max_q as i32,
+                            max_tlen: chunk_max_t as i32,
+                         };
+                         let res = simd_banded_swa_batch32_int16_soa(
+                            &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m
+                         );
+                         all_scores.extend(res);
+                    } else {
+                        panic!("Unexpected lane count {} for Engine512", simd_width);
+                    }
+                }
                 #[cfg(target_arch = "x86_64")]
-                SimdEngineType::Engine256 => simd_banded_swa_batch32_soa(
-                    &inputs,
-                    actual_lanes,
-                    o_del,
-                    e_del,
-                    o_ins,
-                    e_ins,
-                    zdrop,
-                    mat,
-                    m,
-                ),
-                #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                SimdEngineType::Engine128 => simd_banded_swa_batch16_soa(
-                    &inputs,
-                    actual_lanes,
-                    o_del,
-                    e_del,
-                    o_ins,
-                    e_ins,
-                    zdrop,
-                    mat,
-                    m,
-                ),
-            }
-        }
-    } else {
-        // i16 path for longer sequences
-        let simd_width = match engine {
-            #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-            SimdEngineType::Engine512 => 32,
-            #[cfg(target_arch = "x86_64")]
-            SimdEngineType::Engine256 => 16,
-            SimdEngineType::Engine128 => 8,
-        };
-
-        let mut qlen_vec = vec![0i8; simd_width];
-        let mut tlen_vec = vec![0i8; simd_width];
-        let mut h0_vec = vec![0i16; simd_width];
-        let mut w_vec = vec![0i8; simd_width];
-
-        let query_soa_i16: Vec<i16> = batch.query_soa.iter().map(|&x| x as i16).collect();
-        let target_soa_i16: Vec<i16> = batch.target_soa.iter().map(|&x| x as i16).collect();
-
-        for (idx, job) in batch.jobs.iter().enumerate() {
-            if idx < simd_width {
-                qlen_vec[idx] = job.query_len.min(127) as i8;
-                tlen_vec[idx] = job.ref_len.min(127) as i8;
-                h0_vec[idx] = job.h0 as i16;
-                w_vec[idx] = job.band_width as i8;
-            }
-        }
-
-        let actual_lanes = num_jobs.min(simd_width);
-        let inputs = SoAInputs16 {
-            query_soa: &query_soa_i16,
-            target_soa: &target_soa_i16,
-            qlen: &qlen_vec[..actual_lanes],
-            tlen: &tlen_vec[..actual_lanes],
-            h0: &h0_vec[..actual_lanes],
-            w: &w_vec[..actual_lanes],
-            max_qlen: batch.jobs.iter().map(|j| j.query_len).max().unwrap_or(0),
-            max_tlen: batch.jobs.iter().map(|j| j.ref_len).max().unwrap_or(0),
-        };
-
-        unsafe {
-            match engine {
-                #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                SimdEngineType::Engine128 => simd_banded_swa_batch8_int16_soa(
-                    &inputs,
-                    actual_lanes,
-                    o_del,
-                    e_del,
-                    o_ins,
-                    e_ins,
-                    zdrop,
-                    mat,
-                    m,
-                ),
-                #[cfg(target_arch = "x86_64")]
-                SimdEngineType::Engine256 => simd_banded_swa_batch16_int16_soa(
-                    &inputs,
-                    actual_lanes,
-                    o_del,
-                    e_del,
-                    o_ins,
-                    e_ins,
-                    zdrop,
-                    mat,
-                    m,
-                ),
-                #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-                SimdEngineType::Engine512 => simd_banded_swa_batch32_int16_soa(
-                    &inputs,
-                    actual_lanes,
-                    o_del,
-                    e_del,
-                    o_ins,
-                    e_ins,
-                    zdrop,
-                    mat,
-                    m,
-                ),
+                SimdEngineType::Engine256 => {
+                    if simd_width == 32 {
+                         // i8 path
+                         let inputs = SoAInputs {
+                            query_soa: chunk_query_soa,
+                            target_soa: chunk_target_soa,
+                            qlen: &qlen_vec_i8[..actual_lanes],
+                            tlen: &tlen_vec_i8[..actual_lanes],
+                            h0: &h0_vec_i8[..actual_lanes],
+                            w: &w_vec[..actual_lanes],
+                            lanes: actual_lanes,
+                            max_qlen: chunk_max_q as i32,
+                            max_tlen: chunk_max_t as i32,
+                        };
+                        let res = simd_banded_swa_batch32_soa(
+                            &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m
+                        );
+                        all_scores.extend(res);
+                    } else if simd_width == 16 {
+                         // i16 path
+                         let q_i16: Vec<i16> = chunk_query_soa.iter().map(|&x| x as i16).collect();
+                         let t_i16: Vec<i16> = chunk_target_soa.iter().map(|&x| x as i16).collect();
+                         
+                         let inputs = SoAInputs16 {
+                            query_soa: &q_i16,
+                            target_soa: &t_i16,
+                            qlen: &qlen_vec_i16[..actual_lanes],
+                            tlen: &tlen_vec_i16[..actual_lanes],
+                            h0: &h0_vec_i16[..actual_lanes],
+                            w: &w_vec[..actual_lanes],
+                            max_qlen: chunk_max_q as i32,
+                            max_tlen: chunk_max_t as i32,
+                         };
+                         let res = simd_banded_swa_batch16_int16_soa(
+                            &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m
+                         );
+                         all_scores.extend(res);
+                    } else {
+                        panic!("Unexpected lane count {} for Engine256", simd_width);
+                    }
+                }
+                SimdEngineType::Engine128 => {
+                    if simd_width == 16 {
+                         // i8 path
+                         let inputs = SoAInputs {
+                            query_soa: chunk_query_soa,
+                            target_soa: chunk_target_soa,
+                            qlen: &qlen_vec_i8[..actual_lanes],
+                            tlen: &tlen_vec_i8[..actual_lanes],
+                            h0: &h0_vec_i8[..actual_lanes],
+                            w: &w_vec[..actual_lanes],
+                            lanes: actual_lanes,
+                            max_qlen: chunk_max_q as i32,
+                            max_tlen: chunk_max_t as i32,
+                        };
+                        let res = simd_banded_swa_batch16_soa(
+                            &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m
+                        );
+                        all_scores.extend(res);
+                    } else if simd_width == 8 {
+                         // i16 path
+                         let q_i16: Vec<i16> = chunk_query_soa.iter().map(|&x| x as i16).collect();
+                         let t_i16: Vec<i16> = chunk_target_soa.iter().map(|&x| x as i16).collect();
+                         
+                         let inputs = SoAInputs16 {
+                            query_soa: &q_i16,
+                            target_soa: &t_i16,
+                            qlen: &qlen_vec_i16[..actual_lanes],
+                            tlen: &tlen_vec_i16[..actual_lanes],
+                            h0: &h0_vec_i16[..actual_lanes],
+                            w: &w_vec[..actual_lanes],
+                            max_qlen: chunk_max_q as i32,
+                            max_tlen: chunk_max_t as i32,
+                         };
+                         let res = simd_banded_swa_batch8_int16_soa(
+                            &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m
+                         );
+                         all_scores.extend(res);
+                    } else {
+                        panic!("Unexpected lane count {} for Engine128", simd_width);
+                    }
+                }
             }
         }
     }
+    
+    all_scores
 }
 
 pub fn dispatch_kswv_soa(

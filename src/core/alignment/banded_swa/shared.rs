@@ -26,8 +26,8 @@ pub struct SoAInputs<'a> {
 pub struct SoAInputs16<'a> {
     pub query_soa: &'a [i16],
     pub target_soa: &'a [i16],
-    pub qlen: &'a [i8],
-    pub tlen: &'a [i8],
+    pub qlen: &'a [i16],
+    pub tlen: &'a [i16],
     pub h0: &'a [i16], // i16 h0 slice
     pub w: &'a [i8],
     pub max_qlen: i32,
@@ -233,7 +233,7 @@ macro_rules! generate_swa_entry_i16 {
         ) -> Vec<OutScore> {
             const W: usize = $W;
             const MAX: usize = 512; // typical default for i16 path
-            let (qlen, tlen, h0_i8, w_arr, max_q, max_t, padded) =
+            let (qlen_i8, tlen_i8, h0_i8, w_arr, max_q, max_t, padded) =
                 $crate::core::alignment::banded_swa::shared::pad_batch::<W>(batch);
             let (query_soa_u8, target_soa_u8) =
                 $crate::core::alignment::banded_swa::shared::soa_transform::<W, MAX>(&padded);
@@ -249,8 +249,12 @@ macro_rules! generate_swa_entry_i16 {
             }
 
             let mut h0: [i16; W] = [0; W];
+            let mut qlen: [i16; W] = [0; W];
+            let mut tlen: [i16; W] = [0; W];
             for i in 0..W {
                 h0[i] = h0_i8[i] as i16;
+                qlen[i] = qlen_i8[i] as i16;
+                tlen[i] = tlen_i8[i] as i16;
             }
             let params = $crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
                 batch,

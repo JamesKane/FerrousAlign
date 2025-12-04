@@ -22,10 +22,10 @@ pub trait SwSimd16: Copy {
 
 pub struct KernelParams16<'a> {
     pub batch: &'a [(i32, &'a [u8], i32, &'a [u8], i32, i32)],
-    pub query_soa: &'a [i16],  // Changed from u8
-    pub target_soa: &'a [i16], // Changed from u8
-    pub qlen: &'a [i8],
-    pub tlen: &'a [i8],
+    pub query_soa: &'a [i16],
+    pub target_soa: &'a [i16],
+    pub qlen: &'a [i16], // Changed to i16
+    pub tlen: &'a [i16], // Changed to i16
     pub h0: &'a [i16],
     pub w: &'a [i8],
     pub max_qlen: i32,
@@ -112,13 +112,13 @@ where
     let mut terminated = [false; W];
     let mut terminated_count = 0;
     for lane in 0..lanes {
-        end[lane] = params.qlen[lane] as i16;
+        end[lane] = params.qlen[lane];
     }
 
     let qlen_i16_vec = {
         let mut qlen_i16 = [0i16; W];
         for lane in 0..lanes {
-            qlen_i16[lane] = params.qlen[lane] as i16;
+            qlen_i16[lane] = params.qlen[lane];
         }
         E::loadu_epi16(qlen_i16.as_ptr())
     };
@@ -143,7 +143,7 @@ where
             E::loadu_epi16(w_i16.as_ptr())
         };
         let beg_vec = E::loadu_epi16(beg.as_ptr());
-        let end_vec = E::loadu_epi16(end.as_ptr());
+        // let end_vec = E::loadu_epi16(end.as_ptr()); // Unused
 
         let one_vec = E::set1_epi16(1);
 
@@ -153,7 +153,8 @@ where
 
         let i_plus_w = E::adds_epi16(i_vec, w_vec);
         let i_plus_w_plus_1 = E::adds_epi16(i_plus_w, one_vec);
-        let mut current_end_vec = E::min_epi16(end_vec, i_plus_w_plus_1);
+        // FIXED: Do not constrain by previous end_vec, allow band to move right
+        let mut current_end_vec = i_plus_w_plus_1;
         current_end_vec = E::min_epi16(current_end_vec, qlen_i16_vec);
 
         E::storeu_epi16(beg.as_mut_ptr(), current_beg_vec);
@@ -237,7 +238,7 @@ where
             for lane in 0..lanes {
                 if !terminated[lane]
                     && (i as i16) > 0
-                    && (i as i16) < params.tlen[lane] as i16
+                    && (i as i16) < params.tlen[lane]
                     && max_score_vals[lane] - row_max_vals[lane] > params.zdrop as i16
                 {
                     terminated[lane] = true;
