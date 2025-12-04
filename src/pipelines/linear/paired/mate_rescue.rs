@@ -1812,7 +1812,7 @@ fn collect_rescue_jobs_for_read_soa(
     soa_anchor: &crate::pipelines::linear::batch_extension::types::SoAAlignmentResult,
     reads_rescued: &crate::core::io::soa_readers::SoAReadBatch,
     read_idx: usize,
-    rescued_primary_idx: usize,
+    _rescued_primary_idx: usize, // Not used after refactor to multi-alignment rescue
     anchor_primary_idx: usize,
     rescuing_read1: bool,
     pac: &[u8],
@@ -1822,75 +1822,47 @@ fn collect_rescue_jobs_for_read_soa(
     max_matesw: i32,
     jobs: &mut Vec<MateRescueJob>,
 ) {
-    // BWA-MEM2 approach: Find alignments within score threshold and attempt rescue
-    // First, find the best score for this read
-    let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
+    // BWA-MEM2 bwamem_pair.cpp:382-385: Collect alignments from ANCHOR (the mate)
+    // that are above threshold. We'll use each of these as an anchor to rescue the other read.
+    let (anchor_start, anchor_count) = soa_anchor.read_alignment_boundaries[read_idx];
 
-    let best_score = (rescued_start..rescued_start + rescued_count)
-        .map(|idx| soa_rescued.scores[idx])
+    let anchor_best_score = (anchor_start..anchor_start + anchor_count)
+        .map(|idx| soa_anchor.scores[idx])
         .max()
         .unwrap_or(0);
 
     // Compute rescue threshold: best_score - pen_unpaired
-    let rescue_threshold = best_score.saturating_sub(pen_unpaired);
+    let rescue_threshold = anchor_best_score.saturating_sub(pen_unpaired);
 
     log::debug!(
-        "read_idx={} best_score={} rescue_threshold={} (pen_unpaired={})",
+        "read_idx={} anchor_best_score={} rescue_threshold={} (pen_unpaired={})",
         read_idx,
-        best_score,
+        anchor_best_score,
         rescue_threshold,
         pen_unpaired
     );
 
-    // Count how many rescue attempts we'll make for this read
-    // BWA-MEM2 attempts rescue for all alignments above threshold, up to max_matesw
-    let alignments_above_threshold = (rescued_start..rescued_start + rescued_count)
-        .filter(|&idx| soa_rescued.scores[idx] >= rescue_threshold)
+    // BWA-MEM2 bwamem_pair.cpp:384: if (a[i].a[j].score >= a[i].a[0].score - opt->pen_unpaired)
+    // Collect ALL anchor alignments above threshold (up to max_matesw)
+    let anchor_alignments_above_threshold: Vec<usize> = (anchor_start..anchor_start + anchor_count)
+        .filter(|&idx| soa_anchor.scores[idx] >= rescue_threshold)
         .take(max_matesw as usize)
-        .count();
+        .collect();
 
     log::debug!(
-        "read_idx={} alignments_above_threshold={} (total={} primary_score={})",
+        "read_idx={} anchor_alignments_above_threshold={} (total={} anchor_best_score={})",
         read_idx,
-        alignments_above_threshold,
-        rescued_count,
-        soa_rescued.scores[rescued_primary_idx]
+        anchor_alignments_above_threshold.len(),
+        anchor_count,
+        anchor_best_score
     );
 
-    // If no alignments are above threshold, skip rescue
-    if alignments_above_threshold == 0 {
+    // If no anchor alignments are above threshold, skip rescue
+    if anchor_alignments_above_threshold.is_empty() {
         return;
     }
 
-    // NOTE: Currently we only process rescue from the primary alignment.
-    // BWA-MEM2 attempts rescue from multiple alignments, but this requires
-    // restructuring the loop. For now, check if primary is above threshold.
-    let rescued_score = soa_rescued.scores[rescued_primary_idx];
-    if rescued_score < rescue_threshold {
-        log::debug!(
-            "read_idx={} primary_score={} < threshold={}, skipping rescue",
-            read_idx,
-            rescued_score,
-            rescue_threshold
-        );
-        return; // Primary score too low, no rescue from this alignment
-    }
-
-    log::debug!(
-        "read_idx={} attempting rescue (primary_score={} >= threshold={})",
-        read_idx,
-        rescued_score,
-        rescue_threshold
-    );
-
-    // Get anchor alignment info
-    let anchor_flag = soa_anchor.flags[anchor_primary_idx];
-    let anchor_pos = soa_anchor.positions[anchor_primary_idx];
-    let anchor_ref_id = soa_anchor.ref_ids[anchor_primary_idx];
-    let anchor_ref_len =
-        reference_length_from_cigar_soa_rescue(soa_anchor, anchor_primary_idx) as i64;
-
-    // Get mate sequence (ASCII from FASTQ)
+    // Get mate sequence (ASCII from FASTQ) - needed for ALL rescue attempts
     let (seq_start, seq_len) = reads_rescued.read_boundaries[read_idx];
     let mate_seq_ascii = &reads_rescued.seqs[seq_start..seq_start + seq_len];
     let mate_name = &reads_rescued.names[read_idx];
@@ -1902,152 +1874,158 @@ fn collect_rescue_jobs_for_read_soa(
     let min_seed_len = bwa_idx.min_seed_len;
     let match_score = 1i32;
 
-    // Convert anchor position to bidirectional coordinates
-    let anchor_is_rev = (anchor_flag & sam_flags::REVERSE) != 0;
-    let chr_offset = bwa_idx.bns.annotations[anchor_ref_id].offset as i64;
-    let genome_pos = chr_offset + anchor_pos as i64;
+    // BWA-MEM2 bwamem_pair.cpp:407-411: For each ANCHOR alignment above threshold,
+    // use it to search for rescued alignments of the mate
+    for &anchor_aln_idx in &anchor_alignments_above_threshold {
+        // Get this anchor alignment's info
+        let anchor_flag = soa_anchor.flags[anchor_aln_idx];
+        let anchor_pos = soa_anchor.positions[anchor_aln_idx];
+        let anchor_ref_id = soa_anchor.ref_ids[anchor_aln_idx];
+        let anchor_ref_len =
+            reference_length_from_cigar_soa_rescue(soa_anchor, anchor_aln_idx) as i64;
 
-    let anchor_rb = if anchor_is_rev {
-        let rightmost = genome_pos + anchor_ref_len - 1;
-        (l_pac << 1) - 1 - rightmost
-    } else {
-        genome_pos
-    };
+        // Convert anchor position to bidirectional coordinates
+        let anchor_is_rev = (anchor_flag & sam_flags::REVERSE) != 0;
+        let chr_offset = bwa_idx.bns.annotations[anchor_ref_id].offset as i64;
+        let genome_pos = chr_offset + anchor_pos as i64;
 
-    // Initialize skip array from failed orientations
-    let mut skip = [false; 4];
-    for r in 0..4 {
-        skip[r] = stats[r].failed;
-    }
+        let anchor_rb = if anchor_is_rev {
+            let rightmost = genome_pos + anchor_ref_len - 1;
+            (l_pac << 1) - 1 - rightmost
+        } else {
+            genome_pos
+        };
 
-    // Check which orientations already have consistent pairs
-    let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
-    for offset in 0..rescued_count {
-        let idx = rescued_start + offset;
-        if soa_rescued.ref_ids[idx] == anchor_ref_id {
-            let mate_is_rev = (soa_rescued.flags[idx] & sam_flags::REVERSE) != 0;
-            let mate_ref_len = reference_length_from_cigar_soa_rescue(soa_rescued, idx) as i64;
-            let mate_genome_pos = chr_offset + soa_rescued.positions[idx] as i64;
+        // Initialize skip array from failed orientations
+        let mut skip = [false; 4];
+        for r in 0..4 {
+            skip[r] = stats[r].failed;
+        }
 
-            let mate_rb = if mate_is_rev {
-                let rightmost = mate_genome_pos + mate_ref_len - 1;
-                (l_pac << 1) - 1 - rightmost
-            } else {
-                mate_genome_pos
-            };
+        // Check which orientations already have consistent pairs with THIS anchor alignment
+        // Look through existing rescued alignments to see if any are already properly paired
+        let (rescued_start, rescued_count) = soa_rescued.read_alignment_boundaries[read_idx];
+        for offset in 0..rescued_count {
+            let rescued_idx = rescued_start + offset;
+            if soa_rescued.ref_ids[rescued_idx] == anchor_ref_id {
+                let rescued_flag = soa_rescued.flags[rescued_idx];
+                let rescued_pos = soa_rescued.positions[rescued_idx];
+                let rescued_ref_len = reference_length_from_cigar_soa_rescue(soa_rescued, rescued_idx) as i64;
+                let rescued_is_rev = (rescued_flag & sam_flags::REVERSE) != 0;
+                let rescued_genome_pos = chr_offset + rescued_pos as i64;
 
-            let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, mate_rb);
-            if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
-                log::debug!(
-                    "read_idx={} orientation={} already has consistent pair (dist={})",
-                    read_idx,
-                    dir,
-                    dist
-                );
-                skip[dir] = true;
+                let rescued_rb = if rescued_is_rev {
+                    let rightmost = rescued_genome_pos + rescued_ref_len - 1;
+                    (l_pac << 1) - 1 - rightmost
+                } else {
+                    rescued_genome_pos
+                };
+
+                let (dir, dist) = mem_infer_dir(l_pac, anchor_rb, rescued_rb);
+                if dist >= stats[dir].low as i64 && dist <= stats[dir].high as i64 {
+                    // This orientation already has a consistent pair, skip rescue for it
+                    skip[dir] = true;
+                }
             }
         }
-    }
 
-    // Early exit if all orientations already have pairs
-    if skip.iter().all(|&x| x) {
+        // Early exit if all orientations already have pairs
+        if skip.iter().all(|&x| x) {
+            continue;
+        }
+
         log::debug!(
-            "read_idx={} all orientations have pairs, skipping rescue (skip={:?})",
+            "read_idx={} anchor_aln_idx={} creating rescue jobs for orientations (skip={:?})",
             read_idx,
+            anchor_aln_idx,
             skip
         );
-        return;
-    }
 
-    log::debug!(
-        "read_idx={} creating rescue jobs for orientations (skip={:?})",
-        read_idx,
-        skip
-    );
+        let l_ms = mate_seq.len() as i32;
 
-    let l_ms = mate_seq.len() as i32;
+        // Try each non-skipped orientation
+        for r in 0..4 {
+            if skip[r] {
+                continue;
+            }
 
-    // Try each non-skipped orientation
-    for r in 0..4 {
-        if skip[r] {
-            continue;
-        }
+            // Decode orientation bits
+            let is_rev = (r >> 1) != (r & 1);
+            let is_larger = (r >> 1) == 0;
 
-        // Decode orientation bits
-        let is_rev = (r >> 1) != (r & 1);
-        let is_larger = (r >> 1) == 0;
-
-        // Prepare mate sequence (reverse complement if needed)
-        let query_seq: Vec<u8> = if is_rev {
-            mate_seq
-                .iter()
-                .rev()
-                .map(|&b| if b < 4 { 3 - b } else { 4 })
-                .collect()
-        } else {
-            mate_seq.to_vec()
-        };
-
-        // Calculate search region using FULL insert size range [low, high]
-        let (rb, re) = if !is_rev {
-            let rb = if is_larger {
-                anchor_rb + stats[r].low as i64
+            // Prepare mate sequence (reverse complement if needed)
+            let query_seq: Vec<u8> = if is_rev {
+                mate_seq
+                    .iter()
+                    .rev()
+                    .map(|&b| if b < 4 { 3 - b } else { 4 })
+                    .collect()
             } else {
-                anchor_rb - stats[r].high as i64
+                mate_seq.to_vec()
             };
-            let re = if is_larger {
-                anchor_rb + stats[r].high as i64
+
+            // Calculate search region using FULL insert size range [low, high]
+            // Use the ANCHOR position (from the other read) to determine where to search
+            let (rb, re) = if !is_rev {
+                let rb = if is_larger {
+                    anchor_rb + stats[r].low as i64
+                } else {
+                    anchor_rb - stats[r].high as i64
+                };
+                let re = if is_larger {
+                    anchor_rb + stats[r].high as i64
+                } else {
+                    anchor_rb - stats[r].low as i64
+                } + l_ms as i64;
+                (rb, re)
             } else {
-                anchor_rb - stats[r].low as i64
-            } + l_ms as i64;
-            (rb, re)
-        } else {
-            let rb = if is_larger {
-                anchor_rb + stats[r].low as i64
-            } else {
-                anchor_rb - stats[r].high as i64
-            } - l_ms as i64;
-            let re = if is_larger {
-                anchor_rb + stats[r].high as i64
-            } else {
-                anchor_rb - stats[r].low as i64
+                let rb = if is_larger {
+                    anchor_rb + stats[r].low as i64
+                } else {
+                    anchor_rb - stats[r].high as i64
+                } - l_ms as i64;
+                let re = if is_larger {
+                    anchor_rb + stats[r].high as i64
+                } else {
+                    anchor_rb - stats[r].low as i64
+                };
+                (rb, re)
             };
-            (rb, re)
-        };
 
-        // Clamp to valid range
-        let rb = rb.max(0);
-        let re = re.min(l_pac << 1);
+            // Clamp to valid range
+            let rb = rb.max(0);
+            let re = re.min(l_pac << 1);
 
-        if rb >= re {
-            continue;
+            if rb >= re {
+                continue;
+            }
+
+            // Fetch reference sequence
+            let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
+
+            // Check if on same reference and region is large enough
+            if rid as usize != anchor_ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
+                continue;
+            }
+
+            // Create rescue job
+            jobs.push(MateRescueJob {
+                pair_index: read_idx,
+                rescuing_read1,
+                query_seq,
+                ref_seq,
+                adj_rb,
+                is_rev,
+                orientation: r,
+                anchor_ref_id,
+                anchor_ref_name: soa_anchor.ref_names[anchor_aln_idx].clone(),
+                mate_name: mate_name.clone(),
+                mate_len: l_ms,
+                min_seed_len,
+                match_score,
+            });
         }
-
-        // Fetch reference sequence
-        let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
-
-        // Check if on same reference and region is large enough
-        if rid as usize != anchor_ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
-            continue;
-        }
-
-        // Create rescue job
-        jobs.push(MateRescueJob {
-            pair_index: read_idx,
-            rescuing_read1,
-            query_seq,
-            ref_seq,
-            adj_rb,
-            is_rev,
-            orientation: r,
-            anchor_ref_id,
-            anchor_ref_name: soa_anchor.ref_names[anchor_primary_idx].clone(),
-            mate_name: mate_name.clone(),
-            mate_len: l_ms,
-            min_seed_len,
-            match_score,
-        });
-    }
+    } // End of loop over anchor_alignments_above_threshold
 }
 
 /// Append a rescued alignment result to SoA buffers
