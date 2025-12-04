@@ -1,34 +1,3 @@
-pub struct SeqPair {
-    /// Offset into reference sequence buffer
-    pub reference_offset: i32,
-    /// Offset into query sequence buffer
-    pub query_offset: i32,
-    /// Sequence pair identifier
-    pub pair_id: i32,
-    /// Length of reference sequence
-    pub reference_length: i32,
-    /// Length of query sequence
-    pub query_length: i32,
-    /// Initial alignment score (from previous alignment)
-    pub initial_score: i32,
-    /// Sequence identifier (index into sequence array)
-    pub sequence_id: i32,
-    /// Region identifier (index into alignment region array)
-    pub region_id: i32,
-    /// Best alignment score
-    pub score: i32,
-    /// Target (reference) end position
-    pub target_end_pos: i32,
-    /// Global target (reference) end position
-    pub global_target_end_pos: i32,
-    /// Query end position
-    pub query_end_pos: i32,
-    /// Global alignment score
-    pub global_score: i32,
-    /// Maximum offset in alignment
-    pub max_offset: i32,
-}
-
 // Rust equivalent of eh_t
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EhT {
