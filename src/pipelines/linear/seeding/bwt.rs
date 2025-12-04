@@ -141,8 +141,13 @@ pub fn get_sa_entry(bwa_idx: &BwaIndex, mut pos: u64) -> u64 {
 
 /// Get multiple suffix array entries from a BWT interval.
 ///
-/// Samples evenly across the interval using floating-point step
-/// to ensure good coverage of repetitive seeds.
+/// Samples evenly across the interval using integer step to match BWA-MEM2.
+///
+/// Matches C++ FMI_search.cpp:1200-1206:
+/// ```c
+/// int64_t step = (smem.s > max_occ) ? smem.s / max_occ : 1;
+/// for(j = smem.k; (j < hi) && (c < max_occ); j+=step, c++)
+/// ```
 pub fn get_sa_entries(
     bwa_idx: &BwaIndex,
     bwt_interval_start: u64,
@@ -152,27 +157,26 @@ pub fn get_sa_entries(
     let num_to_retrieve = (interval_size as u32).min(max_occurrences);
     let mut ref_positions = Vec::with_capacity(num_to_retrieve as usize);
 
-    let actual_num = num_to_retrieve;
-
     if num_to_retrieve == 0 {
         return ref_positions;
     }
 
-    // Use floating-point step to ensure we cover the entire interval
-    let step = if interval_size > actual_num as u64 {
-        interval_size as f64 / actual_num as f64
+    // Use integer step matching BWA-MEM2
+    let step = if interval_size > num_to_retrieve as u64 {
+        interval_size / num_to_retrieve as u64
     } else {
-        1.0
+        1
     };
 
-    for i in 0..actual_num {
-        let k = (i as f64 * step) as u64;
-        if k >= interval_size {
-            break;
-        }
-        let sa_index = bwt_interval_start + k;
-        let ref_pos = get_sa_entry(bwa_idx, sa_index);
+    let hi = bwt_interval_start + interval_size;
+    let mut j = bwt_interval_start;
+    let mut c = 0;
+
+    while j < hi && c < num_to_retrieve {
+        let ref_pos = get_sa_entry(bwa_idx, j);
         ref_positions.push(ref_pos);
+        j += step;
+        c += 1;
     }
 
     ref_positions
