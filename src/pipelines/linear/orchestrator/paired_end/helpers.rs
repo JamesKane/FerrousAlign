@@ -17,6 +17,12 @@ impl PairedEndOrchestrator<'_> {
     ///
     /// CRITICAL: This must be done in AoS format to maintain per-read alignment
     /// boundaries correctly. Pure SoA pairing causes 96% duplicate reads.
+    ///
+    /// BWA-MEM2 behavior (bwamem_pair.cpp mem_sam_pe):
+    /// - Sets PAIRED | FIRST_IN_PAIR (0x41) on ALL R1 alignments
+    /// - Sets PAIRED | SECOND_IN_PAIR (0x81) on ALL R2 alignments
+    /// - Sets PROPER_PAIR only on the best pairing
+    /// - Decides: if paired_score > unpaired_score, output best pair; else output idx=0
     pub(super) fn pair_alignments_aos(
         &self,
         alignments1: &mut Vec<Vec<Alignment>>,
@@ -29,7 +35,15 @@ impl PairedEndOrchestrator<'_> {
             let alns1 = &mut alignments1[read_idx];
             let alns2 = &mut alignments2[read_idx];
 
-            if let Some((idx1, idx2, _pair_score, _sub_score)) = pairing_aos::mem_pair(
+            // BWA-MEM2: Set PAIRED and FIRST/SECOND_IN_PAIR on ALL alignments for this read pair
+            for aln in alns1.iter_mut() {
+                aln.flag |= sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR;
+            }
+            for aln in alns2.iter_mut() {
+                aln.flag |= sam_flags::PAIRED | sam_flags::SECOND_IN_PAIR;
+            }
+
+            if let Some((idx1, idx2, pair_score, _sub_score)) = pairing_aos::mem_pair(
                 &self.insert_stats,
                 alns1,
                 alns2,
@@ -37,41 +51,77 @@ impl PairedEndOrchestrator<'_> {
                 batch_start_id + read_idx as u64,
                 l_pac,
             ) {
-                // Mark as properly paired
-                // BWA-MEM2 bwamem_pair.cpp:543: Sets PROPER_PAIR (0x02) if:
-                // - Same chromosome && Valid rid && !pes[d].failed && dist in [low,high]
-                // mem_pair() already checks these conditions when returning Some(...)
-                alns1[idx1].flag |= sam_flags::PROPER_PAIR;
-                alns2[idx2].flag |= sam_flags::PROPER_PAIR;
+                // BWA-MEM2 bwamem_pair.cpp:452-473:
+                // score_un = a[0].a[0].score + a[1].a[0].score - opt->pen_unpaired
+                // if (pair_score > score_un) -> use best pair, set PROPER_PAIR
+                // else -> use idx=0, no PROPER_PAIR
+                let score_un = alns1[0].score + alns2[0].score - self.options.pen_unpaired;
 
-                // Set mate information
-                let (aln1, aln2) = (alns1[idx1].clone(), alns2[idx2].clone());
-                Self::set_mate_info(&mut alns1[idx1], &aln2, true);
-                Self::set_mate_info(&mut alns2[idx2], &aln1, false);
+                let (output_idx1, output_idx2) = if pair_score > score_un {
+                    // Paired alignment is preferred - use best pair indices
+                    alns1[idx1].flag |= sam_flags::PROPER_PAIR;
+                    alns2[idx2].flag |= sam_flags::PROPER_PAIR;
+                    (idx1, idx2)
+                } else {
+                    // Unpaired alignment is preferred - use idx=0 (highest scoring)
+                    (0, 0)
+                };
+
+                // Set mate information on the alignments we'll output
+                let mate1 = alns2[output_idx2].clone();
+                let mate2 = alns1[output_idx1].clone();
+                Self::set_mate_info(&mut alns1[output_idx1], &mate1);
+                Self::set_mate_info(&mut alns2[output_idx2], &mate2);
+
+                // Set TLEN
+                Self::set_tlen(&mut alns1[output_idx1], &mate1);
+                Self::set_tlen(&mut alns2[output_idx2], &mate2);
+
+                // Swap to ensure output_idx is at position 0 (since write_paired_output outputs idx=0)
+                if output_idx1 != 0 && !alns1.is_empty() {
+                    // Also swap flags to maintain SECONDARY marking
+                    let was_secondary = (alns1[output_idx1].flag & sam_flags::SECONDARY) != 0;
+                    alns1[output_idx1].flag &= !sam_flags::SECONDARY;
+                    if was_secondary {
+                        alns1[0].flag |= sam_flags::SECONDARY;
+                    }
+                    alns1.swap(0, output_idx1);
+                }
+                if output_idx2 != 0 && !alns2.is_empty() {
+                    let was_secondary = (alns2[output_idx2].flag & sam_flags::SECONDARY) != 0;
+                    alns2[output_idx2].flag &= !sam_flags::SECONDARY;
+                    if was_secondary {
+                        alns2[0].flag |= sam_flags::SECONDARY;
+                    }
+                    alns2.swap(0, output_idx2);
+                }
             } else if !alns1.is_empty() && !alns2.is_empty() {
-                // Singleton: both mapped but not properly paired
+                // No valid pairing found - both mapped but not properly paired
                 let (aln1, aln2) = (alns1[0].clone(), alns2[0].clone());
-                Self::set_mate_info(&mut alns1[0], &aln2, true);
-                Self::set_mate_info(&mut alns2[0], &aln1, false);
+                Self::set_mate_info(&mut alns1[0], &aln2);
+                Self::set_mate_info(&mut alns2[0], &aln1);
+
+                // Set TLEN if on same chromosome
+                if alns1[0].ref_name == alns2[0].ref_name {
+                    Self::set_tlen(&mut alns1[0], &alns2[0]);
+                    Self::set_tlen(&mut alns2[0], &alns1[0]);
+                }
             }
         }
     }
 
     /// Set mate information on an alignment.
-    pub(super) fn set_mate_info(aln: &mut Alignment, mate: &Alignment, is_first: bool) {
+    ///
+    /// Note: PAIRED and FIRST/SECOND_IN_PAIR flags are already set on all alignments
+    /// in pair_alignments_aos(). This function only sets mate-specific info (rnext, pnext,
+    /// MATE_REVERSE, MATE_UNMAPPED) on primary alignments.
+    pub(super) fn set_mate_info(aln: &mut Alignment, mate: &Alignment) {
         aln.rnext = if mate.ref_name == aln.ref_name {
             "=".to_string()
         } else {
             mate.ref_name.clone()
         };
         aln.pnext = mate.pos;
-        aln.flag |= sam_flags::PAIRED;
-
-        if is_first {
-            aln.flag |= sam_flags::FIRST_IN_PAIR;
-        } else {
-            aln.flag |= sam_flags::SECOND_IN_PAIR;
-        }
 
         if (mate.flag & sam_flags::REVERSE) != 0 {
             aln.flag |= sam_flags::MATE_REVERSE;
@@ -80,6 +130,44 @@ impl PairedEndOrchestrator<'_> {
         if mate.mapq == 0 && mate.score == 0 {
             aln.flag |= sam_flags::MATE_UNMAPPED;
         }
+    }
+
+    /// Set TLEN (template length) for a paired alignment.
+    ///
+    /// BWA-MEM2 formula (bwamem.cpp:1696-1700):
+    /// - p0 = pos + (is_rev ? rlen - 1 : 0)  // rightmost position if reverse
+    /// - p1 = mate_pos + (mate_is_rev ? mate_rlen - 1 : 0)
+    /// - tlen = -(p0 - p1 + (p0 > p1 ? 1 : p0 < p1 ? -1 : 0))
+    ///
+    /// The tlen is positive for the leftmost alignment and negative for the rightmost.
+    pub(super) fn set_tlen(aln: &mut Alignment, mate: &Alignment) {
+        if aln.ref_name != mate.ref_name || mate.ref_name == "*" {
+            aln.tlen = 0;
+            return;
+        }
+
+        let is_rev = (aln.flag & sam_flags::REVERSE) != 0;
+        let mate_is_rev = (mate.flag & sam_flags::REVERSE) != 0;
+
+        let aln_rlen = aln.reference_length();
+        let mate_rlen = mate.reference_length();
+
+        // Calculate 5' end positions (rightmost if reverse strand)
+        let p0 = if is_rev {
+            aln.pos as i64 + aln_rlen as i64 - 1
+        } else {
+            aln.pos as i64
+        };
+
+        let p1 = if mate_is_rev {
+            mate.pos as i64 + mate_rlen as i64 - 1
+        } else {
+            mate.pos as i64
+        };
+
+        // Calculate TLEN with sign convention
+        let sign_adj = if p0 > p1 { 1 } else if p0 < p1 { -1 } else { 0 };
+        aln.tlen = -(p0 - p1 + sign_adj) as i32;
     }
 
     /// Perform mate rescue using SoA format for SIMD batching.
@@ -217,9 +305,10 @@ mod tests {
 
     #[test]
     fn test_set_mate_info() {
+        // Note: PAIRED and FIRST_IN_PAIR are now set in pair_alignments_aos before calling set_mate_info
         let mut aln = Alignment {
             query_name: "read1".to_string(),
-            flag: 0,
+            flag: sam_flags::PAIRED | sam_flags::FIRST_IN_PAIR, // Pre-set as done in pair_alignments_aos
             ref_name: "chr1".to_string(),
             ref_id: 0,
             pos: 100,
@@ -263,7 +352,7 @@ mod tests {
             is_alt: false,
         };
 
-        PairedEndOrchestrator::set_mate_info(&mut aln, &mate, true);
+        PairedEndOrchestrator::set_mate_info(&mut aln, &mate);
 
         assert_eq!(aln.rnext, "="); // Same chromosome
         assert_eq!(aln.pnext, 300);

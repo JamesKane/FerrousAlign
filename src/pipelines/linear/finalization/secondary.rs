@@ -8,6 +8,12 @@ use super::tags::attach_xa_sa_tags;
 use crate::pipelines::linear::mem_opt::MemOpt;
 
 /// Mark secondary alignments, calculate MAPQ values, and attach XA/SA tags
+///
+/// BWA-MEM2 behavior (bwamem.cpp:1474-1515):
+/// 1. Computes hash for each alignment: hash_64(id + i)
+/// 2. Sorts by: score (descending) → is_alt (non-ALT first) → hash (ascending)
+/// 3. After sorting, index 0 is the best primary alignment
+/// 4. Marks overlapping alignments as secondary
 pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) {
     if alignments.is_empty() {
         return;
@@ -17,6 +23,26 @@ pub fn mark_secondary_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt) 
     for aln in alignments.iter_mut() {
         aln.flag &= !(sam_flags::SECONDARY | sam_flags::SUPPLEMENTARY);
     }
+
+    // BWA-MEM2: Sort by score (descending) → is_alt (non-ALT first) → hash (ascending)
+    // This ensures the highest-scoring non-ALT alignment is at index 0
+    // See bwamem.cpp:155: alnreg_hlt(a, b) comparator
+    alignments.sort_by(|a, b| {
+        // First: score descending (higher scores first)
+        match b.score.cmp(&a.score) {
+            std::cmp::Ordering::Equal => {
+                // Second: is_alt ascending (non-ALT before ALT)
+                match a.is_alt.cmp(&b.is_alt) {
+                    std::cmp::Ordering::Equal => {
+                        // Third: hash ascending (for deterministic tie-breaking)
+                        a.hash.cmp(&b.hash)
+                    }
+                    other => other,
+                }
+            }
+            other => other,
+        }
+    });
 
     let score_gap_threshold = (opt.a + opt.b)
         .max(opt.o_del + opt.e_del)

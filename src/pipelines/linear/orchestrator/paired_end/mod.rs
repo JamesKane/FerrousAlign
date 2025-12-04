@@ -47,6 +47,7 @@ use crate::pipelines::linear::mem_opt::MemOpt;
 use crate::pipelines::linear::paired::insert_size::{
     InsertSizeStats, bootstrap_insert_size_stats_soa,
 };
+use crate::pipelines::linear::finalization::mark_secondary_alignments;
 use crate::pipelines::linear::stages::chaining::ChainingStage;
 use crate::pipelines::linear::stages::extension::ExtensionStage;
 use crate::pipelines::linear::stages::finalization::FinalizationStage;
@@ -260,6 +261,16 @@ impl<'a> PairedEndOrchestrator<'a> {
 
             let mut alignments1 = soa_result1.to_aos();
             let mut alignments2 = soa_result2.to_aos();
+
+            // Mark secondary alignments and generate XA tags (equivalent to BWA-MEM2's mem_mark_primary_se)
+            // This must happen BEFORE pairing to correctly identify primary vs secondary alignments
+            for alns in alignments1.iter_mut() {
+                mark_secondary_alignments(alns, self.options);
+            }
+            for alns in alignments2.iter_mut() {
+                mark_secondary_alignments(alns, self.options);
+            }
+
             self.pair_alignments_aos(&mut alignments1, &mut alignments2, pairs_processed);
 
             let rescued = self.perform_mate_rescue(
