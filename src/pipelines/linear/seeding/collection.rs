@@ -312,7 +312,7 @@ pub fn find_seeds_batch(
                 max_positions_this_smem,
             );
 
-            let seed_len = smem.query_end - smem.query_start;
+            let seed_len = smem.query_end - smem.query_start + 1;
             let l_pac = bwa_idx.bns.packed_sequence_length;
 
             if log::log_enabled!(log::Level::Debug) {

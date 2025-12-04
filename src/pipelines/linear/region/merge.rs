@@ -87,11 +87,23 @@ pub fn merge_scores_to_regions(
 
             let mut total_score = seed.len * opt.a;
 
+            // Debug logging - log everything, filter later
+            log::info!(
+                "EXTENSION_DEBUG: chain_idx={} seed_idx={} seed: qpos={} len={} rpos={} initial_qb={} initial_qe={}",
+                chain_idx, seed_mapping.seed_idx, seed.query_pos, seed.len, seed.ref_pos, region.qb, region.qe
+            );
+
             // Process left extension
             if let Some(left_idx) = seed_mapping.left_job_idx {
                 if left_idx < left_scores.len() {
                     let left_score = &left_scores[left_idx];
                     total_score = left_score.score;
+
+                    log::info!(
+                        "  LEFT_EXT: score={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip5={}",
+                        left_score.score, left_score.global_score, left_score.query_end_pos,
+                        left_score.target_end_pos, left_score.gtarget_end_pos, opt.pen_clip5
+                    );
 
                     if left_score.global_score <= 0
                         || left_score.global_score <= left_score.score - opt.pen_clip5
@@ -99,10 +111,12 @@ pub fn merge_scores_to_regions(
                         region.qb = seed.query_pos - left_score.query_end_pos;
                         region.rb = seed.ref_pos - left_score.target_end_pos as u64;
                         region.truesc = left_score.score;
+                        log::info!("    Using local: qb={} rb={}", region.qb, region.rb);
                     } else {
                         region.qb = 0;
                         region.rb = seed.ref_pos - left_score.gtarget_end_pos as u64;
                         region.truesc = left_score.global_score;
+                        log::info!("    Using global: qb={} rb={}", region.qb, region.rb);
                     }
                 }
             } else if seed.query_pos == 0 {
@@ -115,16 +129,24 @@ pub fn merge_scores_to_regions(
                     let right_score = &right_scores[right_idx];
                     total_score += right_score.score;
 
+                    log::info!(
+                        "  RIGHT_EXT: score={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip3={}",
+                        right_score.score, right_score.global_score, right_score.query_end_pos,
+                        right_score.target_end_pos, right_score.gtarget_end_pos, opt.pen_clip3
+                    );
+
                     if right_score.global_score <= 0
                         || right_score.global_score <= right_score.score - opt.pen_clip3
                     {
                         region.qe = seed.query_pos + seed.len + right_score.query_end_pos;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
+                        log::info!("    Using local: qe={} re={}", region.qe, region.re);
                     } else {
                         region.qe = query_len;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
+                        log::info!("    Using global: qe={} re={}", region.qe, region.re);
                     }
                 }
             }
@@ -155,6 +177,11 @@ pub fn merge_scores_to_regions(
             region.chr_pos = coords.chr_pos;
             region.is_rev = coords.is_rev;
 
+            log::info!(
+                "  FINAL_REGION: qb={} qe={} rb={} re={} score={} truesc={} seedcov={}",
+                region.qb, region.qe, region.rb, region.re, region.score, region.truesc, region.seedcov
+            );
+
             if total_score > best_score {
                 best_score = total_score;
                 best_region = Some(region);
@@ -162,7 +189,7 @@ pub fn merge_scores_to_regions(
         }
 
         if let Some(ref region) = best_region {
-            log::debug!(
+            log::info!(
                 "DEFERRED_REGION: chain_idx={} seed_idx={} qb={} qe={} rb={} re={} score={} chr_pos={} ref={}",
                 region.chain_idx,
                 region.seed_idx,

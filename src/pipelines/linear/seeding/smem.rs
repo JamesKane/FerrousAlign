@@ -50,6 +50,10 @@ pub fn generate_smems_for_strand<'a>(
             continue;
         }
 
+        if is_debug_read {
+            log::info!("  Starting SMEM generation from position x={}", x);
+        }
+
         let mut smem = SMEM {
             read_id: 0,
             query_start: x as i32,
@@ -103,6 +107,10 @@ pub fn generate_smems_for_strand<'a>(
         // Phase 2: Backward search
         prev_array_buf.reverse();
 
+        if is_debug_read {
+            log::info!("    After forward extension: {} SMEMs in prev_array_buf, starting backward search from x={}", prev_array_buf.len(), x);
+        }
+
         for j in (0..x).rev() {
             let a = encoded_query[j];
             if a >= 4 {
@@ -124,6 +132,19 @@ pub fn generate_smems_for_strand<'a>(
                 if new_smem.interval_size < min_intv
                     && (smem.query_end - smem.query_start + 1) >= min_seed_len
                 {
+                    if is_debug_read {
+                        log::info!(
+                            "SMEM: {} strand={} pos=[{},{}] len={} interval=[{},{}] size={} (backward output)",
+                            query_name,
+                            if is_reverse_complement { "RC" } else { "FW" },
+                            smem.query_start,
+                            smem.query_end,
+                            smem.query_end - smem.query_start + 1,
+                            smem.bwt_interval_start,
+                            smem.bwt_interval_end,
+                            smem.interval_size
+                        );
+                    }
                     all_smems.push(smem);
                     break;
                 }
@@ -170,7 +191,7 @@ pub fn generate_smems_for_strand<'a>(
             if len >= min_seed_len {
                 if is_debug_read {
                     log::info!(
-                        "SMEM: {} strand={} pos=[{},{}] len={} interval=[{},{}] size={}",
+                        "SMEM: {} strand={} pos=[{},{}] len={} interval=[{},{}] size={} (final output)",
                         query_name,
                         if is_reverse_complement { "RC" } else { "FW" },
                         smem.query_start,

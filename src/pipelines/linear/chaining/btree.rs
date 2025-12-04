@@ -136,6 +136,9 @@ pub fn chain_seeds_batch(soa_seed_batch: &SoASeedBatch, opt: &MemOpt, l_pac: u64
     let num_reads = soa_seed_batch.read_seed_boundaries.len();
     let mut soa_chain_batch = SoAChainBatch::with_capacity(num_reads * 10, num_reads);
 
+    // Debug: Track reads for logging
+    let mut read_names_for_debug: Vec<String> = Vec::new();
+
     for read_idx in 0..num_reads {
         let (seed_start_idx, num_seeds_for_read) = soa_seed_batch.read_seed_boundaries[read_idx];
 
