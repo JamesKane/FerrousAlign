@@ -38,7 +38,8 @@ pub fn execute_batch_simd_scoring(
     }
 
     // Determine max length to decide between i8 and i16 paths.
-    // i8 path is faster but supports only seqs <= 128bp.
+    // i8 path is faster but supports only seqs < 128bp (scores fit in i8 range -128..127).
+    // At exactly 128bp with match_score=1, perfect alignment scores 128 which overflows i8.
     let max_len = batch
         .jobs
         .iter()
@@ -46,7 +47,7 @@ pub fn execute_batch_simd_scoring(
         .max()
         .unwrap_or(0);
 
-    let use_i16 = max_len > 128;
+    let use_i16 = max_len >= 128;
 
     // Convert batch to SoA layout. The number of lanes depends on the SIMD engine.
     // If using i16 path, we halve the lane count to fit 16-bit scores in the vector registers.

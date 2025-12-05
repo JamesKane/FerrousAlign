@@ -122,6 +122,13 @@ where
     let mut max_i_vec = zero;
     let mut max_j_vec = zero;
 
+    // Track global score (score when alignment reaches query end)
+    // gscore = max score achieved at j == qlen-1 (query end)
+    // max_ie = target position where gscore was achieved
+    let neg_one_vec = E::set1_epi8(-1);
+    let mut gscore_vec = neg_one_vec;
+    let mut max_ie_vec = neg_one_vec;
+
     let beg = [0i8; W];
     let mut end = [0i8; W];
     let mut terminated = [false; W];
@@ -225,6 +232,19 @@ where
 
             max_i_vec = E::blendv_epi8(max_i_vec, i_vec, is_greater);
             max_j_vec = E::blendv_epi8(max_j_vec, j_vec, is_greater);
+
+            // Track global score: when j == qlen - 1 (last query position), update gscore
+            // This tracks the maximum score achieved when the alignment reaches the query end
+            // BWA-MEM2 logic (bandedSWA.cpp:203-204): if (j == qlen) { gscore = max(gscore, h1); max_ie = i if updated }
+            let j_plus_1 = E::adds_epi8(j_vec, one_vec);
+            let at_qend = E::cmpeq_epi8(j_plus_1, qlen_vec); // j+1 == qlen means j is last position
+            let at_qend_and_active = E::and_si128(at_qend, combined_mask);
+
+            // Update gscore if h_val > gscore at query end
+            let h_better = E::cmpgt_epi8(h_val, gscore_vec);
+            let update_mask = E::and_si128(at_qend_and_active, h_better);
+            gscore_vec = E::blendv_epi8(gscore_vec, h_val, update_mask);
+            max_ie_vec = E::blendv_epi8(max_ie_vec, i_vec, update_mask);
         }
 
         let mut max_score_vals = [0i8; W];
@@ -265,19 +285,27 @@ where
     let mut max_scores = [0i8; W];
     let mut max_i = [0i8; W];
     let mut max_j = [0i8; W];
+    let mut gscore = [0i8; W];
+    let mut max_ie = [0i8; W];
 
     E::storeu_epi8(max_scores.as_mut_ptr(), max_scores_vec);
     E::storeu_epi8(max_i.as_mut_ptr(), max_i_vec);
     E::storeu_epi8(max_j.as_mut_ptr(), max_j_vec);
+    E::storeu_epi8(gscore.as_mut_ptr(), gscore_vec);
+    E::storeu_epi8(max_ie.as_mut_ptr(), max_ie_vec);
 
     for i in 0..lanes {
+        // Compute max_off (maximum diagonal offset) for banding convergence check
+        // max_off = |max_j - max_i| (how far from diagonal the best alignment is)
+        let max_off = (max_j[i] as i32 - max_i[i] as i32).abs();
+
         out_scores.push(OutScore {
             score: max_scores[i] as i32,
-            target_end_pos: max_i[i] as i32,
-            query_end_pos: max_j[i] as i32,
-            gtarget_end_pos: 0,
-            global_score: 0,
-            max_offset: 0,
+            target_end_pos: (max_i[i] as i32) + 1, // Convert to 1-based end position
+            query_end_pos: (max_j[i] as i32) + 1,  // Convert to 1-based end position
+            gtarget_end_pos: (max_ie[i] as i32) + 1, // Target position when reaching query end
+            global_score: gscore[i] as i32,          // Score when reaching query end
+            max_offset: max_off,
         });
     }
 
