@@ -110,11 +110,14 @@ pub fn merge_scores_to_regions(
                     if left_score.global_score <= 0
                         || left_score.global_score <= left_score.score - opt.pen_clip5
                     {
+                        // Local path: extend reference boundary by target_end_pos
                         region.qb = seed.query_pos - left_score.query_end_pos;
                         region.rb = seed.ref_pos - left_score.target_end_pos as u64;
                         region.truesc = left_score.score;
                         log::trace!("    Using local: qb={} rb={}", region.qb, region.rb);
                     } else {
+                        // Global path (soft-clip): extend rb to fetch reference, but final position
+                        // will be computed after CIGAR generation
                         region.qb = 0;
                         region.rb = seed.ref_pos - left_score.gtarget_end_pos as u64;
                         region.truesc = left_score.global_score;
@@ -148,6 +151,7 @@ pub fn merge_scores_to_regions(
                     if right_score.global_score <= 0
                         || right_score.global_score <= right_score.score - opt.pen_clip3
                     {
+                        // Local path: extend reference boundary by target_end_pos
                         region.qe = seed.query_pos + seed.len + right_score.query_end_pos;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
@@ -155,6 +159,8 @@ pub fn merge_scores_to_regions(
                         region.truesc += right_score.score;
                         log::trace!("    Using local: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.score);
                     } else {
+                        // Global path (soft-clip): extend re to fetch reference, but final position
+                        // will be computed after CIGAR generation
                         region.qe = query_len;
                         region.re =
                             seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
@@ -191,9 +197,11 @@ pub fn merge_scores_to_regions(
             region.chr_pos = coords.chr_pos;
             region.is_rev = coords.is_rev;
 
+            let is_rev = region.rb >= bwa_idx.bns.packed_sequence_length;
             log::trace!(
-                "  FINAL_REGION: qb={} qe={} rb={} re={} score={} truesc={} seedcov={}",
-                region.qb, region.qe, region.rb, region.re, region.score, region.truesc, region.seedcov
+                "  FINAL_REGION: qb={} qe={} rb={} re={} score={} truesc={} seedcov={} is_rev={} ref_len={}",
+                region.qb, region.qe, region.rb, region.re, region.score, region.truesc, region.seedcov,
+                is_rev, region.re - region.rb
             );
 
             if total_score > best_score {
