@@ -13,32 +13,28 @@
 //! ## Module Organization
 //!
 //! - `types` - Core data structures (`AlignmentRegion`, `ScoreOnlyExtensionResult`)
-//! - `extension` - Chain extension to regions (`extend_chains_to_regions`)
 //! - `merge` - Score merging for cross-read batching
 //! - `cigar` - CIGAR regeneration from boundaries
 //!
-//! ## Heterogeneous Compute Integration
+//! ## Active Extension Pipeline (v0.8.0+)
 //!
-//! The `extend_chains_to_regions()` function includes dispatch points for:
-//! - CPU SIMD (active): SSE/AVX2/AVX-512/NEON batch scoring
-//! - GPU (placeholder): Metal/CUDA/ROCm kernel dispatch
-//! - NPU (placeholder): ANE/ONNX accelerated seed filtering
+//! Extension is now handled by the unified SoA pipeline:
+//! - `batch_extension/collect_soa.rs` - Job collection from SoA chains
+//! - `batch_extension/dispatch.rs` - SIMD batch scoring dispatch
+//! - `batch_extension/finalize_soa.rs` - Alignment record generation
+//! - `stages/extension/mod.rs` - Stage wrapper for pipeline integration
 
 mod cigar;
-mod extension;
 mod merge;
 mod types;
 
-// Re-export types
+// Re-export types (still used by batch_extension)
 pub use types::{
     AlignmentRegion, ChainExtensionMapping, ScoreOnlyExtensionResult, SeedExtensionMapping,
 };
 
-// Re-export extension functions
-pub use extension::extend_chains_to_regions;
-
-// Re-export merge functions
+// Re-export merge functions (still used by batch_extension)
 pub use merge::merge_extension_scores_to_regions;
 
-// Re-export CIGAR functions
+// Re-export CIGAR functions (still used by batch_extension)
 pub use cigar::generate_cigar_from_region;
