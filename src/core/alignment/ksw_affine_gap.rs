@@ -6,7 +6,7 @@
 // This is appropriate for SIMD-heavy code where nearly every operation is inherently unsafe.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::alloc::{Layout, alloc};
+use std::alloc::{Layout, alloc_zeroed};
 use std::ptr; // For `ptr::copy_nonoverlapping`
 
 // Import the abstraction layer components and specific SIMD types
@@ -176,7 +176,8 @@ pub unsafe fn ksw_qalloc(qlen: i32, m: i32, size: i32) -> *mut Kswq {
     let (layout, _) = kswq_layout
         .extend(Layout::from_size_align(total_simd_bytes, 16).unwrap())
         .unwrap();
-    let ptr = alloc(layout) as *mut Kswq;
+    // Use alloc_zeroed to prevent non-deterministic behavior from uninitialized memory
+    let ptr = alloc_zeroed(layout) as *mut Kswq;
 
     if ptr.is_null() {
         return ptr::null_mut(); // Allocation failed

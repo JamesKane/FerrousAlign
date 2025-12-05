@@ -18,7 +18,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use crate::compute::simd_abstraction::simd::{SimdEngineType, get_simd_batch_sizes};
-use std::alloc::{Layout, alloc, dealloc};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 
 /// Maximum sequence lengths for buffer allocation
 pub const MAX_SEQ_LEN_REF: usize = 2048;
@@ -115,11 +115,12 @@ impl KswvMemoryPool {
         let layout =
             Layout::from_size_align(total_size, 64).expect("Invalid layout for memory pool");
 
-        let f_buf = unsafe { alloc(layout) as *mut i16 };
-        let h0_buf = unsafe { alloc(layout) as *mut i16 };
-        let h1_buf = unsafe { alloc(layout) as *mut i16 };
-        let hmax_buf = unsafe { alloc(layout) as *mut i16 };
-        let row_max_buf = unsafe { alloc(layout) as *mut i16 };
+        // Use alloc_zeroed to prevent non-deterministic behavior from uninitialized memory
+        let f_buf = unsafe { alloc_zeroed(layout) as *mut i16 };
+        let h0_buf = unsafe { alloc_zeroed(layout) as *mut i16 };
+        let h1_buf = unsafe { alloc_zeroed(layout) as *mut i16 };
+        let hmax_buf = unsafe { alloc_zeroed(layout) as *mut i16 };
+        let row_max_buf = unsafe { alloc_zeroed(layout) as *mut i16 };
 
         assert!(!f_buf.is_null(), "Failed to allocate F buffer");
         assert!(!h0_buf.is_null(), "Failed to allocate H0 buffer");

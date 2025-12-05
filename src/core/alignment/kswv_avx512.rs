@@ -16,7 +16,7 @@
 #![cfg(all(target_arch = "x86_64", feature = "avx512"))]
 
 use crate::alignment::kswv_batch::{KswResult, SeqPair};
-use std::alloc::{Layout, alloc};
+use std::alloc::{Layout, alloc_zeroed};
 
 // Raw AVX-512 intrinsics - faithful to C++
 use std::arch::x86_64::{
@@ -78,10 +78,10 @@ fn allocate_aligned_buffer(size: usize) -> Vec<u8> {
     }
 
     unsafe {
-        // Allocate 64-byte aligned memory
+        // Allocate 64-byte aligned zeroed memory to prevent non-deterministic behavior
         let layout =
             Layout::from_size_align(size, 64).expect("Invalid layout for aligned allocation");
-        let ptr = alloc(layout);
+        let ptr = alloc_zeroed(layout);
 
         if ptr.is_null() {
             panic!(
@@ -91,7 +91,7 @@ fn allocate_aligned_buffer(size: usize) -> Vec<u8> {
         }
 
         // Create Vec from raw aligned pointer
-        // SAFETY: ptr is valid, 64-byte aligned, and has capacity for 'size' bytes
+        // SAFETY: ptr is valid, 64-byte aligned, zeroed, and has capacity for 'size' bytes
         Vec::from_raw_parts(ptr, size, size)
     }
 }

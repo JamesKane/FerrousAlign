@@ -28,7 +28,7 @@
 
 use crate::core::alignment::shared_types::{AlignJob, KswSoA, WorkspaceArena};
 use crate::pipelines::linear::seeding::SMEM;
-use std::alloc::{Layout, alloc, dealloc};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
@@ -76,7 +76,8 @@ impl<T: Copy> AlignedVec<T> {
         .unwrap();
 
         let ptr = unsafe {
-            let raw_ptr = alloc(layout) as *mut T;
+            // Use alloc_zeroed to prevent non-deterministic behavior from uninitialized memory
+            let raw_ptr = alloc_zeroed(layout) as *mut T;
             NonNull::new(raw_ptr).expect("Allocation failed")
         };
 
