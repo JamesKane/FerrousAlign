@@ -205,10 +205,18 @@ pub fn generate_cigar_from_region(
         .sum();
 
     let (nm, md) = if is_reverse_strand {
+        // For reverse strand, adjust position for soft-clipping
+        // region.chr_pos is computed from extended re, but actual alignment is shorter
+        let ref_extended = region.re - region.rb;
+        let adjusted_chr_pos = if ref_extended > cigar_ref_len as u64 {
+            region.chr_pos + (ref_extended - cigar_ref_len as u64)
+        } else {
+            region.chr_pos
+        };
         let forward_ref = bwa_idx.bns.get_forward_ref(
             &bwa_idx.bns.pac_data,
             region.rid as usize,
-            region.chr_pos,
+            adjusted_chr_pos,
             cigar_ref_len as usize,
         );
         let query_len = query.len() as i32;

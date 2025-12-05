@@ -359,6 +359,30 @@ pub fn finalize_alignments_soa(
                     None => continue,
                 };
 
+                // Compute reference length consumed by CIGAR (M, D, =, X operations)
+                let cigar_ref_len: u64 = cigar
+                    .iter()
+                    .filter_map(|&(op, len)| {
+                        if matches!(op, b'M' | b'D' | b'=' | b'X') {
+                            Some(len as u64)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
+
+                // Adjust position for reverse strand with soft-clipping
+                // For reverse strand, chr_pos is computed from (re - 1), but re may include
+                // extended region beyond the actual alignment. We need to adjust forward.
+                let ref_extended = region.re - region.rb;
+                let adjusted_pos = if region.is_rev && ref_extended > cigar_ref_len {
+                    // The extended window is larger than actual alignment
+                    // Shift position forward by the difference
+                    region.chr_pos + (ref_extended - cigar_ref_len)
+                } else {
+                    region.chr_pos
+                };
+
                 let flag = if region.is_rev {
                     super::super::finalization::sam_flags::REVERSE
                 } else {
@@ -373,7 +397,7 @@ pub fn finalize_alignments_soa(
                     flag,
                     ref_name: region.ref_name.clone(),
                     ref_id: region.rid as usize,
-                    pos: region.chr_pos,
+                    pos: adjusted_pos,
                     mapq: 60,
                     score: sw_score,
                     cigar,
