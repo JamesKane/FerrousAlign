@@ -207,12 +207,20 @@ impl<'a> PairedEndOrchestrator<'a> {
         let mut batch_num = 0u64;
 
         loop {
-            let batch1 = reader1
+            let mut batch1 = reader1
                 .read_batch(self.options.batch_size)
                 .map_err(OrchestratorError::Io)?;
-            let batch2 = reader2
+            let mut batch2 = reader2
                 .read_batch(self.options.batch_size)
                 .map_err(OrchestratorError::Io)?;
+
+            // Add /1 and /2 suffixes to read names for unambiguous tracking through the pipeline
+            for name in batch1.names.iter_mut() {
+                name.push_str("/1");
+            }
+            for name in batch2.names.iter_mut() {
+                name.push_str("/2");
+            }
 
             if batch1.len() != batch2.len() {
                 return Err(OrchestratorError::PairedEndMismatch {

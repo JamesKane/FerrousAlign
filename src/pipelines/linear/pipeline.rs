@@ -659,7 +659,7 @@ pub fn build_and_filter_chains_batch(
         .collect();
 
     // Filter chains
-    filter_chains_batch(&mut soa_chain_batch, soa_seed_batch, opt, &query_lengths);
+    filter_chains_batch(&mut soa_chain_batch, soa_seed_batch, opt, &query_lengths, &read_batch.names);
 
     soa_chain_batch
 }

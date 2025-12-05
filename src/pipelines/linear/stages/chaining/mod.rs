@@ -141,7 +141,7 @@ impl PipelineStage for ChainingStage {
         );
 
         // Step 2: Filter chains using query lengths from seeding stage
-        filter_chains_batch(&mut chains, &input.seeds, ctx.options, &input.query_lengths);
+        filter_chains_batch(&mut chains, &input.seeds, ctx.options, &input.query_lengths, &input.query_names);
 
         let kept_chains = chains.kept.iter().filter(|&&k| k > 0).count();
         log::debug!("ChainingStage: {} chains kept after filtering", kept_chains);

@@ -237,6 +237,7 @@ pub fn filter_chains_batch(
     soa_seed_batch: &SoASeedBatch,
     opt: &MemOpt,
     query_lengths: &[i32],
+    query_names: &[String],
 ) {
     let num_reads = soa_chain_batch.read_chain_boundaries.len();
 
@@ -265,8 +266,14 @@ pub fn filter_chains_batch(
             // DEBUG: Detailed chain logging for analysis
             let (seed_start_idx_in_chain, num_seeds_in_chain) =
                 soa_chain_batch.chain_seed_boundaries[global_chain_idx];
+            let query_name = if read_idx < query_names.len() {
+                &query_names[read_idx]
+            } else {
+                "UNKNOWN"
+            };
             log::debug!(
-                "FERROUS_CHAIN read_idx={} chain_local_idx={} weight={} n_seeds={} q=[{},{}] r=[{},{}] is_rev={}",
+                "FERROUS_CHAIN read={} read_idx={} chain_local_idx={} weight={} n_seeds={} q=[{},{}] r=[{},{}] is_rev={}",
+                query_name,
                 read_idx,
                 i,
                 weight,
