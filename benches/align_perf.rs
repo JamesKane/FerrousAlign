@@ -158,14 +158,18 @@ fn bench_banded_swa(c: &mut Criterion) {
                 let qsoa_i16: Vec<i16> = qsoa_u8.iter().map(|&v| v as i16).collect();
                 let tsoa_i16: Vec<i16> = tsoa_u8.iter().map(|&v| v as i16).collect();
                 let mut h0_i16 = [0i16; 16];
+                let mut qlen_i16 = [0i16; 16];
+                let mut tlen_i16 = [0i16; 16];
                 for i in 0..16 {
                     h0_i16[i] = h0_i8[i] as i16;
+                    qlen_i16[i] = qlen_i8[i] as i16;
+                    tlen_i16[i] = tlen_i8[i] as i16;
                 }
                 let inputs16 = SoAInputs16 {
                     query_soa: &qsoa_i16,
                     target_soa: &tsoa_i16,
-                    qlen: &qlen_i8,
-                    tlen: &tlen_i8,
+                    qlen: &qlen_i16,
+                    tlen: &tlen_i16,
                     h0: &h0_i16,
                     w: &w_arr,
                     max_qlen: max_q,
