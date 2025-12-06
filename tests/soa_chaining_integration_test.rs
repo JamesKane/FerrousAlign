@@ -147,7 +147,13 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
         .iter()
         .map(|(_, len)| *len as i32)
         .collect();
-    filter_chains_batch(&mut soa_chain_batch, &soa_seed_batch, &opt, &query_lengths);
+    filter_chains_batch(
+        &mut soa_chain_batch,
+        &soa_seed_batch,
+        &opt,
+        &query_lengths,
+        &soa_read_batch.names,
+    );
 
     // Assert filtering results
     // For read1, expect 1 primary chain
@@ -341,8 +347,10 @@ GATTACAGGATTACAGGATTACAGGATTACAGGATTACAG
     );
 
     // 9. Verify log messages indicate SoA pipeline was used
+    // SingleEndOrchestrator uses the SoA pipeline
     assert!(
-        stderr_contents.contains("SOA_PIPELINE")
+        stderr_contents.contains("SingleEndOrchestrator")
+            || stderr_contents.contains("SOA_PIPELINE")
             || stderr_contents.contains("Using end-to-end SoA pipeline"),
         "SoA pipeline was not used. Stderr: {stderr_contents}"
     );
