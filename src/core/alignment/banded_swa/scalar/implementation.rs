@@ -59,8 +59,19 @@ pub fn scalar_banded_swa_ex(
     // Allocate memory for query profile and eh_t array
     let mut qp = vec![0i8; (qlen * sw_params.alphabet_size()) as usize];
     let mut eh = vec![EhT::default(); (qlen + 1) as usize];
-    // Traceback matrix: (tlen+1) x (qlen+1)
-    let mut tb = vec![vec![0u8; (qlen + 1) as usize]; (tlen + 1) as usize]; // Initialize with 0 (MATCH)
+
+    // Traceback matrix: Flattened 1D array for better cache locality
+    // Using full matrix (not banded) for simplicity, but stored as contiguous memory
+    // This eliminates nested Vec allocation overhead
+    let tb_cols = (qlen + 1) as usize;
+    let tb_rows = (tlen + 1) as usize;
+    let mut tb = vec![0u8; tb_rows * tb_cols];
+
+    // Helper functions for traceback matrix access (row-major order)
+    #[inline(always)]
+    fn tb_idx(i: usize, j: usize, cols: usize) -> usize {
+        i * cols + j
+    }
 
     // Generate the query profile
     for k in 0..sw_params.alphabet_size() {
@@ -88,11 +99,11 @@ pub fn scalar_banded_swa_ex(
     // Initialize traceback matrix edges
     // Top row (i=0): insertions (gaps in target)
     for j in 1..=(qlen as usize) {
-        tb[0][j] = TB_INS;
+        tb[tb_idx(0, j, tb_cols)] = TB_INS;
     }
     // Left column (j=0): deletions (gaps in query)
     for i in 1..=(tlen as usize) {
-        tb[i][0] = TB_DEL;
+        tb[tb_idx(i, 0, tb_cols)] = TB_DEL;
     }
 
     // DP loop
@@ -170,7 +181,7 @@ pub fn scalar_banded_swa_ex(
             _current_tb = tb_code;
 
             // Update traceback matrix
-            tb[i as usize + 1][j as usize + 1] = _current_tb;
+            tb[tb_idx(i as usize + 1, j as usize + 1, tb_cols)] = _current_tb;
 
             if m_val < h {
                 m_val = h;
@@ -281,7 +292,7 @@ pub fn scalar_banded_swa_ex(
         let prev_i = curr_i;
         let prev_j = curr_j;
 
-        let tb_code = tb[curr_i as usize][curr_j as usize];
+        let tb_code = tb[tb_idx(curr_i as usize, curr_j as usize, tb_cols)];
         match tb_code {
             TB_MATCH => {
                 // Count consecutive alignment positions (both matches and mismatches use 'M')
@@ -289,7 +300,7 @@ pub fn scalar_banded_swa_ex(
                 // Also capture the aligned bases for MD tag generation
                 let mut alignment_count = 0;
 
-                while curr_i > 0 && curr_j > 0 && tb[curr_i as usize][curr_j as usize] == TB_MATCH {
+                while curr_i > 0 && curr_j > 0 && tb[tb_idx(curr_i as usize, curr_j as usize, tb_cols)] == TB_MATCH {
                     alignment_count += 1;
                     // Capture aligned bases (1-indexed in arrays, so subtract 1)
                     // Note: bases are added in reverse order, will be reversed later
@@ -307,7 +318,7 @@ pub fn scalar_banded_swa_ex(
             TB_DEL => {
                 // Deletion: gap in query, target base consumed
                 let mut count = 0;
-                while curr_i > 0 && tb[curr_i as usize][curr_j as usize] == TB_DEL {
+                while curr_i > 0 && tb[tb_idx(curr_i as usize, curr_j as usize, tb_cols)] == TB_DEL {
                     count += 1;
                     // Capture deleted reference base (target consumes, query doesn't)
                     ref_aligned.push(target[(curr_i - 1) as usize]);
@@ -321,7 +332,7 @@ pub fn scalar_banded_swa_ex(
             TB_INS => {
                 // Insertion: gap in target, query base consumed
                 let mut count = 0;
-                while curr_j > 0 && tb[curr_i as usize][curr_j as usize] == TB_INS {
+                while curr_j > 0 && tb[tb_idx(curr_i as usize, curr_j as usize, tb_cols)] == TB_INS {
                     count += 1;
                     // Capture inserted query base (query consumes, target doesn't)
                     query_aligned.push(query[(curr_j - 1) as usize]);

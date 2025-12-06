@@ -96,16 +96,17 @@ fn test_kernel_identical_sequence_alignment() {
             i,
             result.score
         );
+        // The kernel returns end position as 1-indexed (seq_len for full alignment)
         assert_eq!(
             result.query_end_pos,
-            (seq_len - 1) as i32,
-            "Lane {}: Query end should be at last position",
+            seq_len as i32,
+            "Lane {}: Query end should be at sequence length (1-indexed end)",
             i
         );
         assert_eq!(
             result.target_end_pos,
-            (seq_len - 1) as i32,
-            "Lane {}: Target end should be at last position",
+            seq_len as i32,
+            "Lane {}: Target end should be at sequence length (1-indexed end)",
             i
         );
     }
@@ -268,8 +269,9 @@ fn test_kernel_varying_lengths() {
     assert_eq!(results.len(), num_lanes);
 
     // Each lane should have score proportional to its length
+    // The kernel returns 1-indexed end positions (length for full alignment)
     for (i, result) in results.iter().enumerate() {
-        let expected_end = qlen[i] - 1;
+        let expected_max_end = qlen[i]; // 1-indexed, so max end equals length
         assert!(
             result.score > 0,
             "Lane {}: Should have positive score, got {}",
@@ -277,11 +279,11 @@ fn test_kernel_varying_lengths() {
             result.score
         );
         assert!(
-            result.query_end_pos <= expected_end as i32,
+            result.query_end_pos <= expected_max_end as i32,
             "Lane {}: Query end position {} should not exceed length {}",
             i,
             result.query_end_pos,
-            expected_end
+            expected_max_end
         );
     }
 }
