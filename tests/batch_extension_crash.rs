@@ -20,10 +20,10 @@ fn make_test_seq(len: usize, base: u8) -> Vec<u8> {
 fn make_sw_params() -> BandedPairWiseSW {
     // Standard BWA-MEM2 scoring matrix
     let mat = [
-        1, -4, -4, -4, -1,  // A vs A,C,G,T,N
-        -4, 1, -4, -4, -1,  // C vs ...
-        -4, -4, 1, -4, -1,  // G vs ...
-        -4, -4, -4, 1, -1,  // T vs ...
+        1, -4, -4, -4, -1, // A vs A,C,G,T,N
+        -4, 1, -4, -4, -1, // C vs ...
+        -4, -4, 1, -4, -1, // G vs ...
+        -4, -4, -4, 1, -1, // T vs ...
         -1, -1, -1, -1, -1, // N vs ...
     ];
     BandedPairWiseSW::new(6, 1, 6, 1, 100, 0, 5, 5, mat, 1, -4)
@@ -40,14 +40,14 @@ fn test_single_chunk_batch() {
         let query = make_test_seq(100, 0);
         let ref_seq = make_test_seq(100, 0);
         batch.add_job(
-            i,      // read_idx
-            0,      // chain_idx
-            0,      // seed_idx
+            i, // read_idx
+            0, // chain_idx
+            0, // seed_idx
             ExtensionDirection::Right,
             &query,
             &ref_seq,
-            0,      // h0
-            50,     // band_width
+            0,  // h0
+            50, // band_width
         );
     }
 
@@ -57,7 +57,10 @@ fn test_single_chunk_batch() {
     assert_eq!(results.len(), 8, "Should get 8 results for 8 jobs");
     for (i, r) in results.iter().enumerate() {
         assert_eq!(r.read_idx, i, "Result {} should have read_idx {}", i, i);
-        assert!(r.score > 0, "Score should be positive for matching sequences");
+        assert!(
+            r.score > 0,
+            "Score should be positive for matching sequences"
+        );
     }
 }
 
@@ -73,14 +76,14 @@ fn test_multi_chunk_batch_avx2() {
         let query = make_test_seq(100, 0);
         let ref_seq = make_test_seq(100, 0);
         batch.add_job(
-            i,      // read_idx
-            0,      // chain_idx
-            0,      // seed_idx
+            i, // read_idx
+            0, // chain_idx
+            0, // seed_idx
             ExtensionDirection::Right,
             &query,
             &ref_seq,
-            0,      // h0
-            50,     // band_width
+            0,  // h0
+            50, // band_width
         );
     }
 
@@ -108,14 +111,14 @@ fn test_large_batch_realistic() {
         let query = make_test_seq(qlen, 0);
         let ref_seq = make_test_seq(rlen, 0);
         batch.add_job(
-            i,      // read_idx
-            0,      // chain_idx
-            0,      // seed_idx
+            i, // read_idx
+            0, // chain_idx
+            0, // seed_idx
             ExtensionDirection::Right,
             &query,
             &ref_seq,
-            0,      // h0
-            50,     // band_width
+            0,  // h0
+            50, // band_width
         );
     }
 
@@ -135,16 +138,7 @@ fn test_long_sequences_i16_path() {
     for i in 0..32 {
         let query = make_test_seq(150, 0);
         let ref_seq = make_test_seq(150, 0);
-        batch.add_job(
-            i,
-            0,
-            0,
-            ExtensionDirection::Right,
-            &query,
-            &ref_seq,
-            0,
-            50,
-        );
+        batch.add_job(i, 0, 0, ExtensionDirection::Right, &query, &ref_seq, 0, 50);
     }
 
     let engine = SimdEngineType::Engine256;
@@ -166,16 +160,7 @@ fn test_mixed_length_sequences() {
 
         let query = make_test_seq(qlen, 0);
         let ref_seq = make_test_seq(rlen, 0);
-        batch.add_job(
-            i,
-            0,
-            0,
-            ExtensionDirection::Right,
-            &query,
-            &ref_seq,
-            0,
-            50,
-        );
+        batch.add_job(i, 0, 0, ExtensionDirection::Right, &query, &ref_seq, 0, 50);
     }
 
     let engine = SimdEngineType::Engine256;
@@ -194,16 +179,7 @@ fn test_engine128_multi_chunk() {
     for i in 0..32 {
         let query = make_test_seq(100, 0);
         let ref_seq = make_test_seq(100, 0);
-        batch.add_job(
-            i,
-            0,
-            0,
-            ExtensionDirection::Right,
-            &query,
-            &ref_seq,
-            0,
-            50,
-        );
+        batch.add_job(i, 0, 0, ExtensionDirection::Right, &query, &ref_seq, 0, 50);
     }
 
     let engine = SimdEngineType::Engine128;

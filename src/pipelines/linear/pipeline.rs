@@ -5,10 +5,10 @@ use super::index::index::BwaIndex;
 use super::mem_opt::MemOpt;
 use super::seeding::SMEM;
 use super::seeding::Seed;
+use super::seeding::SoASeedBatch;
 use super::seeding::forward_only_seed_strategy;
 use super::seeding::generate_smems_for_strand;
 use super::seeding::generate_smems_from_position;
-use super::seeding::SoASeedBatch;
 use crate::alignment::utils::base_to_code;
 use crate::alignment::utils::reverse_complement_code;
 use crate::alignment::workspace::with_workspace;
@@ -659,7 +659,13 @@ pub fn build_and_filter_chains_batch(
         .collect();
 
     // Filter chains
-    filter_chains_batch(&mut soa_chain_batch, soa_seed_batch, opt, &query_lengths, &read_batch.names);
+    filter_chains_batch(
+        &mut soa_chain_batch,
+        soa_seed_batch,
+        opt,
+        &query_lengths,
+        &read_batch.names,
+    );
 
     soa_chain_batch
 }
@@ -828,5 +834,4 @@ mod tests {
         // 57227350 + 64 = 57227414 < 57227415 (OK)
         assert!(bounds_check_passes(57_227_350, ref_len, chry_length));
     }
-
 }

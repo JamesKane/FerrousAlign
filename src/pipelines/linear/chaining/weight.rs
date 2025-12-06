@@ -140,11 +140,7 @@ pub fn cal_max_gap(opt: &MemOpt, qlen: i32) -> i32 {
     let l = if l_del > l_ins { l_del } else { l_ins };
     let l = if l > 1 { l } else { 1 };
 
-    if l < (opt.w << 1) {
-        l
-    } else {
-        opt.w << 1
-    }
+    if l < (opt.w << 1) { l } else { opt.w << 1 }
 }
 
 #[cfg(test)]

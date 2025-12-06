@@ -112,8 +112,15 @@ pub fn generate_cigar_from_region(
 
     log::debug!(
         "CIGAR_GEN: region qb={} qe={} rb={} re={} is_rev={} w={} sw_score={} query_len={} ref_len={} query_first10={:?} ref_first10={:?}",
-        region.qb, region.qe, region.rb, region.re, region.is_rev, w, sw_score,
-        query_for_sw.len(), rseq_for_sw.len(),
+        region.qb,
+        region.qe,
+        region.rb,
+        region.re,
+        region.is_rev,
+        w,
+        sw_score,
+        query_for_sw.len(),
+        rseq_for_sw.len(),
         &query_for_sw[..10.min(query_for_sw.len())],
         &rseq_for_sw[..10.min(rseq_for_sw.len())],
     );

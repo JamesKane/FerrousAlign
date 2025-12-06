@@ -19,56 +19,89 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
     alignments.sort_by(|a, b| {
         let a_ref_end = a.pos + alignment_ref_length(a);
         let b_ref_end = b.pos + alignment_ref_length(b);
-        a.ref_id.cmp(&b.ref_id).then_with(|| a_ref_end.cmp(&b_ref_end))
+        a.ref_id
+            .cmp(&b.ref_id)
+            .then_with(|| a_ref_end.cmp(&b_ref_end))
     });
 
     let mut keep = vec![true; alignments.len()];
 
     for i in 1..alignments.len() {
-        if !keep[i] { continue; }
+        if !keep[i] {
+            continue;
+        }
 
         let p = &alignments[i];
         let p_ref_start = p.pos;
         let p_ref_end = p.pos + alignment_ref_length(p);
 
         for j in (0..i).rev() {
-            if !keep[j] { continue; }
+            if !keep[j] {
+                continue;
+            }
 
             let q = &alignments[j];
-            if q.ref_id != p.ref_id { break; }
+            if q.ref_id != p.ref_id {
+                break;
+            }
 
             let q_ref_end = q.pos + alignment_ref_length(q);
-            if p_ref_start >= q_ref_end + max_chain_gap { break; }
+            if p_ref_start >= q_ref_end + max_chain_gap {
+                break;
+            }
 
             let q_ref_start = q.pos;
 
             let ref_overlap = if p_ref_start < q_ref_end && q_ref_start < p_ref_end {
                 (p_ref_end.min(q_ref_end) - p_ref_start.max(q_ref_start)) as i64
-            } else { 0 };
+            } else {
+                0
+            };
 
             let (p_qb, p_qe) = (p.query_start, p.query_end);
             let (q_qb, q_qe) = (q.query_start, q.query_end);
 
             let query_overlap = if p_qb < q_qe && q_qb < p_qe {
                 p_qe.min(q_qe) - p_qb.max(q_qb)
-            } else { 0 };
+            } else {
+                0
+            };
 
-            let min_ref_len = ((p_ref_end - p_ref_start) as i64).min((q_ref_end - q_ref_start) as i64);
+            let min_ref_len =
+                ((p_ref_end - p_ref_start) as i64).min((q_ref_end - q_ref_start) as i64);
             let min_query_len = (p_qe - p_qb).min(q_qe - q_qb);
 
             let ref_redundant = ref_overlap as f32 > mask_level_redun * min_ref_len as f32;
             let query_redundant = query_overlap as f32 > mask_level_redun * min_query_len as f32;
 
             let same_position_duplicate = check_same_position_duplicate(
-                p, q, p_ref_start, p_ref_end, q_ref_start, q_ref_end, query_overlap, min_query_len
+                p,
+                q,
+                p_ref_start,
+                p_ref_end,
+                q_ref_start,
+                q_ref_end,
+                query_overlap,
+                min_query_len,
             );
 
             let same_region_opposite_strand = check_same_region_opposite_strand(
-                p, q, p_ref_start, p_ref_end, q_ref_start, q_ref_end,
-                p_qb, p_qe, q_qb, q_qe
+                p,
+                q,
+                p_ref_start,
+                p_ref_end,
+                q_ref_start,
+                q_ref_end,
+                p_qb,
+                p_qe,
+                q_qb,
+                q_qe,
             );
 
-            if (ref_redundant && query_redundant) || same_region_opposite_strand || same_position_duplicate {
+            if (ref_redundant && query_redundant)
+                || same_region_opposite_strand
+                || same_position_duplicate
+            {
                 if p.score < q.score {
                     keep[i] = false;
                     break;
@@ -99,23 +132,31 @@ pub fn remove_redundant_alignments(alignments: &mut Vec<Alignment>, opt: &MemOpt
     // 2. Tie-break 1: Reference position (ascending - lower position wins)
     // 3. Tie-break 2: Query start position (ascending - lower position wins)
     alignments.sort_by(|a, b| {
-        b.score.cmp(&a.score)
-            .then_with(|| a.pos.cmp(&b.pos))          // rb - reference start position
-            .then_with(|| a.query_start.cmp(&b.query_start))  // qb - query start position
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.pos.cmp(&b.pos)) // rb - reference start position
+            .then_with(|| a.query_start.cmp(&b.query_start)) // qb - query start position
     });
 
     // Remove exact duplicates
     alignments.dedup_by(|a, b| {
-        a.score == b.score && a.pos == b.pos && a.ref_id == b.ref_id
-            && a.query_start == b.query_start && a.query_end == b.query_end
+        a.score == b.score
+            && a.pos == b.pos
+            && a.ref_id == b.ref_id
+            && a.query_start == b.query_start
+            && a.query_end == b.query_end
     });
 }
 
 fn check_same_position_duplicate(
-    p: &Alignment, q: &Alignment,
-    p_ref_start: u64, p_ref_end: u64,
-    q_ref_start: u64, q_ref_end: u64,
-    query_overlap: i32, min_query_len: i32,
+    p: &Alignment,
+    q: &Alignment,
+    p_ref_start: u64,
+    p_ref_end: u64,
+    q_ref_start: u64,
+    q_ref_end: u64,
+    query_overlap: i32,
+    min_query_len: i32,
 ) -> bool {
     let p_is_reverse = (p.flag & sam_flags::REVERSE) != 0;
     let q_is_reverse = (q.flag & sam_flags::REVERSE) != 0;
@@ -129,14 +170,22 @@ fn check_same_position_duplicate(
 }
 
 fn check_same_region_opposite_strand(
-    p: &Alignment, q: &Alignment,
-    p_ref_start: u64, p_ref_end: u64,
-    q_ref_start: u64, q_ref_end: u64,
-    p_qb: i32, p_qe: i32, q_qb: i32, q_qe: i32,
+    p: &Alignment,
+    q: &Alignment,
+    p_ref_start: u64,
+    p_ref_end: u64,
+    q_ref_start: u64,
+    q_ref_end: u64,
+    p_qb: i32,
+    p_qe: i32,
+    q_qb: i32,
+    q_qe: i32,
 ) -> bool {
     let p_is_reverse = (p.flag & sam_flags::REVERSE) != 0;
     let q_is_reverse = (q.flag & sam_flags::REVERSE) != 0;
-    if p_is_reverse == q_is_reverse { return false; }
+    if p_is_reverse == q_is_reverse {
+        return false;
+    }
 
     let max_ref_len = (p_ref_end - p_ref_start).max(q_ref_end - q_ref_start);
     let ref_distance = if p_ref_start > q_ref_end {
@@ -152,14 +201,22 @@ fn check_same_region_opposite_strand(
     let query_len = (p_qe.max(q_qe)).max(148);
     let (p_fwd_start, p_fwd_end) = if p_is_reverse {
         (query_len - p_qe, query_len - p_qb)
-    } else { (p_qb, p_qe) };
+    } else {
+        (p_qb, p_qe)
+    };
     let (q_fwd_start, q_fwd_end) = if q_is_reverse {
         (query_len - q_qe, query_len - q_qb)
-    } else { (q_qb, q_qe) };
+    } else {
+        (q_qb, q_qe)
+    };
 
     let fwd_b_max = p_fwd_start.max(q_fwd_start);
     let fwd_e_min = p_fwd_end.min(q_fwd_end);
-    let fwd_overlap = if fwd_e_min > fwd_b_max { fwd_e_min - fwd_b_max } else { 0 };
+    let fwd_overlap = if fwd_e_min > fwd_b_max {
+        fwd_e_min - fwd_b_max
+    } else {
+        0
+    };
     let fwd_min_len = (p_fwd_end - p_fwd_start).min(q_fwd_end - q_fwd_start);
     let query_regions_same = fwd_overlap > 0 && fwd_overlap >= (fwd_min_len as f32 * 0.8) as i32;
 
@@ -183,8 +240,12 @@ mod tests {
     use super::*;
 
     fn make_test_alignment(
-        ref_id: usize, pos: u64, score: i32, cigar: Vec<(u8, i32)>,
-        query_start: i32, query_end: i32,
+        ref_id: usize,
+        pos: u64,
+        score: i32,
+        cigar: Vec<(u8, i32)>,
+        query_start: i32,
+        query_end: i32,
     ) -> Alignment {
         Alignment {
             query_name: "read1".to_string(),
@@ -252,13 +313,27 @@ mod tests {
 
     #[test]
     fn test_alignment_ref_length_with_insertions() {
-        let alignment = make_test_alignment(0, 1000, 100, vec![(b'M', 50), (b'I', 5), (b'M', 45)], 0, 100);
+        let alignment = make_test_alignment(
+            0,
+            1000,
+            100,
+            vec![(b'M', 50), (b'I', 5), (b'M', 45)],
+            0,
+            100,
+        );
         assert_eq!(alignment_ref_length(&alignment), 95);
     }
 
     #[test]
     fn test_alignment_ref_length_with_deletions() {
-        let alignment = make_test_alignment(0, 1000, 100, vec![(b'M', 50), (b'D', 10), (b'M', 40)], 0, 90);
+        let alignment = make_test_alignment(
+            0,
+            1000,
+            100,
+            vec![(b'M', 50), (b'D', 10), (b'M', 40)],
+            0,
+            90,
+        );
         assert_eq!(alignment_ref_length(&alignment), 100);
     }
 }

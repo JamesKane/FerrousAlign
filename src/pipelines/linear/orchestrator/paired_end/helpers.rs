@@ -202,7 +202,13 @@ impl PairedEndOrchestrator<'_> {
         };
 
         // Calculate TLEN with sign convention
-        let sign_adj = if p0 > p1 { 1 } else if p0 < p1 { -1 } else { 0 };
+        let sign_adj = if p0 > p1 {
+            1
+        } else if p0 < p1 {
+            -1
+        } else {
+            0
+        };
         aln.tlen = -(p0 - p1 + sign_adj) as i32;
     }
 

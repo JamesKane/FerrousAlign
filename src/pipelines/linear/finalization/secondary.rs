@@ -134,7 +134,9 @@ fn calculate_all_mapq(
                 alignments[i].frac_rep,
                 opt,
             );
-            alignments[i].tags.push(("XS".to_string(), format!("i:{}", sub_scores[i])));
+            alignments[i]
+                .tags
+                .push(("XS".to_string(), format!("i:{}", sub_scores[i])));
         } else {
             alignments[i].mapq = 0;
         }
@@ -150,7 +152,9 @@ fn filter_supplementary_by_score(
     let mut to_remove: Vec<usize> = Vec::with_capacity(alignments.len().min(4));
 
     for i in 0..alignments.len() {
-        if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0 && alignments[i].score < supp_threshold {
+        if (alignments[i].flag & sam_flags::SUPPLEMENTARY) != 0
+            && alignments[i].score < supp_threshold
+        {
             to_remove.push(i);
         }
     }
@@ -168,7 +172,9 @@ fn alignments_overlap(a1: &Alignment, a2: &Alignment, mask_level: f32) -> bool {
     let b_max = a1_qb.max(a2_qb);
     let e_min = a1_qe.min(a2_qe);
 
-    if e_min <= b_max { return false; }
+    if e_min <= b_max {
+        return false;
+    }
 
     let overlap = e_min - b_max;
     let min_len = (a1_qe - a1_qb).min(a2_qe - a2_qb);
@@ -190,9 +196,15 @@ fn calculate_mapq(
     const MEM_MAPQ_COEF: f64 = 30.0;
     const MEM_MAPQ_MAX: u8 = 60;
 
-    let sub = if sub_score > 0 { sub_score } else { opt.min_seed_len * match_score };
+    let sub = if sub_score > 0 {
+        sub_score
+    } else {
+        opt.min_seed_len * match_score
+    };
 
-    if sub >= score { return 0; }
+    if sub >= score {
+        return 0;
+    }
 
     let l = seed_coverage;
     let identity = 1.0
@@ -200,7 +212,9 @@ fn calculate_mapq(
             / ((match_score + mismatch_penalty) as f64)
             / (l as f64);
 
-    if score == 0 { return 0; }
+    if score == 0 {
+        return 0;
+    }
 
     let mut mapq: i32;
 
@@ -212,7 +226,8 @@ fn calculate_mapq(
             tmp_val = opt.mapq_coef_fac as f64 / (l as f64).ln();
         }
         tmp_val *= identity * identity;
-        mapq = (6.02 * (score - sub) as f64 / match_score as f64 * tmp_val * tmp_val + 0.499) as i32;
+        mapq =
+            (6.02 * (score - sub) as f64 / match_score as f64 * tmp_val * tmp_val + 0.499) as i32;
     } else {
         mapq = (MEM_MAPQ_COEF * (1.0 - (sub as f64) / (score as f64)) * (seed_coverage as f64).ln()
             + 0.499) as i32;
@@ -227,8 +242,12 @@ fn calculate_mapq(
 
     mapq = (mapq as f64 * (1.0 - frac_rep as f64) + 0.499) as i32;
 
-    if mapq > MEM_MAPQ_MAX as i32 { mapq = MEM_MAPQ_MAX as i32; }
-    if mapq < 0 { mapq = 0; }
+    if mapq > MEM_MAPQ_MAX as i32 {
+        mapq = MEM_MAPQ_MAX as i32;
+    }
+    if mapq < 0 {
+        mapq = 0;
+    }
 
     mapq as u8
 }
@@ -238,8 +257,13 @@ mod tests {
     use super::*;
 
     fn make_test_alignment(
-        ref_id: usize, pos: u64, score: i32, cigar: Vec<(u8, i32)>,
-        query_start: i32, query_end: i32, flag: u16,
+        ref_id: usize,
+        pos: u64,
+        score: i32,
+        cigar: Vec<(u8, i32)>,
+        query_start: i32,
+        query_end: i32,
+        flag: u16,
     ) -> Alignment {
         Alignment {
             query_name: "read1".to_string(),
@@ -283,7 +307,15 @@ mod tests {
     #[test]
     fn test_mark_secondary_single() {
         let opt = default_test_opt();
-        let mut alignments = vec![make_test_alignment(0, 1000, 100, vec![(b'M', 100)], 0, 100, 0)];
+        let mut alignments = vec![make_test_alignment(
+            0,
+            1000,
+            100,
+            vec![(b'M', 100)],
+            0,
+            100,
+            0,
+        )];
         mark_secondary_alignments(&mut alignments, &opt);
         assert_eq!(alignments.len(), 1);
         assert_eq!(alignments[0].flag & sam_flags::SECONDARY, 0);

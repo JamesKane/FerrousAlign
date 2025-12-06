@@ -26,8 +26,8 @@ pub struct SoAInputs<'a> {
 pub struct SoAInputs16<'a> {
     pub query_soa: &'a [i16],
     pub target_soa: &'a [i16],
-    pub qlen: &'a [i16],  // i16 for seqs > 127bp
-    pub tlen: &'a [i16],  // i16 for seqs > 127bp
+    pub qlen: &'a [i16], // i16 for seqs > 127bp
+    pub tlen: &'a [i16], // i16 for seqs > 127bp
     pub h0: &'a [i16],
     pub w: &'a [i8],
     pub max_qlen: i32,

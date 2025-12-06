@@ -26,8 +26,8 @@ pub struct KernelParams16<'a> {
     pub batch: &'a [(i32, &'a [u8], i32, &'a [u8], i32, i32)],
     pub query_soa: &'a [i16],
     pub target_soa: &'a [i16],
-    pub qlen: &'a [i16],  // i16 for seqs > 127bp
-    pub tlen: &'a [i16],  // i16 for seqs > 127bp
+    pub qlen: &'a [i16], // i16 for seqs > 127bp
+    pub tlen: &'a [i16], // i16 for seqs > 127bp
     pub h0: &'a [i16],
     pub w: &'a [i8],
     pub max_qlen: i32,
@@ -67,7 +67,12 @@ where
     <E as SwSimd16>::V16: std::fmt::Debug,
 {
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
-    debug_assert!(num_jobs <= W, "num_jobs ({}) exceeds SIMD width ({})", num_jobs, W);
+    debug_assert!(
+        num_jobs <= W,
+        "num_jobs ({}) exceeds SIMD width ({})",
+        num_jobs,
+        W
+    );
 
     // SoA stride is always W (SIMD width), even if fewer lanes are active
     let stride = W;
@@ -315,7 +320,7 @@ where
             target_end_pos: (max_i[i] + 1) as i32, // Convert to 1-based end position
             query_end_pos: (max_j[i] + 1) as i32,  // Convert to 1-based end position
             gtarget_end_pos: (max_ie[i] + 1) as i32, // Target position when reaching query end
-            global_score: gscore[i] as i32,          // Score when reaching query end
+            global_score: gscore[i] as i32,        // Score when reaching query end
             max_offset: max_off,
         });
     }

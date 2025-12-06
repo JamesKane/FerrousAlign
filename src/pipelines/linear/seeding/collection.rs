@@ -12,8 +12,10 @@ use crate::pipelines::linear::index::index::BwaIndex;
 use crate::pipelines::linear::mem_opt::MemOpt;
 
 use super::bwt::get_sa_entries;
-use super::smem::{forward_only_seed_strategy, generate_smems_for_strand, generate_smems_from_position};
-use super::types::{Seed, SoASeedBatch, SoAEncodedQueryBatch, SMEM};
+use super::smem::{
+    forward_only_seed_strategy, generate_smems_for_strand, generate_smems_from_position,
+};
+use super::types::{SMEM, Seed, SoAEncodedQueryBatch, SoASeedBatch};
 
 /// Match C++ SEEDS_PER_READ limit (see bwa-mem2/src/macro.h)
 const SEEDS_PER_READ: usize = 500;
@@ -194,14 +196,10 @@ fn find_seeds_single_read(
             );
             log_smems_debug(query_name, "Pass3", &all_smems, smems_before_3rd_round);
         } else {
-            log::debug!(
-                "SMEM_VALIDATION {query_name}: Pass 3 (forward-only) added 0 new SMEMs"
-            );
+            log::debug!("SMEM_VALIDATION {query_name}: Pass 3 (forward-only) added 0 new SMEMs");
         }
     } else {
-        log::debug!(
-            "SMEM_VALIDATION {query_name}: Pass 3 (forward-only) skipped (max_mem_intv=0)"
-        );
+        log::debug!("SMEM_VALIDATION {query_name}: Pass 3 (forward-only) skipped (max_mem_intv=0)");
     }
 
     // Filter SMEMs

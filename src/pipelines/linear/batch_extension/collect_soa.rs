@@ -137,7 +137,12 @@ pub fn collect_extension_jobs_batch_soa(
 
             log::debug!(
                 "RMAX_CALC: read_idx={} chain_idx={} rmax_0={} rmax_1={} l_pac={} is_rev={}",
-                read_idx, local_chain_idx, rmax_0, rmax_1, l_pac, rmax_0 >= l_pac
+                read_idx,
+                local_chain_idx,
+                rmax_0,
+                rmax_1,
+                l_pac,
+                rmax_0 >= l_pac
             );
 
             // Build seed mappings and extension jobs

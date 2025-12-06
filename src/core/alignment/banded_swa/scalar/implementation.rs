@@ -231,7 +231,9 @@ pub fn scalar_banded_swa_ex(
         // because negative scores are valid
         if !global {
             let mut new_beg = current_beg;
-            while new_beg < current_end && eh[new_beg as usize].h == 0 && eh[new_beg as usize].e == 0
+            while new_beg < current_end
+                && eh[new_beg as usize].h == 0
+                && eh[new_beg as usize].e == 0
             {
                 new_beg += 1;
             }

@@ -25,7 +25,7 @@ mod types;
 mod weight;
 
 // Re-export types
-pub use types::{Chain, SoAChainBatch, MAX_CHAINS_PER_READ, MAX_SEEDS_PER_READ};
+pub use types::{Chain, MAX_CHAINS_PER_READ, MAX_SEEDS_PER_READ, SoAChainBatch};
 
 // Re-export B-tree chaining functions
 pub use btree::{chain_seeds, chain_seeds_batch, chain_seeds_with_l_pac};

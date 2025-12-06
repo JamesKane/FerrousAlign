@@ -9,7 +9,7 @@ use crate::core::kbtree::KBTree;
 use crate::pipelines::linear::mem_opt::MemOpt;
 use crate::pipelines::linear::seeding::{Seed, SoASeedBatch};
 
-use super::types::{Chain, SoAChainBatch, MAX_CHAINS_PER_READ, MAX_SEEDS_PER_READ};
+use super::types::{Chain, MAX_CHAINS_PER_READ, MAX_SEEDS_PER_READ, SoAChainBatch};
 
 /// Per-read chaining result for parallel processing.
 struct PerReadChainResult {

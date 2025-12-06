@@ -27,7 +27,7 @@ fn create_unmapped_alignment_internal(query_name: &str) -> Alignment {
         seed_coverage: 0,
         hash: 0,
         frac_rep: 0.0,
-        is_alt: false,  // Unmapped reads don't map to alternate contigs
+        is_alt: false, // Unmapped reads don't map to alternate contigs
     }
 }
 

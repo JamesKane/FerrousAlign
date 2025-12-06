@@ -4,7 +4,7 @@
 //! Exact Matches (SMEMs) from query sequences.
 
 use crate::core::compute::simd_abstraction::portable_intrinsics;
-use crate::pipelines::linear::index::fm_index::{backward_ext, forward_ext, CP_SHIFT};
+use crate::pipelines::linear::index::fm_index::{CP_SHIFT, backward_ext, forward_ext};
 use crate::pipelines::linear::index::index::BwaIndex;
 
 use super::types::SMEM;
@@ -25,7 +25,7 @@ unsafe fn prefetch_bwt(bwa_idx: &BwaIndex, smem: &SMEM) {
 /// that should be pre-allocated and reused across calls to avoid allocation overhead.
 pub fn generate_smems_for_strand<'a>(
     bwa_idx: &BwaIndex,
-    query_name: &str,
+    _query_name: &str,
     query_len: usize,
     encoded_query: &[u8],
     is_reverse_complement: bool,
@@ -39,19 +39,12 @@ pub fn generate_smems_for_strand<'a>(
     prev_array_buf.clear();
     curr_array_buf.clear();
 
-    // Debug specific read for SMEM comparison
-    let is_debug_read = query_name.contains("10000:26291");
-
     let mut x = 0;
     while x < query_len {
         let a = encoded_query[x];
         if a >= 4 {
             x += 1;
             continue;
-        }
-
-        if is_debug_read {
-            log::info!("  Starting SMEM generation from position x={}", x);
         }
 
         let mut smem = SMEM {
@@ -107,10 +100,6 @@ pub fn generate_smems_for_strand<'a>(
         // Phase 2: Backward search
         prev_array_buf.reverse();
 
-        if is_debug_read {
-            log::info!("    After forward extension: {} SMEMs in prev_array_buf, starting backward search from x={}", prev_array_buf.len(), x);
-        }
-
         for j in (0..x).rev() {
             let a = encoded_query[j];
             if a >= 4 {
@@ -132,19 +121,6 @@ pub fn generate_smems_for_strand<'a>(
                 if new_smem.interval_size < min_intv
                     && (smem.query_end - smem.query_start + 1) >= min_seed_len
                 {
-                    if is_debug_read {
-                        log::info!(
-                            "SMEM: {} strand={} pos=[{},{}] len={} interval=[{},{}] size={} (backward output)",
-                            query_name,
-                            if is_reverse_complement { "RC" } else { "FW" },
-                            smem.query_start,
-                            smem.query_end,
-                            smem.query_end - smem.query_start + 1,
-                            smem.bwt_interval_start,
-                            smem.bwt_interval_end,
-                            smem.interval_size
-                        );
-                    }
                     all_smems.push(smem);
                     break;
                 }
@@ -152,7 +128,9 @@ pub fn generate_smems_for_strand<'a>(
                 // Keep if above threshold and unique interval size
                 if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                     curr_s = new_smem.interval_size as i64;
-                    unsafe { prefetch_bwt(bwa_idx, &new_smem); }
+                    unsafe {
+                        prefetch_bwt(bwa_idx, &new_smem);
+                    }
                     curr_array_buf.push(new_smem);
                     break;
                 }
@@ -169,7 +147,9 @@ pub fn generate_smems_for_strand<'a>(
 
                 if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                     curr_s = new_smem.interval_size as i64;
-                    unsafe { prefetch_bwt(bwa_idx, &new_smem); }
+                    unsafe {
+                        prefetch_bwt(bwa_idx, &new_smem);
+                    }
                     curr_array_buf.push(new_smem);
                 }
 
@@ -189,19 +169,6 @@ pub fn generate_smems_for_strand<'a>(
             let smem = prev_array_buf[0];
             let len = smem.query_end - smem.query_start + 1;
             if len >= min_seed_len {
-                if is_debug_read {
-                    log::info!(
-                        "SMEM: {} strand={} pos=[{},{}] len={} interval=[{},{}] size={} (final output)",
-                        query_name,
-                        if is_reverse_complement { "RC" } else { "FW" },
-                        smem.query_start,
-                        smem.query_end,
-                        len,
-                        smem.bwt_interval_start,
-                        smem.bwt_interval_end,
-                        smem.interval_size
-                    );
-                }
                 all_smems.push(smem);
             }
         }
@@ -307,7 +274,9 @@ pub fn generate_smems_from_position<'a>(
 
             if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                 curr_s = new_smem.interval_size as i64;
-                unsafe { prefetch_bwt(bwa_idx, &new_smem); }
+                unsafe {
+                    prefetch_bwt(bwa_idx, &new_smem);
+                }
                 curr_array_buf.push(new_smem);
                 break;
             }
@@ -323,7 +292,9 @@ pub fn generate_smems_from_position<'a>(
 
             if new_smem.interval_size >= min_intv && (new_smem.interval_size as i64) != curr_s {
                 curr_s = new_smem.interval_size as i64;
-                unsafe { prefetch_bwt(bwa_idx, &new_smem); }
+                unsafe {
+                    prefetch_bwt(bwa_idx, &new_smem);
+                }
                 curr_array_buf.push(new_smem);
             }
 
@@ -355,7 +326,7 @@ pub fn generate_smems_from_position<'a>(
 /// 4. Uses min_seed_len + 1 as the minimum seed length
 pub fn forward_only_seed_strategy(
     bwa_idx: &BwaIndex,
-    query_name: &str,
+    _query_name: &str,
     query_len: usize,
     encoded_query: &[u8],
     is_reverse_complement: bool,
@@ -401,16 +372,6 @@ pub fn forward_only_seed_strategy(
             let len = smem.query_end - smem.query_start + 1;
             if smem.interval_size < max_intv && len >= min_len {
                 if smem.interval_size > 0 {
-                    log::debug!(
-                        "{}: forward_only_seed: m={}, n={}, len={}, s={} (< max_intv={}), is_rc={}",
-                        query_name,
-                        smem.query_start,
-                        smem.query_end,
-                        len,
-                        smem.interval_size,
-                        max_intv,
-                        is_reverse_complement
-                    );
                     all_smems.push(smem);
                 }
                 break;

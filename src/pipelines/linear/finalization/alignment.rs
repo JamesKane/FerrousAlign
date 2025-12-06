@@ -23,7 +23,7 @@ pub struct Alignment {
     pub(crate) seed_coverage: i32,
     pub(crate) hash: u64,
     pub(crate) frac_rep: f32,
-    pub(crate) is_alt: bool,  // True if alignment to alternate contig/haplotype
+    pub(crate) is_alt: bool, // True if alignment to alternate contig/haplotype
 }
 
 impl Alignment {
@@ -133,7 +133,11 @@ impl Alignment {
             }
         }
 
-        let sam_pos = if self.ref_name == "*" { 0 } else { self.pos + 1 };
+        let sam_pos = if self.ref_name == "*" {
+            0
+        } else {
+            self.pos + 1
+        };
         let mut sam_line = format!(
             "{}	{}	{}	{}	{}	{}	{}	{}	{}	{}	{}",
             self.query_name,
@@ -172,7 +176,11 @@ impl Alignment {
 
     /// Generate XA tag entry for this alignment
     pub fn to_xa_entry(&self) -> String {
-        let strand = if self.flag & sam_flags::REVERSE != 0 { '-' } else { '+' };
+        let strand = if self.flag & sam_flags::REVERSE != 0 {
+            '-'
+        } else {
+            '+'
+        };
         let pos = self.pos + 1;
         let cigar = self.cigar_string();
         let nm = self
@@ -195,10 +203,20 @@ impl Alignment {
         mate_reverse: bool,
     ) {
         self.flag |= sam_flags::PAIRED;
-        self.flag |= if is_first { sam_flags::FIRST_IN_PAIR } else { sam_flags::SECOND_IN_PAIR };
-        if is_proper_pair { self.flag |= sam_flags::PROPER_PAIR; }
-        if mate_unmapped { self.flag |= sam_flags::MATE_UNMAPPED; }
-        if mate_reverse { self.flag |= sam_flags::MATE_REVERSE; }
+        self.flag |= if is_first {
+            sam_flags::FIRST_IN_PAIR
+        } else {
+            sam_flags::SECOND_IN_PAIR
+        };
+        if is_proper_pair {
+            self.flag |= sam_flags::PROPER_PAIR;
+        }
+        if mate_unmapped {
+            self.flag |= sam_flags::MATE_UNMAPPED;
+        }
+        if mate_reverse {
+            self.flag |= sam_flags::MATE_REVERSE;
+        }
     }
 
     /// Calculate template length (TLEN) for paired-end reads
@@ -225,15 +243,26 @@ impl Alignment {
         mate_is_reverse: bool,
     ) -> Self {
         let mut flag = sam_flags::PAIRED | sam_flags::UNMAPPED;
-        flag |= if is_first_in_pair { sam_flags::FIRST_IN_PAIR } else { sam_flags::SECOND_IN_PAIR };
+        flag |= if is_first_in_pair {
+            sam_flags::FIRST_IN_PAIR
+        } else {
+            sam_flags::SECOND_IN_PAIR
+        };
 
         let (ref_name, pos, rnext, pnext) = if mate_ref != "*" {
-            (mate_ref.to_string(), mate_pos, "=".to_string(), mate_pos + 1)
+            (
+                mate_ref.to_string(),
+                mate_pos,
+                "=".to_string(),
+                mate_pos + 1,
+            )
         } else {
             ("*".to_string(), 0, "*".to_string(), 0)
         };
 
-        if mate_is_reverse { flag |= sam_flags::MATE_REVERSE; }
+        if mate_is_reverse {
+            flag |= sam_flags::MATE_REVERSE;
+        }
 
         Self {
             query_name,
@@ -258,7 +287,7 @@ impl Alignment {
             hash: 0,
             seed_coverage: 0,
             frac_rep: 0.0,
-            is_alt: false,  // Unmapped reads don't map to alternate contigs
+            is_alt: false, // Unmapped reads don't map to alternate contigs
         }
     }
 }
@@ -356,14 +385,16 @@ mod tests {
 
     #[test]
     fn test_calculate_tlen_downstream_mate() {
-        let alignment = make_test_alignment("read1", "chr1", 0, 100, 100, vec![(b'M', 100)], 0, 100, 0);
+        let alignment =
+            make_test_alignment("read1", "chr1", 0, 100, 100, vec![(b'M', 100)], 0, 100, 0);
         let tlen = alignment.calculate_tlen(300, 100);
         assert_eq!(tlen, 300);
     }
 
     #[test]
     fn test_calculate_tlen_upstream_mate() {
-        let alignment = make_test_alignment("read1", "chr1", 0, 300, 100, vec![(b'M', 100)], 0, 100, 0);
+        let alignment =
+            make_test_alignment("read1", "chr1", 0, 300, 100, vec![(b'M', 100)], 0, 100, 0);
         let tlen = alignment.calculate_tlen(100, 100);
         assert!(tlen < 0);
     }

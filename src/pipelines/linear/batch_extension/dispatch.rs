@@ -56,14 +56,16 @@ pub fn execute_batch_simd_scoring(
         SimdEngineType::Engine512 => {
             if use_i16 {
                 // AVX512 i16: 32 lanes
-                let (q, t, p) = make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                let (q, t, p) =
+                    make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
                 batch.query_soa = q;
                 batch.target_soa = t;
                 batch.pos_offsets = p;
                 batch.lanes = 32;
             } else {
                 // AVX512 i8: 64 lanes
-                let (q, t, p) = make_batch_soa::<64>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                let (q, t, p) =
+                    make_batch_soa::<64>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
                 batch.query_soa = q;
                 batch.target_soa = t;
                 batch.pos_offsets = p;
@@ -74,14 +76,16 @@ pub fn execute_batch_simd_scoring(
         SimdEngineType::Engine256 => {
             if use_i16 {
                 // AVX2 i16: 16 lanes
-                let (q, t, p) = make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                let (q, t, p) =
+                    make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
                 batch.query_soa = q;
                 batch.target_soa = t;
                 batch.pos_offsets = p;
                 batch.lanes = 16;
             } else {
                 // AVX2 i8: 32 lanes
-                let (q, t, p) = make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                let (q, t, p) =
+                    make_batch_soa::<32>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
                 batch.query_soa = q;
                 batch.target_soa = t;
                 batch.pos_offsets = p;
@@ -91,14 +95,16 @@ pub fn execute_batch_simd_scoring(
         SimdEngineType::Engine128 => {
             if use_i16 {
                 // SSE/Neon i16: 8 lanes
-                let (q, t, p) = make_batch_soa::<8>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                let (q, t, p) =
+                    make_batch_soa::<8>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
                 batch.query_soa = q;
                 batch.target_soa = t;
                 batch.pos_offsets = p;
                 batch.lanes = 8;
             } else {
                 // SSE/Neon i8: 16 lanes
-                let (q, t, p) = make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
+                let (q, t, p) =
+                    make_batch_soa::<16>(&batch.jobs, &batch.query_seqs, &batch.ref_seqs);
                 batch.query_soa = q;
                 batch.target_soa = t;
                 batch.pos_offsets = p;
@@ -179,12 +185,18 @@ fn dispatch_banded_swa_soa(
         let t_soa_size = max_tlen as usize * simd_width;
 
         // Bounds check
-        if q_offset + q_soa_size > batch.query_soa.len() ||
-           t_offset + t_soa_size > batch.target_soa.len() {
+        if q_offset + q_soa_size > batch.query_soa.len()
+            || t_offset + t_soa_size > batch.target_soa.len()
+        {
             log::error!(
                 "SoA bounds error: chunk {} q_offset={} q_size={} q_total={} t_offset={} t_size={} t_total={}",
-                chunk_idx, q_offset, q_soa_size, batch.query_soa.len(),
-                t_offset, t_soa_size, batch.target_soa.len()
+                chunk_idx,
+                q_offset,
+                q_soa_size,
+                batch.query_soa.len(),
+                t_offset,
+                t_soa_size,
+                batch.target_soa.len()
             );
             break;
         }
@@ -230,15 +242,39 @@ fn dispatch_banded_swa_soa(
                 match engine {
                     #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
                     SimdEngineType::Engine512 => simd_banded_swa_batch32_int16_soa(
-                        &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                        &inputs,
+                        actual_lanes,
+                        o_del,
+                        e_del,
+                        o_ins,
+                        e_ins,
+                        zdrop,
+                        mat,
+                        m,
                     ),
                     #[cfg(target_arch = "x86_64")]
                     SimdEngineType::Engine256 => simd_banded_swa_batch16_int16_soa(
-                        &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                        &inputs,
+                        actual_lanes,
+                        o_del,
+                        e_del,
+                        o_ins,
+                        e_ins,
+                        zdrop,
+                        mat,
+                        m,
                     ),
                     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
                     SimdEngineType::Engine128 => simd_banded_swa_batch8_int16_soa(
-                        &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                        &inputs,
+                        actual_lanes,
+                        o_del,
+                        e_del,
+                        o_ins,
+                        e_ins,
+                        zdrop,
+                        mat,
+                        m,
                     ),
                 }
             }
@@ -271,15 +307,39 @@ fn dispatch_banded_swa_soa(
                 match engine {
                     #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
                     SimdEngineType::Engine512 => simd_banded_swa_batch64_soa(
-                        &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                        &inputs,
+                        actual_lanes,
+                        o_del,
+                        e_del,
+                        o_ins,
+                        e_ins,
+                        zdrop,
+                        mat,
+                        m,
                     ),
                     #[cfg(target_arch = "x86_64")]
                     SimdEngineType::Engine256 => simd_banded_swa_batch32_soa(
-                        &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                        &inputs,
+                        actual_lanes,
+                        o_del,
+                        e_del,
+                        o_ins,
+                        e_ins,
+                        zdrop,
+                        mat,
+                        m,
                     ),
                     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
                     SimdEngineType::Engine128 => simd_banded_swa_batch16_soa(
-                        &inputs, actual_lanes, o_del, e_del, o_ins, e_ins, zdrop, mat, m,
+                        &inputs,
+                        actual_lanes,
+                        o_del,
+                        e_del,
+                        o_ins,
+                        e_ins,
+                        zdrop,
+                        mat,
+                        m,
                     ),
                 }
             }

@@ -30,7 +30,7 @@ mod smem;
 mod types;
 
 // Re-export types
-pub use types::{Seed, SoASeedBatch, SoAEncodedQueryBatch, SMEM};
+pub use types::{SMEM, Seed, SoAEncodedQueryBatch, SoASeedBatch};
 
 // Re-export SoAReadBatch from core::io
 pub use crate::core::io::soa_readers::SoAReadBatch;
@@ -39,7 +39,9 @@ pub use crate::core::io::soa_readers::SoAReadBatch;
 pub use bwt::{get_bwt, get_bwt_base_from_cp_occ, get_sa_entries, get_sa_entry};
 
 // Re-export SMEM generation functions
-pub use smem::{forward_only_seed_strategy, generate_smems_for_strand, generate_smems_from_position};
+pub use smem::{
+    forward_only_seed_strategy, generate_smems_for_strand, generate_smems_from_position,
+};
 
 // Re-export collection functions
 pub use collection::find_seeds_batch;

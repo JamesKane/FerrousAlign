@@ -27,16 +27,8 @@ pub fn make_batch_soa<const W: usize>(
         let chunk_base_offset_t = target_soa.len();
 
         // Determine max lengths for this chunk (no cap - i16 path handles longer seqs)
-        let max_qlen = jobs_chunk
-            .iter()
-            .map(|j| j.query_len)
-            .max()
-            .unwrap_or(0) as usize;
-        let max_tlen = jobs_chunk
-            .iter()
-            .map(|j| j.ref_len)
-            .max()
-            .unwrap_or(0) as usize;
+        let max_qlen = jobs_chunk.iter().map(|j| j.query_len).max().unwrap_or(0) as usize;
+        let max_tlen = jobs_chunk.iter().map(|j| j.ref_len).max().unwrap_or(0) as usize;
 
         // Store metadata for this chunk
         pos_offsets.push(chunk_base_offset_q);

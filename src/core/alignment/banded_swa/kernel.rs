@@ -35,7 +35,12 @@ where
     <E as SwSimd>::V8: std::fmt::Debug,
 {
     debug_assert_eq!(W, E::LANES, "W generic must match engine lanes");
-    debug_assert!(num_jobs <= W, "num_jobs ({}) exceeds SIMD width ({})", num_jobs, W);
+    debug_assert!(
+        num_jobs <= W,
+        "num_jobs ({}) exceeds SIMD width ({})",
+        num_jobs,
+        W
+    );
 
     // SIMD register width (stride) vs. number of active jobs in this batch
     let stride = W;
@@ -304,7 +309,7 @@ where
             target_end_pos: (max_i[i] as i32) + 1, // Convert to 1-based end position
             query_end_pos: (max_j[i] as i32) + 1,  // Convert to 1-based end position
             gtarget_end_pos: (max_ie[i] as i32) + 1, // Target position when reaching query end
-            global_score: gscore[i] as i32,          // Score when reaching query end
+            global_score: gscore[i] as i32,        // Score when reaching query end
             max_offset: max_off,
         });
     }

@@ -91,7 +91,14 @@ pub fn merge_scores_to_regions(
             // Debug logging - log everything, filter later
             log::trace!(
                 "EXTENSION_DEBUG: chain_idx={} seed_idx={} seed: qpos={} len={} rpos={} initial_qb={} initial_qe={} seed_score={}",
-                chain_idx, seed_mapping.seed_idx, seed.query_pos, seed.len, seed.ref_pos, region.qb, region.qe, seed_score
+                chain_idx,
+                seed_mapping.seed_idx,
+                seed.query_pos,
+                seed.len,
+                seed.ref_pos,
+                region.qb,
+                region.qe,
+                seed_score
             );
 
             // Process left extension
@@ -103,8 +110,12 @@ pub fn merge_scores_to_regions(
 
                     log::trace!(
                         "  LEFT_EXT: score={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip5={}",
-                        left_score.score, left_score.global_score, left_score.query_end_pos,
-                        left_score.target_end_pos, left_score.gtarget_end_pos, opt.pen_clip5
+                        left_score.score,
+                        left_score.global_score,
+                        left_score.query_end_pos,
+                        left_score.target_end_pos,
+                        left_score.gtarget_end_pos,
+                        opt.pen_clip5
                     );
 
                     if left_score.global_score <= 0
@@ -140,12 +151,18 @@ pub fn merge_scores_to_regions(
                     // so their sp->score includes the accumulated score. We compensate by
                     // adding instead of replacing.
                     let prev_score = total_score;
-                    total_score += right_score.score;  // ADD the extension delta
+                    total_score += right_score.score; // ADD the extension delta
 
                     log::trace!(
                         "  RIGHT_EXT: ext_score={} prev={} new_total={} global_score={} query_end_pos={} target_end_pos={} gtarget_end_pos={} pen_clip3={}",
-                        right_score.score, prev_score, total_score, right_score.global_score, right_score.query_end_pos,
-                        right_score.target_end_pos, right_score.gtarget_end_pos, opt.pen_clip3
+                        right_score.score,
+                        prev_score,
+                        total_score,
+                        right_score.global_score,
+                        right_score.query_end_pos,
+                        right_score.target_end_pos,
+                        right_score.gtarget_end_pos,
+                        opt.pen_clip3
                     );
 
                     if right_score.global_score <= 0
@@ -157,7 +174,12 @@ pub fn merge_scores_to_regions(
                             seed.ref_pos + seed.len as u64 + right_score.target_end_pos as u64;
                         // Add the extension delta to truesc
                         region.truesc += right_score.score;
-                        log::trace!("    Using local: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.score);
+                        log::trace!(
+                            "    Using local: qe={} re={} truesc_delta={}",
+                            region.qe,
+                            region.re,
+                            right_score.score
+                        );
                     } else {
                         // Global path (soft-clip): extend re to fetch reference, but final position
                         // will be computed after CIGAR generation
@@ -166,7 +188,12 @@ pub fn merge_scores_to_regions(
                             seed.ref_pos + seed.len as u64 + right_score.gtarget_end_pos as u64;
                         // Add the global extension delta to truesc
                         region.truesc += right_score.global_score;
-                        log::trace!("    Using global: qe={} re={} truesc_delta={}", region.qe, region.re, right_score.global_score);
+                        log::trace!(
+                            "    Using global: qe={} re={} truesc_delta={}",
+                            region.qe,
+                            region.re,
+                            right_score.global_score
+                        );
                     }
                 }
             }
@@ -200,8 +227,15 @@ pub fn merge_scores_to_regions(
             let is_rev = region.rb >= bwa_idx.bns.packed_sequence_length;
             log::trace!(
                 "  FINAL_REGION: qb={} qe={} rb={} re={} score={} truesc={} seedcov={} is_rev={} ref_len={}",
-                region.qb, region.qe, region.rb, region.re, region.score, region.truesc, region.seedcov,
-                is_rev, region.re - region.rb
+                region.qb,
+                region.qe,
+                region.rb,
+                region.re,
+                region.score,
+                region.truesc,
+                region.seedcov,
+                is_rev,
+                region.re - region.rb
             );
 
             if total_score > best_score {

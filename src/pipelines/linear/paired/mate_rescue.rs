@@ -1910,7 +1910,8 @@ fn collect_rescue_jobs_for_read_soa(
             if soa_rescued.ref_ids[rescued_idx] == anchor_ref_id {
                 let rescued_flag = soa_rescued.flags[rescued_idx];
                 let rescued_pos = soa_rescued.positions[rescued_idx];
-                let rescued_ref_len = reference_length_from_cigar_soa_rescue(soa_rescued, rescued_idx) as i64;
+                let rescued_ref_len =
+                    reference_length_from_cigar_soa_rescue(soa_rescued, rescued_idx) as i64;
                 let rescued_is_rev = (rescued_flag & sam_flags::REVERSE) != 0;
                 let rescued_genome_pos = chr_offset + rescued_pos as i64;
 
@@ -2001,7 +2002,8 @@ fn collect_rescue_jobs_for_read_soa(
             }
 
             // Fetch reference sequence
-            let (ref_seq, adj_rb, adj_re, rid) = bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
+            let (ref_seq, adj_rb, adj_re, rid) =
+                bwa_idx.bns.bns_fetch_seq(pac, rb, (rb + re) >> 1, re);
 
             // Check if on same reference and region is large enough
             if rid as usize != anchor_ref_id || (adj_re - adj_rb) < min_seed_len as i64 {
@@ -2131,9 +2133,7 @@ fn append_rescue_result_to_soa(
     soa.frac_reps.push(0.0);
 
     // Check if this is an alternate contig
-    let is_alt = crate::pipelines::linear::finalization::is_alternate_contig(
-        &job.anchor_ref_name
-    );
+    let is_alt = crate::pipelines::linear::finalization::is_alternate_contig(&job.anchor_ref_name);
     soa.is_alts.push(is_alt);
 
     // Update read_alignment_boundaries

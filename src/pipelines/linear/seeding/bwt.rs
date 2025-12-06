@@ -3,7 +3,7 @@
 //! Low-level functions for BWT navigation and suffix array access
 //! used during FM-Index search and seed extension.
 
-use crate::pipelines::linear::index::fm_index::{get_occ, CP_SHIFT, CpOcc};
+use crate::pipelines::linear::index::fm_index::{CP_SHIFT, CpOcc, get_occ};
 use crate::pipelines::linear::index::index::BwaIndex;
 
 /// Get BWT base from cp_occ format (for loaded indices).

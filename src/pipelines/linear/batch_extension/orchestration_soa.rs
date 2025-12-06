@@ -114,7 +114,13 @@ pub fn process_sub_batch_internal_soa(
         .map(|(_, len)| *len as i32)
         .collect();
 
-    filter_chains_batch(&mut soa_chain_batch, &soa_seed_batch, opt, &query_lengths, &soa_read_batch.names);
+    filter_chains_batch(
+        &mut soa_chain_batch,
+        &soa_seed_batch,
+        opt,
+        &query_lengths,
+        &soa_read_batch.names,
+    );
 
     let kept_chains = soa_chain_batch.kept.iter().filter(|&&k| k > 0).count();
     log::debug!("SOA_PIPELINE: {kept_chains} chains kept after filtering");

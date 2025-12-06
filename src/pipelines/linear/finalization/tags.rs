@@ -37,7 +37,9 @@ pub fn generate_xa_tags(alignments: &[Alignment], opt: &MemOpt) -> HashMap<Strin
     }
 
     for (read_name, read_alns) in by_read.iter() {
-        let primary = read_alns.iter().find(|a| a.flag & sam_flags::SECONDARY == 0);
+        let primary = read_alns
+            .iter()
+            .find(|a| a.flag & sam_flags::SECONDARY == 0);
 
         if primary.is_none() {
             continue;
@@ -84,7 +86,10 @@ pub fn generate_sa_tags(alignments: &[Alignment]) -> HashMap<String, String> {
 
     let mut alignments_by_read: HashMap<String, Vec<&Alignment>> = HashMap::new();
     for aln in alignments {
-        alignments_by_read.entry(aln.query_name.clone()).or_default().push(aln);
+        alignments_by_read
+            .entry(aln.query_name.clone())
+            .or_default()
+            .push(aln);
     }
 
     for (read_name, read_alns) in alignments_by_read.iter() {
@@ -100,7 +105,8 @@ pub fn generate_sa_tags(alignments: &[Alignment]) -> HashMap<String, String> {
 
         let mut sorted_alns = non_secondary_alns.clone();
         sorted_alns.sort_by(|a, b| {
-            a.ref_name.cmp(&b.ref_name)
+            a.ref_name
+                .cmp(&b.ref_name)
                 .then_with(|| a.pos.cmp(&b.pos))
                 .then_with(|| (a.flag & sam_flags::REVERSE).cmp(&(b.flag & sam_flags::REVERSE)))
         });
@@ -118,7 +124,11 @@ pub fn generate_sa_tags(alignments: &[Alignment]) -> HashMap<String, String> {
                 .parse::<i32>()
                 .unwrap_or(0);
 
-            let strand = if (aln.flag & sam_flags::REVERSE) != 0 { '-' } else { '+' };
+            let strand = if (aln.flag & sam_flags::REVERSE) != 0 {
+                '-'
+            } else {
+                '+'
+            };
             sa_parts.push(format!(
                 "{},{},{},{},{},{}",
                 aln.ref_name,

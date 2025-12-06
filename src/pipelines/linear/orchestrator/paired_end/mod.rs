@@ -44,12 +44,12 @@ use crate::core::compute::simd_abstraction::simd::SimdEngineType;
 use crate::core::io::soa_readers::{SoAReadBatch, SoaFastqReader};
 use crate::core::utils::cputime;
 use crate::pipelines::linear::batch_extension::types::SoAAlignmentResult;
+use crate::pipelines::linear::finalization::mark_secondary_alignments;
 use crate::pipelines::linear::index::index::BwaIndex;
 use crate::pipelines::linear::mem_opt::MemOpt;
 use crate::pipelines::linear::paired::insert_size::{
     InsertSizeStats, bootstrap_insert_size_stats_soa,
 };
-use crate::pipelines::linear::finalization::mark_secondary_alignments;
 use crate::pipelines::linear::stages::chaining::ChainingStage;
 use crate::pipelines::linear::stages::extension::ExtensionStage;
 use crate::pipelines::linear::stages::finalization::FinalizationStage;
@@ -137,7 +137,11 @@ impl<'a> PairedEndOrchestrator<'a> {
         let all_chunks: Vec<(SoAReadBatch, usize, bool)> = chunks1
             .into_iter()
             .map(|(chunk, offset)| (chunk, offset, true))
-            .chain(chunks2.into_iter().map(|(chunk, offset)| (chunk, offset, false)))
+            .chain(
+                chunks2
+                    .into_iter()
+                    .map(|(chunk, offset)| (chunk, offset, false)),
+            )
             .collect();
 
         let chunk_results: Vec<Result<(SoAAlignmentResult, usize, bool), OrchestratorError>> =
@@ -317,7 +321,8 @@ impl<'a> PairedEndOrchestrator<'a> {
 
             // Infer insert size from current batch (BWA-MEM2 behavior: per-batch unless override)
             if !use_insert_override {
-                self.insert_stats = bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac);
+                self.insert_stats =
+                    bootstrap_insert_size_stats_soa(&soa_result1, &soa_result2, l_pac);
             }
 
             let mut alignments1 = soa_result1.to_aos();
