@@ -129,6 +129,47 @@ impl SoAReadBatch {
             read_boundaries: adjusted_boundaries,
         }
     }
+
+    /// Split this batch into `n` roughly equal-sized chunks.
+    ///
+    /// Used for parallel processing with rayon. Each chunk can be processed
+    /// independently on a different thread while maintaining SoA benefits
+    /// within each chunk.
+    ///
+    /// # Arguments
+    /// * `n` - Number of chunks to create (typically matches thread count)
+    ///
+    /// # Returns
+    /// A vector of (chunk, start_read_id) pairs. The start_read_id is the
+    /// index of the first read in each chunk relative to the original batch.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let chunks = batch.split_into_chunks(rayon::current_num_threads());
+    /// let results: Vec<_> = chunks
+    ///     .into_par_iter()
+    ///     .map(|(chunk, start_id)| process_chunk(chunk, start_id))
+    ///     .collect();
+    /// ```
+    pub fn split_into_chunks(&self, n: usize) -> Vec<(Self, usize)> {
+        if self.is_empty() || n == 0 {
+            return Vec::new();
+        }
+
+        let n = n.min(self.len()); // Can't have more chunks than reads
+        let chunk_size = (self.len() + n - 1) / n; // Ceiling division
+
+        let mut chunks = Vec::with_capacity(n);
+        let mut start = 0;
+
+        while start < self.len() {
+            let end = (start + chunk_size).min(self.len());
+            chunks.push((self.slice(start, end), start));
+            start = end;
+        }
+
+        chunks
+    }
 }
 
 /// FASTQ reader with automatic gzip/bgzip detection that reads into SoA buffers.

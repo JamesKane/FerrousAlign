@@ -22,6 +22,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use rayon::prelude::*;
+
 use super::{
     OrchestratorError, PipelineMode, PipelineOrchestrator, PipelineStatistics, PipelineTimer,
 };
@@ -33,7 +35,7 @@ use crate::pipelines::linear::index::index::BwaIndex;
 use crate::pipelines::linear::mem_opt::MemOpt;
 use crate::pipelines::linear::stages::chaining::ChainingStage;
 use crate::pipelines::linear::stages::extension::ExtensionStage;
-use crate::pipelines::linear::stages::finalization::FinalizationStage;
+use crate::pipelines::linear::stages::finalization::{FinalizationOutput, FinalizationStage};
 use crate::pipelines::linear::stages::seeding::SeedingStage;
 use crate::pipelines::linear::stages::{PipelineStage, StageContext};
 
@@ -97,47 +99,71 @@ impl<'a> SingleEndOrchestrator<'a> {
         }
     }
 
-    /// Process a single batch through the pipeline stages.
-    fn process_batch(
+    /// Process a single chunk through the pipeline stages.
+    ///
+    /// This method is called in parallel for each chunk of the batch.
+    /// It is thread-safe and uses thread-local workspace buffers.
+    fn process_chunk(
         &self,
-        batch: SoAReadBatch,
+        chunk: SoAReadBatch,
         ctx: &StageContext,
-    ) -> Result<crate::pipelines::linear::stages::finalization::FinalizationOutput, OrchestratorError>
-    {
+    ) -> Result<FinalizationOutput, OrchestratorError> {
         // Stage 1: Seeding
-        let seeding_output = self.seeder.process(batch, ctx)?;
-        log::debug!(
-            "Seeding: {} seeds from {} reads",
-            seeding_output.num_seeds(),
-            seeding_output.num_reads()
-        );
+        let seeding_output = self.seeder.process(chunk, ctx)?;
 
         // Stage 2: Chaining
         let chaining_output = self.chainer.process(seeding_output, ctx)?;
-        log::debug!(
-            "Chaining: {} chains ({} kept)",
-            chaining_output.num_chains(),
-            chaining_output.num_kept_chains()
-        );
 
         // Stage 3: Extension
         let extension_output = self.extender.process(chaining_output, ctx)?;
-        log::debug!(
-            "Extension: {} alignments from {} reads",
-            extension_output.len(),
-            extension_output.num_reads()
-        );
 
         // Stage 4: Finalization
         let finalization_output = self.finalizer.process(extension_output, ctx)?;
-        log::debug!(
-            "Finalization: {} total alignments ({} primary, {} secondary)",
-            finalization_output.total_alignments(),
-            finalization_output.num_primary(),
-            finalization_output.num_secondary()
-        );
 
         Ok(finalization_output)
+    }
+
+    /// Process a batch in parallel by splitting into chunks.
+    ///
+    /// Splits the batch into thread-sized chunks and processes each in parallel
+    /// using rayon. This restores the parallelism lost during the SoA migration.
+    fn process_batch_parallel(
+        &self,
+        batch: SoAReadBatch,
+        base_read_id: u64,
+    ) -> Result<FinalizationOutput, OrchestratorError> {
+        let num_threads = rayon::current_num_threads();
+        let chunks = batch.split_into_chunks(num_threads);
+
+        if chunks.is_empty() {
+            return Ok(FinalizationOutput::new());
+        }
+
+        // Process chunks in parallel
+        let chunk_results: Vec<Result<(FinalizationOutput, usize), OrchestratorError>> = chunks
+            .into_par_iter()
+            .map(|(chunk, chunk_offset)| {
+                // Create context with adjusted read_id offset for this chunk
+                let ctx = StageContext::new(
+                    self.index,
+                    self.options,
+                    self.compute_ctx,
+                    base_read_id + chunk_offset as u64,
+                );
+                let num_reads = chunk.len();
+                let result = self.process_chunk(chunk, &ctx)?;
+                Ok((result, num_reads))
+            })
+            .collect();
+
+        // Check for errors and merge results
+        let mut merged_alignments = Vec::new();
+        for result in chunk_results {
+            let (output, _num_reads) = result?;
+            merged_alignments.extend(output.alignments_per_read);
+        }
+
+        Ok(FinalizationOutput::from_alignments(merged_alignments))
     }
 }
 
@@ -186,17 +212,13 @@ impl SingleEndOrchestrator<'_> {
                     batch_size
                 );
 
-                // Create stage context for this batch
-                let ctx =
-                    StageContext::new(self.index, self.options, self.compute_ctx, reads_processed);
-
                 let batch_start = Instant::now();
 
                 // Clone batch for SAM output (processing consumes batch)
                 let batch_for_output = batch.clone();
 
-                // Process batch through pipeline (consumes batch)
-                let finalization_output = self.process_batch(batch, &ctx)?;
+                // Process batch through pipeline in parallel chunks
+                let finalization_output = self.process_batch_parallel(batch, reads_processed)?;
 
                 // Write SAM output
                 // Convert to SoA for output (finalization output is AoS)

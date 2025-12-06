@@ -674,6 +674,7 @@ impl SoAAlignmentResult {
             merged.seed_coverages.extend(result.seed_coverages);
             merged.hashes.extend(result.hashes);
             merged.frac_reps.extend(result.frac_reps);
+            merged.is_alts.extend(result.is_alts);
 
             // Append per-read boundaries WITH offset adjustment
             // CRITICAL: start_idx references alignment array indices, which need adjustment when merging

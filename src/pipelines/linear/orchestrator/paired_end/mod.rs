@@ -34,6 +34,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use rayon::prelude::*;
+
 use super::{
     OrchestratorError, PipelineMode, PipelineOrchestrator, PipelineStatistics, PipelineTimer,
 };
@@ -113,31 +115,90 @@ impl<'a> PairedEndOrchestrator<'a> {
     }
 
     /// Process R1 and R2 batches through the SoA pipeline stages in parallel.
+    ///
+    /// Uses parallel chunk processing within R1 and R2 batches for full thread utilization.
+    /// Each batch is split into chunks equal to half the thread count, and all chunks
+    /// are processed in parallel.
     fn process_pair_batches(
         &self,
         batch1: SoAReadBatch,
         batch2: SoAReadBatch,
         batch_start_id: u64,
     ) -> Result<(SoAAlignmentResult, SoAAlignmentResult), OrchestratorError> {
-        let ctx1 = StageContext::new(self.index, self.options, self.compute_ctx, batch_start_id);
-        let ctx2 = StageContext::new(self.index, self.options, self.compute_ctx, batch_start_id);
+        // Split threads between R1 and R2 processing
+        let num_threads = rayon::current_num_threads();
+        let chunks_per_batch = (num_threads / 2).max(1);
 
-        // Process R1 and R2 in parallel using rayon::join
-        let (result1, result2) = rayon::join(
-            || self.process_single_batch(batch1, &ctx1),
-            || self.process_single_batch(batch2, &ctx2),
-        );
+        let chunks1 = batch1.split_into_chunks(chunks_per_batch);
+        let chunks2 = batch2.split_into_chunks(chunks_per_batch);
 
-        Ok((result1?, result2?))
+        // Process all chunks in parallel (both R1 and R2 chunks together)
+        // Tag each chunk with its source (R1=true, R2=false)
+        let all_chunks: Vec<(SoAReadBatch, usize, bool)> = chunks1
+            .into_iter()
+            .map(|(chunk, offset)| (chunk, offset, true))
+            .chain(chunks2.into_iter().map(|(chunk, offset)| (chunk, offset, false)))
+            .collect();
+
+        let chunk_results: Vec<Result<(SoAAlignmentResult, usize, bool), OrchestratorError>> =
+            all_chunks
+                .into_par_iter()
+                .map(|(chunk, chunk_offset, is_r1)| {
+                    let ctx = StageContext::new(
+                        self.index,
+                        self.options,
+                        self.compute_ctx,
+                        batch_start_id + chunk_offset as u64,
+                    );
+                    let result = self.process_single_chunk(chunk, &ctx)?;
+                    Ok((result, chunk_offset, is_r1))
+                })
+                .collect();
+
+        // Separate and merge R1 and R2 results, maintaining read order
+        let mut r1_chunks: Vec<(SoAAlignmentResult, usize)> = Vec::new();
+        let mut r2_chunks: Vec<(SoAAlignmentResult, usize)> = Vec::new();
+
+        for result in chunk_results {
+            let (soa_result, offset, is_r1) = result?;
+            if is_r1 {
+                r1_chunks.push((soa_result, offset));
+            } else {
+                r2_chunks.push((soa_result, offset));
+            }
+        }
+
+        // Sort by offset to maintain read order
+        r1_chunks.sort_by_key(|(_, offset)| *offset);
+        r2_chunks.sort_by_key(|(_, offset)| *offset);
+
+        // Merge chunks
+        let result1 = Self::merge_soa_results(r1_chunks);
+        let result2 = Self::merge_soa_results(r2_chunks);
+
+        Ok((result1, result2))
     }
 
-    /// Process a single batch through pipeline stages, returning SoA result.
-    fn process_single_batch(
+    /// Merge multiple SoAAlignmentResult chunks back together.
+    fn merge_soa_results(chunks: Vec<(SoAAlignmentResult, usize)>) -> SoAAlignmentResult {
+        if chunks.is_empty() {
+            return SoAAlignmentResult::new();
+        }
+
+        // Extract just the results (offsets already used for sorting)
+        let results: Vec<SoAAlignmentResult> = chunks.into_iter().map(|(r, _)| r).collect();
+        SoAAlignmentResult::merge_all(results)
+    }
+
+    /// Process a single chunk through pipeline stages, returning SoA result.
+    ///
+    /// This is the parallelizable unit of work - each chunk is processed independently.
+    fn process_single_chunk(
         &self,
-        batch: SoAReadBatch,
+        chunk: SoAReadBatch,
         ctx: &StageContext,
     ) -> Result<SoAAlignmentResult, OrchestratorError> {
-        let seeding_output = self.seeder.process(batch, ctx)?;
+        let seeding_output = self.seeder.process(chunk, ctx)?;
         let chaining_output = self.chainer.process(seeding_output, ctx)?;
         let extension_output = self.extender.process(chaining_output, ctx)?;
         Ok(extension_output)
