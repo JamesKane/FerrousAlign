@@ -6,7 +6,7 @@
 use super::super::index::index::BwaIndex;
 use super::super::mem_opt::MemOpt;
 use super::types::AlignmentRegion;
-use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa;
+use crate::alignment::banded_swa::scalar::implementation::scalar_banded_swa_global;
 use crate::alignment::edit_distance;
 use crate::core::alignment::banded_swa::BandedPairWiseSW;
 
@@ -96,8 +96,8 @@ pub fn generate_cigar_from_region(
         -(opt.b as i8),
     );
 
-    // Run global alignment
-    let result = scalar_banded_swa(
+    // Run global alignment (no score clamping to 0)
+    let result = scalar_banded_swa_global(
         &sw_params,
         query_for_sw.len() as i32,
         &query_for_sw,
@@ -109,6 +109,14 @@ pub fn generate_cigar_from_region(
 
     // Extract score from SW result for AS tag
     let sw_score = result.0.score;
+
+    log::debug!(
+        "CIGAR_GEN: region qb={} qe={} rb={} re={} is_rev={} w={} sw_score={} query_len={} ref_len={} query_first10={:?} ref_first10={:?}",
+        region.qb, region.qe, region.rb, region.re, region.is_rev, w, sw_score,
+        query_for_sw.len(), rseq_for_sw.len(),
+        &query_for_sw[..10.min(query_for_sw.len())],
+        &rseq_for_sw[..10.min(rseq_for_sw.len())],
+    );
     let mut cigar = result.1;
 
     // If reverse strand, reverse the CIGAR
@@ -277,7 +285,10 @@ fn infer_band_width(
         w2 = w2.min(region_w);
     }
 
-    w2.min(cmd_w * 4)
+    // Enforce minimum bandwidth of 10 to avoid degenerate banded SW
+    // With small bandwidth, the banded SW cannot properly handle
+    // mismatches at the start of the alignment
+    w2.max(10).min(cmd_w * 4)
 }
 
 /// Compute NM and MD using edit_distance module
@@ -407,7 +418,8 @@ mod tests {
     #[test]
     fn test_infer_band_width_identical_lengths() {
         let w = infer_band_width(100, 100, 100, 1, 6, 1, 6, 1, 100, 50);
-        assert_eq!(w, 0);
+        // Minimum bandwidth is 10 to handle edge mismatches properly
+        assert_eq!(w, 10);
     }
 
     #[test]

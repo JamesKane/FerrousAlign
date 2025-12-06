@@ -2,7 +2,12 @@ use crate::alignment::banded_swa::BandedPairWiseSW;
 use crate::alignment::banded_swa::types::{TB_DEL, TB_INS, TB_MATCH};
 use crate::alignment::banded_swa::{EhT, OutScore};
 
-pub fn scalar_banded_swa(
+/// Banded Smith-Waterman alignment with traceback.
+///
+/// # Parameters
+/// - `global`: If true, performs global alignment (no score clamping to 0).
+///   If false, performs local alignment (scores clamped to 0).
+pub fn scalar_banded_swa_ex(
     sw_params: &BandedPairWiseSW,
     qlen: i32,
     query: &[u8],
@@ -10,6 +15,7 @@ pub fn scalar_banded_swa(
     target: &[u8],
     w: i32,
     h0: i32,
+    global: bool,
 ) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
     // Note: This is the direct scalar implementation.
     // For runtime SIMD dispatch, use banded_swa() instead.
@@ -103,7 +109,8 @@ pub fn scalar_banded_swa(
     for i in 0..tlen {
         let mut f = 0;
         let mut _h1 = 0;
-        let mut m_val = 0;
+        // In global mode, allow negative max values; in local mode, start at 0
+        let mut m_val = if global { i32::MIN } else { 0 };
         let mut mj = -1;
 
         // CRITICAL: Clamp target base code to valid range [0, 4]
@@ -146,7 +153,7 @@ pub fn scalar_banded_swa(
 
             // Calculate M (match/mismatch) score
             m_score += q_slice[j as usize] as i32;
-            if m_score < 0 {
+            if !global && m_score < 0 {
                 m_score = 0;
             } // Local alignment: clamp to 0
 
@@ -172,14 +179,18 @@ pub fn scalar_banded_swa(
 
             // Update E (deletion)
             let mut t_del = m_score - oe_del;
-            t_del = if t_del > 0 { t_del } else { 0 };
+            if !global && t_del < 0 {
+                t_del = 0;
+            }
             e -= sw_params.e_del();
             e = if e > t_del { e } else { t_del };
             eh[p_idx].e = e;
 
             // Update F (insertion)
             let mut t_ins = m_score - oe_ins;
-            t_ins = if t_ins > 0 { t_ins } else { 0 };
+            if !global && t_ins < 0 {
+                t_ins = 0;
+            }
             f -= sw_params.e_ins();
             f = if f > t_ins { f } else { t_ins };
         }
@@ -191,7 +202,9 @@ pub fn scalar_banded_swa(
             _max_ie = i;
         }
 
-        if m_val == 0 {
+        // In local alignment mode, break if max score in current row is 0
+        // In global mode, continue even with negative scores
+        if !global && m_val == 0 {
             break;
         }
 
@@ -214,17 +227,22 @@ pub fn scalar_banded_swa(
         }
 
         // Update beg and end for the next round
-        let mut new_beg = current_beg;
-        while new_beg < current_end && eh[new_beg as usize].h == 0 && eh[new_beg as usize].e == 0 {
-            new_beg += 1;
-        }
-        beg = new_beg;
+        // In global mode, don't narrow the band based on zero scores
+        // because negative scores are valid
+        if !global {
+            let mut new_beg = current_beg;
+            while new_beg < current_end && eh[new_beg as usize].h == 0 && eh[new_beg as usize].e == 0
+            {
+                new_beg += 1;
+            }
+            beg = new_beg;
 
-        let mut new_end = current_end;
-        while new_end >= beg && eh[new_end as usize].h == 0 && eh[new_end as usize].e == 0 {
-            new_end -= 1;
+            let mut new_end = current_end;
+            while new_end >= beg && eh[new_end as usize].h == 0 && eh[new_end as usize].e == 0 {
+                new_end -= 1;
+            }
+            end = (new_end + 2).min(qlen);
         }
-        end = (new_end + 2).min(qlen);
     }
 
     // Backtrack to generate CIGAR
@@ -437,4 +455,37 @@ pub fn scalar_banded_swa(
     };
 
     (out_score, final_cigar, ref_aligned, query_aligned)
+}
+
+/// Banded Smith-Waterman local alignment (wrapper for backwards compatibility).
+///
+/// This is the original function signature that performs local alignment
+/// (scores clamped to 0).
+pub fn scalar_banded_swa(
+    sw_params: &BandedPairWiseSW,
+    qlen: i32,
+    query: &[u8],
+    tlen: i32,
+    target: &[u8],
+    w: i32,
+    h0: i32,
+) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
+    scalar_banded_swa_ex(sw_params, qlen, query, tlen, target, w, h0, false)
+}
+
+/// Banded Smith-Waterman global alignment.
+///
+/// Unlike `scalar_banded_swa`, this function does not clamp scores to 0,
+/// allowing for global alignment where the entire query is aligned to the
+/// reference (potentially with negative scores for mismatches).
+pub fn scalar_banded_swa_global(
+    sw_params: &BandedPairWiseSW,
+    qlen: i32,
+    query: &[u8],
+    tlen: i32,
+    target: &[u8],
+    w: i32,
+    h0: i32,
+) -> (OutScore, Vec<(u8, i32)>, Vec<u8>, Vec<u8>) {
+    scalar_banded_swa_ex(sw_params, qlen, query, tlen, target, w, h0, true)
 }
