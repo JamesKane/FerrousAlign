@@ -3,11 +3,19 @@
 //! Implements O(n log n) seed chaining using a B-tree for efficient
 //! nearest-neighbor queries. Matches C++ mem_chain_seeds (bwamem.cpp:806-974).
 
+use rayon::prelude::*;
+
 use crate::core::kbtree::KBTree;
 use crate::pipelines::linear::mem_opt::MemOpt;
 use crate::pipelines::linear::seeding::{Seed, SoASeedBatch};
 
 use super::types::{Chain, SoAChainBatch, MAX_CHAINS_PER_READ, MAX_SEEDS_PER_READ};
+
+/// Per-read chaining result for parallel processing.
+struct PerReadChainResult {
+    /// Chains for this read
+    chains: Vec<Chain>,
+}
 
 /// B-tree based seed chaining - O(n log n) complexity.
 ///
@@ -131,105 +139,124 @@ pub fn chain_seeds_with_l_pac(
     (filtered_chains, seeds)
 }
 
+/// Chain seeds for a single read (parallelizable unit).
+fn chain_single_read(
+    read_idx: usize,
+    soa_seed_batch: &SoASeedBatch,
+    opt: &MemOpt,
+    l_pac: u64,
+) -> PerReadChainResult {
+    let (seed_start_idx, num_seeds_for_read) = soa_seed_batch.read_seed_boundaries[read_idx];
+
+    if num_seeds_for_read == 0 {
+        return PerReadChainResult { chains: Vec::new() };
+    }
+
+    let mut current_read_chains: Vec<Chain> = Vec::new();
+    let mut tree: KBTree<u64, usize> = KBTree::new();
+
+    // 1. Create and sort local indices for seeds of the current read
+    let mut local_seed_indices: Vec<usize> = (0..num_seeds_for_read).collect();
+    local_seed_indices.sort_unstable_by_key(|&local_idx| {
+        let global_seed_idx = seed_start_idx + local_idx;
+        (
+            soa_seed_batch.query_pos[global_seed_idx],
+            soa_seed_batch.query_pos[global_seed_idx] + soa_seed_batch.len[global_seed_idx],
+        )
+    });
+
+    // 2. Process each seed for the current read using sorted local indices
+    for &local_seed_idx in local_seed_indices.iter() {
+        let global_seed_idx = seed_start_idx + local_seed_idx;
+        let seed_rpos = soa_seed_batch.ref_pos[global_seed_idx];
+        let mut merged = false;
+
+        let (lower, _upper) = tree.interval(&seed_rpos);
+        if let Some(&(_chain_pos, chain_local_idx)) = lower {
+            let chain = &mut current_read_chains[chain_local_idx];
+
+            if chain.is_rev == soa_seed_batch.is_rev[global_seed_idx] {
+                if test_and_merge_soa(chain, global_seed_idx, soa_seed_batch, opt, l_pac) {
+                    merged = true;
+                }
+            }
+        }
+
+        if !merged {
+            if current_read_chains.len() >= MAX_CHAINS_PER_READ {
+                log::warn!(
+                    "chain_single_read: Chain count {} exceeds limit {}, skipping remaining seeds for read {}",
+                    current_read_chains.len(),
+                    MAX_CHAINS_PER_READ,
+                    read_idx
+                );
+                break;
+            }
+
+            let new_chain_local_idx = current_read_chains.len();
+            let seed_query_pos = soa_seed_batch.query_pos[global_seed_idx];
+            let seed_len = soa_seed_batch.len[global_seed_idx];
+            let seed_ref_pos = soa_seed_batch.ref_pos[global_seed_idx];
+            let seed_is_rev = soa_seed_batch.is_rev[global_seed_idx];
+            let seed_rid = soa_seed_batch.rid[global_seed_idx];
+
+            let new_chain = Chain {
+                score: seed_len,
+                seeds: vec![global_seed_idx],
+                query_start: seed_query_pos,
+                query_end: seed_query_pos + seed_len,
+                ref_start: seed_ref_pos,
+                ref_end: seed_ref_pos + seed_len as u64,
+                is_rev: seed_is_rev,
+                weight: 0,
+                kept: 0,
+                frac_rep: 0.0,
+                rid: seed_rid,
+                pos: seed_rpos,
+                last_qbeg: seed_query_pos,
+                last_rbeg: seed_ref_pos,
+                last_len: seed_len,
+            };
+            current_read_chains.push(new_chain);
+            tree.insert(seed_rpos, new_chain_local_idx);
+        }
+    }
+
+    // Filter chains by minimum weight
+    let filtered_chains: Vec<Chain> = current_read_chains
+        .into_iter()
+        .filter(|c| c.score >= opt.min_chain_weight)
+        .collect();
+
+    PerReadChainResult {
+        chains: filtered_chains,
+    }
+}
+
 /// B-tree based seed chaining for a batch of reads, consuming SoASeedBatch.
+///
+/// Uses per-read parallelism via rayon for better load balancing.
 pub fn chain_seeds_batch(soa_seed_batch: &SoASeedBatch, opt: &MemOpt, l_pac: u64) -> SoAChainBatch {
     let num_reads = soa_seed_batch.read_seed_boundaries.len();
-    let mut soa_chain_batch = SoAChainBatch::with_capacity(num_reads * 10, num_reads);
 
-    // Debug: Track reads for logging
-    let mut read_names_for_debug: Vec<String> = Vec::new();
+    if num_reads == 0 {
+        return SoAChainBatch::with_capacity(0, 0);
+    }
 
-    for read_idx in 0..num_reads {
-        let (seed_start_idx, num_seeds_for_read) = soa_seed_batch.read_seed_boundaries[read_idx];
+    // Process each read in parallel using rayon
+    let per_read_results: Vec<PerReadChainResult> = (0..num_reads)
+        .into_par_iter()
+        .map(|read_idx| chain_single_read(read_idx, soa_seed_batch, opt, l_pac))
+        .collect();
 
-        if num_seeds_for_read == 0 {
-            soa_chain_batch
-                .read_chain_boundaries
-                .push((soa_chain_batch.score.len(), 0));
-            continue;
-        }
+    // Merge per-read results into SoA batch (sequential to maintain order)
+    let total_chains: usize = per_read_results.iter().map(|r| r.chains.len()).sum();
+    let mut soa_chain_batch = SoAChainBatch::with_capacity(total_chains, num_reads);
 
-        let mut current_read_chains: Vec<Chain> = Vec::new();
-        let mut tree: KBTree<u64, usize> = KBTree::new();
-
-        // 1. Create and sort local indices for seeds of the current read
-        let mut local_seed_indices: Vec<usize> = (0..num_seeds_for_read).collect();
-        local_seed_indices.sort_unstable_by_key(|&local_idx| {
-            let global_seed_idx = seed_start_idx + local_idx;
-            (
-                soa_seed_batch.query_pos[global_seed_idx],
-                soa_seed_batch.query_pos[global_seed_idx] + soa_seed_batch.len[global_seed_idx],
-            )
-        });
-
-        // 2. Process each seed for the current read using sorted local indices
-        for &local_seed_idx in local_seed_indices.iter() {
-            let global_seed_idx = seed_start_idx + local_seed_idx;
-            let seed_rpos = soa_seed_batch.ref_pos[global_seed_idx];
-            let mut merged = false;
-
-            let (lower, _upper) = tree.interval(&seed_rpos);
-            if let Some(&(_chain_pos, chain_local_idx)) = lower {
-                let chain = &mut current_read_chains[chain_local_idx];
-
-                if chain.is_rev == soa_seed_batch.is_rev[global_seed_idx] {
-                    if test_and_merge_soa(chain, global_seed_idx, soa_seed_batch, opt, l_pac) {
-                        merged = true;
-                    }
-                }
-            }
-
-            if !merged {
-                if current_read_chains.len() >= MAX_CHAINS_PER_READ {
-                    log::warn!(
-                        "chain_seeds_batch: Chain count {} exceeds limit {}, skipping remaining seeds for read {}",
-                        current_read_chains.len(),
-                        MAX_CHAINS_PER_READ,
-                        read_idx
-                    );
-                    break;
-                }
-
-                let new_chain_local_idx = current_read_chains.len();
-                let seed_query_pos = soa_seed_batch.query_pos[global_seed_idx];
-                let seed_len = soa_seed_batch.len[global_seed_idx];
-                let seed_ref_pos = soa_seed_batch.ref_pos[global_seed_idx];
-                let seed_is_rev = soa_seed_batch.is_rev[global_seed_idx];
-                let seed_rid = soa_seed_batch.rid[global_seed_idx];
-
-                let new_chain = Chain {
-                    score: seed_len,
-                    seeds: vec![global_seed_idx],
-                    query_start: seed_query_pos,
-                    query_end: seed_query_pos + seed_len,
-                    ref_start: seed_ref_pos,
-                    ref_end: seed_ref_pos + seed_len as u64,
-                    is_rev: seed_is_rev,
-                    weight: 0,
-                    kept: 0,
-                    frac_rep: 0.0,
-                    rid: seed_rid,
-                    pos: seed_rpos,
-                    last_qbeg: seed_query_pos,
-                    last_rbeg: seed_ref_pos,
-                    last_len: seed_len,
-                };
-                current_read_chains.push(new_chain);
-                tree.insert(seed_rpos, new_chain_local_idx);
-            } else {
-            }
-        }
-
-        // Filter chains for the current read
-        let filtered_chains_for_read: Vec<Chain> = current_read_chains
-            .into_iter()
-            .filter(|c| c.score >= opt.min_chain_weight)
-            .collect();
-
-        // Populate SoAChainBatch for the current read
+    for result in per_read_results {
         let current_read_chain_start_idx = soa_chain_batch.score.len();
 
-        for chain in filtered_chains_for_read {
+        for chain in result.chains {
             soa_chain_batch.score.push(chain.score);
             soa_chain_batch.query_start.push(chain.query_start);
             soa_chain_batch.query_end.push(chain.query_end);
@@ -259,6 +286,7 @@ pub fn chain_seeds_batch(soa_seed_batch: &SoASeedBatch, opt: &MemOpt, l_pac: u64
             .read_chain_boundaries
             .push((current_read_chain_start_idx, num_chains_for_read));
     }
+
     soa_chain_batch
 }
 
