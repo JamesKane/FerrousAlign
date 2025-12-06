@@ -60,6 +60,8 @@ mod tests {
 }
 
 use crate::generate_swa_entry_soa;
+use crate::generate_swa_entry_soa_with_ws;
+use crate::generate_swa_entry_i16_soa_with_ws;
 
 generate_swa_entry_soa!(
     name = simd_banded_swa_batch32_soa,
@@ -69,8 +71,26 @@ generate_swa_entry_soa!(
     target_feature = "avx2",
 );
 
+// Workspace-accepting variant to avoid TLS overhead in dispatch loop
+generate_swa_entry_soa_with_ws!(
+    name = simd_banded_swa_batch32_soa_with_ws,
+    width = 32,
+    engine = SwEngine256,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "avx2",
+);
+
 generate_swa_entry_i16_soa!(
     name = simd_banded_swa_batch16_int16_soa,
+    width = 16,
+    engine = SwEngine256_16,
+    cfg = cfg(target_arch = "x86_64"),
+    target_feature = "avx2",
+);
+
+// Workspace-accepting variant for i16 path to avoid TLS overhead
+generate_swa_entry_i16_soa_with_ws!(
+    name = simd_banded_swa_batch16_int16_soa_with_ws,
     width = 16,
     engine = SwEngine256_16,
     cfg = cfg(target_arch = "x86_64"),

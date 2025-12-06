@@ -5,10 +5,12 @@ use crate::core::alignment::banded_swa::BandedPairWiseSW;
 use crate::core::alignment::banded_swa::OutScore;
 use crate::core::alignment::banded_swa::shared::{SoAInputs, SoAInputs16};
 use crate::core::alignment::kswv_batch::KswResult;
+use crate::core::alignment::shared_types::WorkspaceArena;
+use crate::core::alignment::workspace::with_workspace;
 
 #[cfg(target_arch = "x86_64")]
 use crate::core::alignment::banded_swa::isa_avx2::{
-    simd_banded_swa_batch16_int16_soa, simd_banded_swa_batch32_soa,
+    simd_banded_swa_batch16_int16_soa_with_ws, simd_banded_swa_batch32_soa_with_ws,
 };
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 use crate::core::alignment::banded_swa::isa_avx512_int8::simd_banded_swa_batch64_soa;
@@ -16,7 +18,7 @@ use crate::core::alignment::banded_swa::isa_avx512_int8::simd_banded_swa_batch64
 use crate::core::alignment::banded_swa::isa_avx512_int16::simd_banded_swa_batch32_int16_soa;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use crate::core::alignment::banded_swa::isa_sse_neon::{
-    simd_banded_swa_batch8_int16_soa, simd_banded_swa_batch16_soa,
+    simd_banded_swa_batch8_int16_soa_with_ws, simd_banded_swa_batch16_soa_with_ws,
 };
 #[cfg(target_arch = "x86_64")]
 use crate::core::alignment::kswv_avx2::kswv_batch32_soa;
@@ -139,11 +141,34 @@ pub fn execute_batch_simd_scoring(
 /// This function iterates over all chunks created by make_batch_soa and calls
 /// the appropriate SIMD kernel for each chunk. The pos_offsets array contains
 /// metadata for each chunk: [q_offset, t_offset, max_qlen, max_tlen].
+///
+/// **TLS Optimization**: This function acquires thread-local workspace ONCE and
+/// passes it to all chunk kernel calls, avoiding repeated TLS lookups.
 fn dispatch_banded_swa_soa(
     sw_params: &BandedPairWiseSW,
     batch: &ExtensionJobBatch,
     engine: SimdEngineType,
     use_i16: bool,
+) -> Vec<OutScore> {
+    let simd_width = batch.lanes;
+    if simd_width == 0 || batch.jobs.is_empty() {
+        return Vec::new();
+    }
+
+    // Acquire TLS workspace ONCE for all chunks (avoids ~12% TLS overhead)
+    with_workspace(|ws| {
+        dispatch_banded_swa_soa_with_ws(sw_params, batch, engine, use_i16, ws)
+    })
+}
+
+/// Inner dispatch function that accepts workspace directly.
+/// This avoids TLS acquisition overhead when processing multiple chunks.
+fn dispatch_banded_swa_soa_with_ws(
+    sw_params: &BandedPairWiseSW,
+    batch: &ExtensionJobBatch,
+    engine: SimdEngineType,
+    use_i16: bool,
+    ws: &mut dyn WorkspaceArena,
 ) -> Vec<OutScore> {
     let mut all_scores = Vec::with_capacity(batch.jobs.len());
 
@@ -253,7 +278,7 @@ fn dispatch_banded_swa_soa(
                         m,
                     ),
                     #[cfg(target_arch = "x86_64")]
-                    SimdEngineType::Engine256 => simd_banded_swa_batch16_int16_soa(
+                    SimdEngineType::Engine256 => simd_banded_swa_batch16_int16_soa_with_ws(
                         &inputs,
                         actual_lanes,
                         o_del,
@@ -263,9 +288,10 @@ fn dispatch_banded_swa_soa(
                         zdrop,
                         mat,
                         m,
+                        ws,
                     ),
                     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                    SimdEngineType::Engine128 => simd_banded_swa_batch8_int16_soa(
+                    SimdEngineType::Engine128 => simd_banded_swa_batch8_int16_soa_with_ws(
                         &inputs,
                         actual_lanes,
                         o_del,
@@ -275,6 +301,7 @@ fn dispatch_banded_swa_soa(
                         zdrop,
                         mat,
                         m,
+                        ws,
                     ),
                 }
             }
@@ -318,7 +345,7 @@ fn dispatch_banded_swa_soa(
                         m,
                     ),
                     #[cfg(target_arch = "x86_64")]
-                    SimdEngineType::Engine256 => simd_banded_swa_batch32_soa(
+                    SimdEngineType::Engine256 => simd_banded_swa_batch32_soa_with_ws(
                         &inputs,
                         actual_lanes,
                         o_del,
@@ -328,9 +355,10 @@ fn dispatch_banded_swa_soa(
                         zdrop,
                         mat,
                         m,
+                        ws,
                     ),
                     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                    SimdEngineType::Engine128 => simd_banded_swa_batch16_soa(
+                    SimdEngineType::Engine128 => simd_banded_swa_batch16_soa_with_ws(
                         &inputs,
                         actual_lanes,
                         o_del,
@@ -340,6 +368,7 @@ fn dispatch_banded_swa_soa(
                         zdrop,
                         mat,
                         m,
+                        ws,
                     ),
                 }
             }

@@ -339,6 +339,63 @@ macro_rules! generate_swa_entry_soa {
     };
 }
 
+/// Macro to generate _with_ws variant that accepts workspace directly (avoids TLS overhead)
+#[macro_export]
+macro_rules! generate_swa_entry_soa_with_ws {
+    (
+        name = $name:ident,
+        width = $W:expr,
+        engine = $E:ty,
+        cfg = $cfg:meta,
+        target_feature = $tf:literal,
+    ) => {
+        #[$cfg]
+        #[target_feature(enable = $tf)]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        pub unsafe fn $name(
+            inputs: &$crate::core::alignment::banded_swa::shared::SoAInputs,
+            num_jobs: usize,
+            o_del: i32,
+            e_del: i32,
+            o_ins: i32,
+            e_ins: i32,
+            zdrop: i32,
+            mat: &[i8; 25],
+            m: i32,
+            ws: &mut dyn $crate::core::alignment::shared_types::WorkspaceArena,
+        ) -> Vec<$crate::alignment::banded_swa::OutScore> {
+            const SIMD_WIDTH: usize = $W;
+
+            let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); SIMD_WIDTH];
+            let dummy_batch = &dummy_batch_arr[0..num_jobs];
+
+            let params = $crate::core::alignment::banded_swa::kernel::KernelParams {
+                batch: dummy_batch,
+                query_soa: inputs.query_soa,
+                target_soa: inputs.target_soa,
+                qlen: inputs.qlen,
+                tlen: inputs.tlen,
+                h0: inputs.h0,
+                w: inputs.w,
+                max_qlen: inputs.max_qlen,
+                max_tlen: inputs.max_tlen,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                zdrop,
+                mat,
+                m,
+                cfg: None,
+            };
+
+            $crate::core::alignment::banded_swa::kernel::sw_kernel_with_ws::<SIMD_WIDTH, $E>(
+                &params, num_jobs, ws,
+            )
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! generate_swa_entry_i16_soa {
     (
@@ -387,6 +444,60 @@ macro_rules! generate_swa_entry_i16_soa {
             };
             $crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16::<W, $E>(
                 &params, num_jobs,
+            )
+        }
+    };
+}
+
+/// Macro to generate _with_ws variant for i16 kernel that accepts workspace directly
+#[macro_export]
+macro_rules! generate_swa_entry_i16_soa_with_ws {
+    (
+        name = $name:ident,
+        width = $W:expr,
+        engine = $E:ty,
+        cfg = $cfg:meta,
+        target_feature = $tf:literal,
+    ) => {
+        #[$cfg]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        #[cfg_attr(any(), target_feature(enable = $tf))]
+        pub unsafe fn $name(
+            inputs: &$crate::core::alignment::banded_swa::shared::SoAInputs16,
+            num_jobs: usize,
+            o_del: i32,
+            e_del: i32,
+            o_ins: i32,
+            e_ins: i32,
+            zdrop: i32,
+            mat: &[i8; 25],
+            m: i32,
+            ws: &mut dyn $crate::core::alignment::shared_types::WorkspaceArena,
+        ) -> Vec<$crate::alignment::banded_swa::OutScore> {
+            const W: usize = $W;
+            let dummy_batch_arr = [(0, &[][..], 0, &[][..], 0, 0); W];
+            let dummy_batch = &dummy_batch_arr[0..num_jobs];
+
+            let params = $crate::core::alignment::banded_swa::kernel_i16::KernelParams16 {
+                batch: dummy_batch,
+                query_soa: inputs.query_soa,
+                target_soa: inputs.target_soa,
+                qlen: inputs.qlen,
+                tlen: inputs.tlen,
+                h0: inputs.h0,
+                w: inputs.w,
+                max_qlen: inputs.max_qlen,
+                max_tlen: inputs.max_tlen,
+                o_del,
+                e_del,
+                o_ins,
+                e_ins,
+                zdrop,
+                mat,
+                m,
+            };
+            $crate::core::alignment::banded_swa::kernel_i16::sw_kernel_i16_with_ws::<W, $E>(
+                &params, num_jobs, ws,
             )
         }
     };
