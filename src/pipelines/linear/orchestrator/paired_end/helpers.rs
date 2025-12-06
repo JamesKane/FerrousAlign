@@ -67,15 +67,28 @@ impl PairedEndOrchestrator<'_> {
                     (0, 0)
                 };
 
-                // Set mate information on the alignments we'll output
+                // Set mate information on ALL alignments that will be output (primary + supplementary)
+                // BWA-MEM2 sets mate info on all output records, not just primary
                 let mate1 = alns2[output_idx2].clone();
                 let mate2 = alns1[output_idx1].clone();
+
+                // Set on primary alignments
                 Self::set_mate_info(&mut alns1[output_idx1], &mate1);
                 Self::set_mate_info(&mut alns2[output_idx2], &mate2);
-
-                // Set TLEN
                 Self::set_tlen(&mut alns1[output_idx1], &mate1);
                 Self::set_tlen(&mut alns2[output_idx2], &mate2);
+
+                // Set on supplementary alignments too
+                for aln in alns1.iter_mut() {
+                    if (aln.flag & sam_flags::SUPPLEMENTARY) != 0 {
+                        Self::set_mate_info(aln, &mate1);
+                    }
+                }
+                for aln in alns2.iter_mut() {
+                    if (aln.flag & sam_flags::SUPPLEMENTARY) != 0 {
+                        Self::set_mate_info(aln, &mate2);
+                    }
+                }
 
                 // Swap to ensure output_idx is at position 0 (since write_paired_output outputs idx=0)
                 if output_idx1 != 0 && !alns1.is_empty() {
@@ -106,6 +119,18 @@ impl PairedEndOrchestrator<'_> {
                     Self::set_tlen(&mut alns1[0], &alns2[0]);
                     Self::set_tlen(&mut alns2[0], &alns1[0]);
                 }
+
+                // Set mate info on supplementary alignments too
+                for aln in alns1.iter_mut() {
+                    if (aln.flag & sam_flags::SUPPLEMENTARY) != 0 {
+                        Self::set_mate_info(aln, &aln2);
+                    }
+                }
+                for aln in alns2.iter_mut() {
+                    if (aln.flag & sam_flags::SUPPLEMENTARY) != 0 {
+                        Self::set_mate_info(aln, &aln1);
+                    }
+                }
             }
         }
     }
@@ -115,20 +140,31 @@ impl PairedEndOrchestrator<'_> {
     /// Note: PAIRED and FIRST/SECOND_IN_PAIR flags are already set on all alignments
     /// in pair_alignments_aos(). This function only sets mate-specific info (rnext, pnext,
     /// MATE_REVERSE, MATE_UNMAPPED) on primary alignments.
+    ///
+    /// SAM spec requirements:
+    /// - If mate is unmapped: RNEXT="*", PNEXT=0
+    /// - If mate is mapped: RNEXT=mate's ref (or "=" if same), PNEXT=mate's 1-based pos
     pub(super) fn set_mate_info(aln: &mut Alignment, mate: &Alignment) {
-        aln.rnext = if mate.ref_name == aln.ref_name {
-            "=".to_string()
-        } else {
-            mate.ref_name.clone()
-        };
-        aln.pnext = mate.pos;
+        let mate_is_unmapped = mate.ref_name == "*" || (mate.mapq == 0 && mate.score == 0);
 
-        if (mate.flag & sam_flags::REVERSE) != 0 {
-            aln.flag |= sam_flags::MATE_REVERSE;
-        }
-
-        if mate.mapq == 0 && mate.score == 0 {
+        if mate_is_unmapped {
+            // Mate is unmapped - SAM spec requires RNEXT="*", PNEXT=0
+            aln.rnext = "*".to_string();
+            aln.pnext = 0;
             aln.flag |= sam_flags::MATE_UNMAPPED;
+        } else {
+            // Mate is mapped - set proper reference and position
+            aln.rnext = if mate.ref_name == aln.ref_name {
+                "=".to_string()
+            } else {
+                mate.ref_name.clone()
+            };
+            // Convert from internal 0-based to SAM 1-based coordinate
+            aln.pnext = mate.pos + 1;
+
+            if (mate.flag & sam_flags::REVERSE) != 0 {
+                aln.flag |= sam_flags::MATE_REVERSE;
+            }
         }
     }
 
@@ -355,7 +391,7 @@ mod tests {
         PairedEndOrchestrator::set_mate_info(&mut aln, &mate);
 
         assert_eq!(aln.rnext, "="); // Same chromosome
-        assert_eq!(aln.pnext, 300);
+        assert_eq!(aln.pnext, 301); // 300 + 1 for SAM 1-based coordinates
         assert!(aln.flag & sam_flags::PAIRED != 0);
         assert!(aln.flag & sam_flags::FIRST_IN_PAIR != 0);
         assert!(aln.flag & sam_flags::MATE_REVERSE != 0);
